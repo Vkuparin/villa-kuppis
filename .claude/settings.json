@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Bash",
+      "PowerShell",
+      "Read",
+      "Edit",
+      "Write",
+      "WebFetch",
+      "WebSearch",
+      "mcp__hermes__agent_connection",
+      "mcp__hermes__agent_request",
+      "mcp__hermes__agent_request_status"
+    ],
+    "deny": [
+      "mcp__local_workers__local_work",
+      "mcp__local_workers__local_analyze",
+      "mcp__local_workers__local_worker_repair",
+      "Bash(rm -rf /c*)",
+      "Bash(rm -rf ~*)",
+      "Bash(rm -rf $HOME*)",
+      "Bash(del /f /s /q C:\\*)",
+      "Bash(*Remove-Item* C:\\*)",
+      "Bash(diskpart*)",
+      "Bash(format*)",
+      "Bash(*Clear-Disk*)",
+      "Bash(*Format-Volume*)",
+      "Bash(*Clear-Volume*)",
+      "PowerShell(Remove-Item * C:\\*)",
+      "PowerShell(Remove-Item * $HOME*)",
+      "PowerShell(diskpart*)",
+      "PowerShell(*Clear-Disk*)",
+      "PowerShell(*Format-Volume*)",
+      "PowerShell(*Clear-Volume*)"
+    ]
+  }
+}

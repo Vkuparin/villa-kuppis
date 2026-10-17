@@ -1,0 +1,30 @@
+node_modules/
+dist/
+release/
+test-results/
+playwright-report/
+coverage/
+*.log
+.env*
+*.sqlite*
+*.db*
+*.pem
+*.key
+.runtime/
+.claude/settings.local.json
+.mcp.local.json
+# Owner's local notes and archived docs; not project context.
+scratch/
+
+# Private deployment and reverse-engineering artifacts
+*.pcap
+*.pcapng
+*.har
+*.saz
+*.apk
+*.ipa
+*.bin
+secrets.yaml
+secrets.*.yaml
+config/local/
+backups/
