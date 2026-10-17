@@ -14,7 +14,7 @@ Retained coordinator, dashboard and agent launcher scripts. Adjusted project nam
 
 - Local repository: `/workspace/villa-kuppis`, branch `main`.
 - Remote: [Vkuparin/villa-kuppis](https://github.com/Vkuparin/villa-kuppis), public, created by the owner. Its initial commit `866048c12d6afe2696781eaa6b981ecb73548131` contains Apache License 2.0; preserve it.
-- GitHub connector reads and repository write permissions are confirmed. The connector has no repository-create action; the owner has now resolved that blocker. Publication progress is tracked in F1.2.
+- Published via the GitHub connector: initial project snapshot `c3124bf00d1ce37a3937eb989b3119ad26eb7b73`. Public visibility, main branch and the complete 27-file tree were verified. Local and remote trees both equal `cdc8b9b3226df44b3de500da379ae77404432f1b` for that snapshot.
 - Shell network access was denied in the default sandbox. Additional-network requests did not complete and were interrupted. No server response established whether the CLI credential would work with access; the initial auth check alone is not conclusive.
 - No callable browser-control tool was exposed, despite the browser skill being available. Web research used the search/fetch tool; no user browser session was accessed.
 - REA was not executed; no live-device actions were taken.
@@ -22,9 +22,9 @@ Retained coordinator, dashboard and agent launcher scripts. Adjusted project nam
 
 ## Publication method
 
-Use the connected GitHub Git-data API to publish the reviewed current files as a commit descending from the owner's existing license commit. Shell Git networking is unavailable. Preserve all existing remote files, update `main` only against its observed head, and verify the complete remote tree against local file hashes. The owner's existing request authorizes publication; no second visibility approval is needed.
+Used the connected GitHub Git-data API to publish the reviewed current files as a commit descending from the owner's existing license commit. Shell Git networking is unavailable. Existing remote files were preserved, `main` was updated against its observed head without force, and the complete remote tree matched the local tree. The owner's existing request authorized publication.
 
-Earlier task references such as `c342e37` and `df7b0f4` identify local draft history, not remote commits. Preserve that history separately while aligning the main checkout with the connector-created remote history. No private template history is published. Do not paste tokens into chat or commit them.
+Earlier task references such as `c342e37` and `df7b0f4` identify local draft history, not remote commits. That history is preserved on the local `local-draft-history` branch. The `main` checkout now follows the connector-created remote history and has `origin` configured. Exact remote commit objects were reconstructed from connector metadata and checked against their Git hashes before import. No private template history was published. Do not paste tokens into chat or commit them.
 
 ## Checks
 

@@ -4,6 +4,10 @@
 
 Confirmed by the owner: the Mitsubishi pumps are at the main residence, not the cottage. Their local adapters can communicate with the home PC over the home LAN; cottage WAN and Thread routing constraints do not apply to this integration.
 
+Owner-supplied model identifiers, recorded verbatim on 17 October 2026: `LN25VGHZ2LU`, `LN35VG2WLU`, `LN25VG2WLU`. Treat these as three supplied identifiers, not proof of three separate indoor units: a sales/package identifier may overlap with an indoor-unit identifier. Do not silently rewrite the suffixes or infer an installed Wi-Fi adapter from them. Exact indoor-unit labels, adapter model/firmware and unit count remain to be matched before hardware selection.
+
+Manufacturer documentation narrows the family but not the installed adapter: the [VG2 parts list](https://library.mitsubishielectric.co.uk/pdf/download_full/5101) lists MAC-577IF2-E for covered MSZ-LN25VG2 variants, while [an earlier LN Wi-Fi manual](https://library.mitsubishielectric.co.uk/pdf/download_full/3419) identifies MAC-567IFB-E. These are candidates to check on the installed units, not a reason to assume an ECHONET or other local path is enabled. No exact match for the supplied `LU` identifiers was established in this research.
+
 Local control is plausible, but “LN25/LN35” is insufficient to select the integration. Record the complete indoor-unit suffix, region, Wi-Fi adapter model and firmware, and whether the installed app is MELCloud or MELCloud Home. These are distinct cloud integrations.
 
 | Route | Cloud independence | Evidence / next test |

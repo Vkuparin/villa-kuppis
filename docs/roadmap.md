@@ -23,6 +23,7 @@ No release is published yet. After publication, record the actual release link a
 - 2026-10-17: Research identified a documented Home MCP HTTP interface as a PC-access candidate. It is early access and requires Premium Advanced. Selection, eligibility, regional price and actual hardware support remain unverified; no subscription is authorized. See [platform decision](platform-decision.md) and [experiment specifications](integration-experiments.md).
 - 2026-10-17: Owner confirmed Windows 11, normally powered on. Exact Mitsubishi model checks are deferred until available. The new speaker includes a six-month Premium trial, but production must avoid requiring Premium; MCP is only an optional trial experiment. Trial tier/activation have not been verified.
 - 2026-10-17: Owner created the public GitHub repository and selected Apache License 2.0. Publishing the research scaffold is distinct from releasing a working application.
+- 2026-10-17: Research scaffold published as c3124bf and its complete file tree verified. Owner supplied Mitsubishi identifiers LN25VGHZ2LU, LN35VG2WLU and LN25VG2WLU; match them to actual units/adapters before selecting hardware.
 
 ## Decisions still needed
 

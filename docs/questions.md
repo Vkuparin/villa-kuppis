@@ -4,7 +4,7 @@ Research and documentation can proceed with these open. Hardware purchases, live
 
 ## Highest priority
 
-1. **Pumps (deferred until the owner can check):** complete indoor-unit and Wi-Fi adapter model numbers, firmware if available, and number of units? Main residence is confirmed. MELCloud or MELCloud Home exactly? Do not send pairing codes, serial numbers or passwords. Continue unrelated design work without repeating this request.
+1. **Pumps:** supplied identifiers are `LN25VGHZ2LU`, `LN35VG2WLU`, `LN25VG2WLU`. Still match each to its indoor-unit label and Wi-Fi adapter, record firmware if available, and confirm whether these identify separate units or a package plus components. Main residence is confirmed. MELCloud or MELCloud Home exactly? Do not send pairing codes, serial numbers or passwords. Continue unrelated design work while the remaining labels are unavailable.
 2. **Hardware changes:** willing to install a proven CN105 adapter, preferably ready-made, if factory Wi-Fi has no local route? Is preserving MELCloud alongside the new app necessary?
 3. **Cottage constraint:** is “no computer” an absolute constraint, or a first-stage preference? If exact routers cannot provide the required access, prefer limited/cloud-assisted integration or different networking hardware? A small controller remains a later option only.
 4. **Connectivity, if a direct VPN is needed:** 5G operator/APN and availability of public IP service; home router and internet type; BE230 hardware version/firmware? Are both sites behind CGNAT? Answers need no public IP addresses. These are not prerequisites for the standard Google remote-control experiment.
