@@ -7,7 +7,7 @@ Käyttöliittymän kieli on suomi. Tietokoneella käytetään selainta. Android-
 - **Yleiskuva:** kohteet `Koti` ja `Mökki`, huoneet, viimeisimmät lämpötilat, yhteyden tila ja tämän päivän sähkön hinta.
 - **Laite:** mitattu lämpötila, tavoitelämpötila, toimintatila, laitteen tukemat säädöt ja viimeisin vahvistettu muutos.
 - **Kuvaajat:** lämpötilat, ilmanlaatu (ALPSTUGA), tavoitelämpötilat ja hinnat samalla aika-akselilla, huoneittain ja kohteittain.
-- **Pörssisähkö:** päivän ja huomisen hinnat 15 minuutin jaksoissa sekä suunnitelma: mikä tavoitelämpötila on voimassa kussakin jaksossa ja miksi.
+- **Pörssisähkö:** päivän ja huomisen hinnat 15 minuutin jaksoissa (haetaan päivittäin klo 14.25 ja painikkeella `Hae hinnat`) sekä suunnitelma: mikä tavoitelämpötila on voimassa kussakin jaksossa ja miksi.
 - **Hintasäännöt:** kiinteät hintarajat, esimerkiksi `Kun pörssihinta on alle 5 c/kWh → 12 °C`, tai kytkin `Älykäs ylläpitolämmitys` (vähimmäislämpötila, suurin varaava lämpötila, halpa ja kallis hinta). Asetukset koko kohteelle tai huoneittain. Hinta on pelkkä pörssihinta ilman veroja ja marginaaleja. Kotona säännöt koskevat kesällä jäähdytystä.
 - **Mökki:** `Vierailu` kysyy saapumisajan ja tavoitelämpötilan, ja sovellus lämmittää halvimmilla jaksoilla ajoissa. `Lopeta vierailu` palauttaa ylläpitolämmityksen. `Lähetä suunnitelma uudelleen`, jos päivän siirto Google Homeen epäonnistui.
 - **Koti:** painike `Poissa kotoa` vaihtaa kodin poissaoloasetukseen (oletuksena jäähdytys vasta yli 28 °C:ssa). `Yötila`: valituissa huoneissa hiljaisin puhallus yöaikaan.
@@ -38,6 +38,7 @@ Käyttöliittymän kieli on suomi. Tietokoneella käytetään selainta. Android-
 | Minimum / maximum storage temperature | Vähimmäislämpötila / Suurin varaava lämpötila |
 | Low / high price | Halpa hinta / Kallis hinta |
 | Re-send plan | Lähetä suunnitelma uudelleen |
+| Fetch prices | Hae hinnat |
 | Graphs | Kuvaajat |
 | Precooling | Esijäähdytys |
 | Maximum temperature | Enimmäislämpötila |

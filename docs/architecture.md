@@ -69,7 +69,7 @@ The PC stores every reading as a time series in SQLite and keeps it all; a few y
 | Temperature, setpoint, mode: each Mill heater | Android app, through the Home APIs | About 15 minutes |
 | Heater power or energy | Matter energy measurement if the heaters expose it; otherwise estimated from heating time × rated power | 15 minutes |
 | Outdoor temperature: both sites | FMI observations (no key) | Hourly |
-| Spot price | Elering | 15 minutes |
+| Spot price (15-minute periods) | Elering | Fetched daily at 14:25 for the next day, and on demand with a button |
 | Plan targets, commands and their results | PC | Every change |
 
 The web app draws the series as graphs per room and per site, over a day, week, month or year. Prices, setpoints and outdoor temperature share the time axis, and energy and cost (energy × spot price) can be shown per day.

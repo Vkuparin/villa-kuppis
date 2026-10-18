@@ -29,7 +29,7 @@ For each room and each plan period, the app uploads a pair of [Automation API](h
 
 The heaters' own thermostats cap any overshoot at about 2 °C, even if a sensor stops reporting.
 
-The plan is uploaded once a day, after next-day prices are published around 14:00. A visit uploads at once. A **re-send** button covers a failed upload. If an upload is missed, the previous automations keep running.
+The plan is uploaded once a day, after the PC's daily price fetch at 14:25 and the new plan. A visit uploads at once. A **re-send** button covers a failed upload. If an upload is missed, the previous automations keep running.
 
 The owner's own phone does the upload. It works wherever the phone has internet. The weak points are Android delaying background jobs in battery saver, and no data connection at that hour; the app sends a notification if the upload fails.
 
