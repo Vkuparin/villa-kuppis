@@ -6,9 +6,9 @@ At home. Not in Google Home.
 
 | Indoor unit | Outdoor unit | Wi-Fi adapter | Route |
 | --- | --- | --- | --- |
-| LN35 | Outdoor unit 2 (shared) | MAC-577IF2-E | MELCloud Home if it is in that app; otherwise local `pymitsubishi` |
+| LN35 | Outdoor unit 2 (shared) | MAC-577IF2-E | MELCloud Home cloud |
 | LN25 upstairs | To confirm | MAC-597IFB-E | MELCloud Home cloud |
-| LN25 downstairs | To confirm | Not yet checked | Depends on the adapter |
+| LN25 downstairs | To confirm | Not yet checked | MELCloud Home cloud, if it is in the app |
 
 One LN25 is on outdoor unit 1 (single split); the other shares outdoor unit 2 with the LN35.
 
@@ -18,11 +18,11 @@ Supplied identifiers, one per indoor unit: `LN25VGHZ2LU`, `LN35VG2WLU`, `LN25VG2
 
 ## Routes
 
-Use one route for every unit if possible: the MELCloud Home cloud.
+One route for every unit: the MELCloud Home cloud. The owner uses both checked units in the MELCloud Home app.
 
 **MAC-597IFB-E (LN25 upstairs):** MELCloud Home's current adapter. Mitsubishi says it needs continuous internet; there is no known local API, and `pymitsubishi` does not support it. Cloud only.
 
-**MAC-577IF2-E (LN35):** the previous generation, designed for classic MELCloud. Mitsubishi's pages do not say whether it works in MELCloud Home. If the LN35 appears in the owner's MELCloud Home app, use the cloud like the others. If not, control it locally with [`pymitsubishi`](https://github.com/pymitsubishi/pymitsubishi), which talks to this adapter's `/smart` HTTP endpoint on the LAN, with no account and no new hardware. A [user report](https://github.com/pymitsubishi/homeassistant-mitsubishi/issues/61) mentions occasional timeouts, so use retries.
+**MAC-577IF2-E (LN35):** the previous generation, in use in the owner's MELCloud Home app. It also has a local `/smart` HTTP endpoint that [`pymitsubishi`](https://github.com/pymitsubishi/pymitsubishi) can control on the LAN. Not needed now; it is a local fallback for this unit if the cloud proves unreliable.
 
 The MELCloud Home cloud clients:
 

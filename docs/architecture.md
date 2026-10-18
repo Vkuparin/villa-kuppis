@@ -5,7 +5,7 @@
 - One Python service on the owner's home Windows 11 PC, which is almost always on. No Home Assistant box, VM or cottage computer; those are a last resort.
 - One Finnish web app, served by the PC, used from a desktop browser and installed on Android phones' home screens. No native Android app for now.
 - The whole idea is one app instead of many. Take the simplest working route to each device, even if it goes through the manufacturer's cloud.
-- Home: three Mitsubishi indoor units, controlled through the MELCloud Home cloud. The LN35's older MAC-577IF2-E adapter can also be controlled locally with `pymitsubishi` if it is not in MELCloud Home; see [Mitsubishi](mitsubishi.md). Their main job is summer cooling; the apartment's radiators are geothermal and outside the owner's control.
+- Home: three Mitsubishi indoor units, controlled through the MELCloud Home cloud. See [Mitsubishi](mitsubishi.md). Their main job is summer cooling; the apartment's radiators are geothermal and outside the owner's control.
 - Cottage (devices arriving early November 2026): four Mill heaters in **Mill cloud** mode, controlled through the Mill cloud. The heaters run either Mill cloud or Matter, not both; Mill cloud lets the PC control them directly. Two IKEA ALPSTUGA sensors are in Google Home with the Google Home Speaker as Thread border router.
 - Spot-price automation with owner-defined thresholds is a high priority. See [spot-price automation](spot-price.md).
 
