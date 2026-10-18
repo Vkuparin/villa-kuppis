@@ -6,7 +6,7 @@ Feasible. The PC service, web app, prices and fixed thresholds are ordinary work
 
 1. Does `aiomelcloudhome` read and set the three pumps? See [Mitsubishi](mitsubishi.md).
 2. Can the Android app create sensor-driven Google Home automations, enough for a day's plan, and replace them daily? See [platform decision](platform-decision.md#sensor-driven-automations).
-3. How often can Android run the background job that reports cottage readings? This decides how complete the cottage graphs and the optimizer's data will be.
+3. Do the Home APIs work from an Android background job, and how often does Android run it? This decides whether the daily upload is automatic and how complete the cottage graphs and the optimizer's data will be.
 
 The optimizer is the biggest piece of our own code. It needs a few weeks of readings before it can learn each room's heat-up and cool-down rates.
 

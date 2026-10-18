@@ -2,7 +2,7 @@
 
 Experiment specifications, not results. Keep private records (credentials, account and device IDs) in ignored `scratch/`; publish only generic device labels and capability facts. Each live test needs the owner's go-ahead.
 
-Order: C and D now; A and B when the cottage devices arrive.
+Order: C and D first, when implementation begins; A and B when the cottage devices are installed.
 
 ## C. Mitsubishi through MELCloud Home
 
@@ -19,7 +19,7 @@ Prerequisite: heaters and sensors commissioned into Google Home over Matter.
 1. Build [Google's sample](https://github.com/google-home/google-home-api-sample-app-android) at a pinned revision with the `home.platform.selected.devices` scope.
 2. List the cottage devices and their traits. Read each ALPSTUGA (temperature, CO2, PM2.5, humidity, as exposed) and each heater (temperature, setpoint, mode).
 3. Over mobile data, change one heater's setpoint, confirm the read-back, restore it.
-4. Run a background job that reads all devices every 15 minutes for a day; record how often Android actually runs it.
+4. Run a background job that reads all devices every 15 minutes for a day. Record whether the Home APIs work in the background at all, and how often Android actually runs the job.
 5. Check whether the heaters expose power or energy over Matter.
 
 Pass: steps 2–3 work over mobile data. Step 4 shows how complete the cottage graphs will be.
@@ -40,4 +40,4 @@ Pass: a day's plan runs from Google Home with the phone and PC off. If it fails,
 | --- | --- |
 | C and D pass | Build the PC service and the home side of the web app |
 | A and B pass | Build the Android app's cottage functions and the daily upload |
-| B fails | Rethink cottage control before building the upload |
+| B fails | Use the time-based fallback in [platform decision](platform-decision.md#sensor-driven-automations) |

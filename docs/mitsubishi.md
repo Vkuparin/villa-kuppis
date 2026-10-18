@@ -43,5 +43,6 @@ Power, mode (cool, heat, dry, fan), target temperature, room temperature, fan sp
 2. Read one unit's state and compare it with the MELCloud Home app.
 3. Change its setpoint by one degree, confirm the read-back, then restore it.
 4. Change something in the MELCloud Home app and confirm the PC sees it.
+5. Note whether the realtime stream works and any sign of rate limiting, to set a safe polling interval.
 
 Done when one unit reads and sets reliably. Then check the other two.

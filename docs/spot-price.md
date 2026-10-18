@@ -4,7 +4,7 @@ High priority. Plans are computed on the PC for every 15-minute price period. Th
 
 ## Inputs
 
-- **Prices:** the raw Finnish day-ahead spot price (bidding zone FI), with no VAT, margin or fees, in c/kWh. Next-day prices are usually published around 14:00 Finnish time. The PC fetches them once a day at 14:25, and on demand with a **Hae hinnat** button (for example if the daily fetch found no prices yet). Plans are recomputed after each fetch. Source: Elering's public API (`dashboard.elering.ee/api/nps/price`, no key; returns Finnish 15-minute prices in €/MWh without VAT, so divide by 10 for c/kWh). Optional backup: [ENTSO-E Transparency Platform](https://transparency.entsoe.eu/), free, but its token needs registration and an access request to transparency@entsoe.eu.
+- **Prices:** the raw Finnish day-ahead spot price (bidding zone FI), with no VAT, margin or fees, in c/kWh. Next-day prices are usually published around 14:00 Finnish time. The PC fetches them once a day at 14:25, and on demand with a **Hae hinnat** button (for example if the daily fetch found no prices yet). Plans are recomputed after each fetch. Days have 96 periods, but 92 or 100 on daylight-saving change days; timestamps are stored in UTC. Source: Elering's public API (`dashboard.elering.ee/api/nps/price`, no key; returns Finnish 15-minute prices in €/MWh without VAT, so divide by 10 for c/kWh). Optional backup: [ENTSO-E Transparency Platform](https://transparency.entsoe.eu/), free, but its token needs registration and an access request to transparency@entsoe.eu.
 - **Outdoor forecast:** the Finnish Meteorological Institute's open data WFS (`opendata.fmi.fi/wfs`, no key), for the optimizer.
 - **History:** room readings (ALPSTUGA at the cottage, unit sensors at home) and setpoints, stored on the PC.
 
@@ -50,7 +50,7 @@ The pumps matter mostly for summer cooling, and they can be tested before the co
 - **Fixed thresholds:** as in mode 1, with the lowest matching temperature winning, never above the maximum. A rule may switch a unit off.
 - **Optimizer:** as in mode 2, in reverse. It precools in cheap periods, lets rooms warm towards the maximum in expensive ones, and switches units off when that is cheapest. It uses each room's learned warm-up and cool-down rates and the FMI forecast.
 - **Switching off:** a unit that was switched off comes back on when its room nears the maximum or the price drops, but not before the minimum off time.
-- **Shared outdoor unit:** the LN35 and one LN25 share an outdoor unit, which usually cannot heat and cool at the same time. Plans keep both in the same mode.
+- **Season mode:** the owner switches home between heating and cooling in the app; plans never change it. That also keeps the LN35 and the LN25 on the shared outdoor unit in one mode.
 
 **Home away:** a separate button (`Poissa kotoa`) switches home to an away setting. The default is to cool only above 28 °C, with no precooling. Pressing it again restores normal cooling. It is independent of the cottage visit.
 

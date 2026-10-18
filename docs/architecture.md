@@ -35,7 +35,7 @@ flowchart LR
 **The Android app** is the cottage link. It:
 
 - reads cottage readings through the Home APIs and reports them to the PC about every 15 minutes, for graphs and the optimizer (Android may stretch this in battery saver; gaps show in the graphs);
-- fetches the cottage plan from the PC and uploads it as Google Home automations, once a day after prices are published, plus a manual re-send button;
+- fetches the cottage plan from the PC and uploads it as Google Home automations, once a day after the 14:25 price fetch, plus a manual re-send button (on the owner's phone only);
 - starts and ends visit heating;
 - shows notifications.
 
@@ -63,7 +63,7 @@ The PC stores every reading as a time series in SQLite and keeps it all; a few y
 
 | Series | Source | Interval |
 | --- | --- | --- |
-| Room temperature, setpoint, mode, fan, on/off: each pump | MELCloud Home, polled by the PC | 5 minutes, plus every change |
+| Room temperature, setpoint, mode, fan, on/off: each pump | MELCloud Home: its realtime stream where available, otherwise polling | 5 minutes, plus every change |
 | Pump energy use, if exposed | MELCloud Home measurements | As reported |
 | Room temperature, CO2, PM2.5, humidity, as exposed: each ALPSTUGA | Android app, through the Home APIs | About 15 minutes |
 | Temperature, setpoint, mode: each Mill heater | Android app, through the Home APIs | About 15 minutes |
@@ -84,13 +84,13 @@ Each reading has a value, a timestamp and a fresh/stale flag. Each command recor
 
 ## Heating and cooling
 
-Devices remain their own thermostats; plans only change setpoints and modes. If the PC, phone or internet is down, the last uploaded automations and the devices' own setpoints keep working. The Mill heaters also have built-in frost protection.
+Devices remain their own thermostats; plans only change setpoints, on/off and fan. The planner never switches the pumps between heating and cooling: the owner picks the season mode in the app, which also keeps the two units on the shared outdoor unit in one mode. If the PC, phone or internet is down, the last uploaded automations and the devices' own setpoints keep working. The Mill heaters also have built-in frost protection.
 
 Plans use Europe/Helsinki local time; store timestamps in UTC.
 
 ## Remote access and security
 
-[Tailscale](https://tailscale.com/pricing) connects phones to the PC. The free Personal plan should cover this: recent reports say it has allowed six users and unlimited personal devices since April 2026; confirm on the pricing page. Nothing is exposed to the public internet.
+[Tailscale](https://tailscale.com/pricing) connects phones to the PC. The service listens only on the PC itself (localhost); `tailscale serve` publishes it to the owner's Tailscale network, so the user identity it passes on cannot be faked from the home LAN. On the PC itself, the browser uses localhost. The free Personal plan should cover this: recent reports say it has allowed six users and unlimited personal devices since April 2026; confirm on the pricing page. Nothing is exposed to the public internet.
 
 ## Users
 
@@ -101,6 +101,6 @@ Each household member uses their own Google account; nothing new to remember:
 
 Google Family Link manages supervised child accounts but offers no sign-in for other apps. Supervised accounts may be limited in Google Home and Tailscale; check before relying on them.
 
-Keep MELCloud Home and Google credentials outside Git and back them up with the database.
+Keep MELCloud Home and Google credentials outside Git, in the Windows credential store. The service copies the SQLite database once a day to a backup folder the owner chooses.
 
 No AI model is in the command path. Plans are deterministic code.
