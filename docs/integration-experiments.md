@@ -10,7 +10,7 @@ Follow [the Mitsubishi experiment](mitsubishi.md#first-experiment). Runs on the 
 
 ## D. Spot prices and fixed thresholds
 
-No hardware needed. Fetch tomorrow's 15-minute FI spot prices from ENTSO-E (Elering as backup), store them, and compute plans from fixed thresholds per room and per site, for heating and cooling. Test against saved price fixtures with the network mocked.
+No hardware needed. Fetch tomorrow's 15-minute FI spot prices from Elering (no key), store them, and compute plans from fixed thresholds per room and per site, for heating and cooling. Test against saved price fixtures with the network mocked.
 
 ## A. Cottage through the Home APIs
 

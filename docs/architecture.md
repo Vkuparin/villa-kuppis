@@ -9,7 +9,7 @@
 - Cottage (devices arriving early November 2026): four Mill heaters and two IKEA ALPSTUGA sensors in Google Home over Matter, with the Google Home Speaker as hub. The heaters follow the ALPSTUGA readings rather than their own sensors.
 - Spot-price automation is a high priority: fixed thresholds first, then an optimizer. See [spot-price automation](spot-price.md).
 - Household members use the app with full control, each with their own Google account. No separate app login.
-- No paid services, stores or signing: free Google Cloud project and OAuth setup without billing, a self-signed Android APK installed directly, free Tailscale, ENTSO-E and FMI.
+- No paid services, stores or signing: free Google Cloud project and OAuth setup without billing, a self-signed Android APK installed directly, free Tailscale, Elering and FMI.
 
 ## Shape
 
@@ -18,7 +18,7 @@ flowchart LR
   Desktop[Desktop browser] --> PC[Home PC: Python service and web app]
   Phone[Villa Kuppis Android app] -->|Tailscale| PC
   PC -->|MELCloud Home cloud| Pumps[3 Mitsubishi indoor units]
-  PC --> Prices[ENTSO-E spot prices]
+  PC --> Prices[Elering spot prices]
   PC --> Weather[FMI forecast]
   PC --> DB[(SQLite)]
   Phone -->|Home APIs| Google[Google Home]
@@ -52,7 +52,7 @@ Google runs the uploaded automations, so the cottage follows its plan with the P
 
 - **PC:** Python. MELCloud Home through `aiomelcloudhome`. The service runs natively on Windows and starts at boot without an interactive login.
 - **Android:** Kotlin with the Google Home APIs; the web app is shown in a WebView.
-- **Shared data:** prices from ENTSO-E (Elering backup) and the outdoor forecast from the Finnish Meteorological Institute's free open data.
+- **Shared data:** spot prices from Elering's public API and the outdoor forecast from FMI open data. Neither needs a key; both were tested from a cloud session on 18 October 2026.
 
 The MELCloud Home client is unofficial; if it breaks, REA on the current app is the repair tool.
 
