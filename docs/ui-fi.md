@@ -10,9 +10,10 @@ Käyttöliittymän kieli on suomi. Tietokoneella käytetään selainta. Android-
 - **Pörssisähkö:** päivän ja huomisen hinnat 15 minuutin jaksoissa sekä suunnitelma: mikä tavoitelämpötila on voimassa kussakin jaksossa ja miksi.
 - **Hintasäännöt:** kiinteät hintarajat, esimerkiksi `Kun pörssihinta on alle 5 c/kWh → 12 °C`, tai kytkin `Älykäs ylläpitolämmitys` (vähimmäislämpötila, suurin varaava lämpötila, halpa ja kallis hinta). Asetukset koko kohteelle tai huoneittain. Hinta on pelkkä pörssihinta ilman veroja ja marginaaleja. Kotona säännöt koskevat kesällä jäähdytystä.
 - **Mökki:** `Vierailu` kysyy saapumisajan ja tavoitelämpötilan, ja sovellus lämmittää halvimmilla jaksoilla ajoissa. `Lopeta vierailu` palauttaa ylläpitolämmityksen. `Lähetä suunnitelma uudelleen`, jos päivän siirto Google Homeen epäonnistui.
+- **Koti:** painike `Poissa kotoa` vaihtaa kodin poissaoloasetukseen (oletuksena jäähdytys vasta yli 28 °C:ssa). `Yötila`: valituissa huoneissa hiljaisin puhallus yöaikaan.
 - **Tapahtumat:** kuka tai mikä muutti asetusta, milloin ja onnistuiko muutos.
 - **Ilmoitukset (Android):** päivän siirto epäonnistui, laite ei ole yhteydessä tai vierailun tavoite ei toteudu ajoissa.
-- **Asetukset:** laitteet, kohteet, käyttäjät, yhteydet ja hinnanohjauksen rajat.
+- **Asetukset:** laitteet, kohteet, käyttäjät, yhteydet ja kaikki ohjauksen asetukset: hintarajat, lämpötilat, poissaolo- ja yöasetukset. Jokaisella on oletusarvo, jota voi muuttaa.
 
 ## Sanasto
 
@@ -39,6 +40,10 @@ Käyttöliittymän kieli on suomi. Tietokoneella käytetään selainta. Android-
 | Re-send plan | Lähetä suunnitelma uudelleen |
 | Graphs | Kuvaajat |
 | Precooling | Esijäähdytys |
+| Maximum temperature | Enimmäislämpötila |
+| Away from home | Poissa kotoa |
+| Night mode | Yötila |
+| Minimum off time | Vähimmäistaukoaika |
 
 Laitteen ilmoittama tila ja pyydetty muutos näytetään erikseen, kunnes laite vahvistaa muutoksen. Kun pörssisähköohjaus muuttaa asetusta, tapahtumissa näkyy syy, esimerkiksi `Pörssisähköohjaus: halpa jakso`.
 

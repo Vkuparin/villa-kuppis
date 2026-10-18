@@ -7,7 +7,8 @@
 - The goal is one app instead of many. Take the simplest working route to each device, even through the manufacturer's cloud.
 - Home: three Mitsubishi indoor units, all in MELCloud Home, controlled from the PC through the MELCloud Home cloud. Their main job is summer cooling; the apartment's radiators are geothermal and outside the owner's control.
 - Cottage (devices arriving early November 2026): four Mill heaters and two IKEA ALPSTUGA sensors in Google Home over Matter, with the Google Home Speaker as hub. The heaters follow the ALPSTUGA readings rather than their own sensors.
-- Spot-price automation is a high priority: fixed thresholds first, then an optimizer. See [spot-price automation](spot-price.md).
+- Spot-price automation is a high priority: fixed thresholds first, then an optimizer. Home cooling ships first, because the pumps are available now. See [spot-price automation](spot-price.md).
+- Every setting (thresholds, temperatures, prices, away and night settings) has a default and can be changed in the app.
 - Household members use the app with full control, each with their own Google account. No separate app login.
 - No paid services, stores or signing: free Google Cloud project and OAuth setup without billing, a self-signed Android APK installed directly, free Tailscale, Elering and FMI.
 

@@ -10,7 +10,7 @@ High priority. Plans are computed on the PC for every 15-minute price period. Th
 
 ## Scope
 
-Every setting can apply to a whole site or to a single room; a room setting overrides the site setting.
+Every setting can apply to a whole site or to a single room; a room setting overrides the site setting. Every setting in this document, including the defaults below, can be changed in the app.
 
 ## Mode 1: fixed thresholds
 
@@ -35,7 +35,26 @@ A switch per site or room. The owner sets:
 
 The optimizer chooses a target for each 15-minute period that minimizes the cost of the known price window while staying between the minimum and the maximum. It uses each room's learned heat-up and cool-down rates and the outdoor forecast. Until enough history exists (a few weeks of readings), it falls back to the fixed thresholds implied by the low and high prices.
 
-**Cooling** works the same in reverse for the pumps: a maximum temperature, a minimum precooling temperature, and low and high prices.
+## Summer cooling (home pumps)
+
+The pumps matter mostly for summer cooling, and they can be tested before the cottage devices arrive. Cooling mirrors heating:
+
+| Setting | Default |
+| --- | --- |
+| Maximum temperature: cool at any price above this | 25 °C |
+| Precooling temperature: cool down to this when the price is low | 21 °C |
+| Low and high price | Set by the owner |
+| Switch off when the price is high | Allowed |
+| Minimum off time, to protect the compressor | 30 minutes |
+
+- **Fixed thresholds:** as in mode 1, with the lowest matching temperature winning, never above the maximum. A rule may switch a unit off.
+- **Optimizer:** as in mode 2, in reverse. It precools in cheap periods, lets rooms warm towards the maximum in expensive ones, and switches units off when that is cheapest. It uses each room's learned warm-up and cool-down rates and the FMI forecast.
+- **Switching off:** a unit that was switched off comes back on when its room nears the maximum or the price drops, but not before the minimum off time.
+- **Shared outdoor unit:** the LN35 and one LN25 share an outdoor unit, which usually cannot heat and cool at the same time. Plans keep both in the same mode.
+
+**Home away:** a separate button (`Poissa kotoa`) switches home to an away setting. The default is to cool only above 28 °C, with no precooling. Pressing it again restores normal cooling. It is independent of the cottage visit.
+
+**Night mode:** in chosen rooms (bedrooms), the fan runs on its quietest setting during set night hours, even if cooling takes longer. Default hours: 22:00–07:00.
 
 ## Visit heating
 
