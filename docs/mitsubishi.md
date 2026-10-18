@@ -2,7 +2,7 @@
 
 ## Installation
 
-At home, controlled from the home PC over the home LAN (Google Nest Wifi Pro). Not in Google Home.
+At home. Not in Google Home.
 
 | Indoor unit | Outdoor unit |
 | --- | --- |
@@ -12,33 +12,20 @@ At home, controlled from the home PC over the home LAN (Google Nest Wifi Pro). N
 
 Supplied identifiers, one per indoor unit: `LN25VGHZ2LU`, `LN35VG2WLU`, `LN25VG2WLU`. All three can be operated independently. Two indoor units share outdoor unit 2. Multi-split outdoor units usually cannot heat one room and cool another at the same time; check this on the real units.
 
-**Main use: summer cooling.** The apartment's radiators are geothermal and outside the owner's control, so pump heating matters little.
+**Main use: summer cooling.** The apartment's radiators are geothermal and outside the owner's control.
 
-## Wi-Fi adapter
+## Route: MELCloud Home cloud
 
-The MSZ-LN series has a built-in Wi-Fi interface. Mitsubishi's documents name several possible adapters:
+The owner uses the MELCloud Home app, so the units have MAC-597 Wi-Fi adapters. Mitsubishi says these need continuous internet; there is no known local API, and `pymitsubishi` does not support them.
 
-- The [MSZ-LN Wi-Fi interface manual](https://manuals.plus/m/95adb8ddd1845ae199f40ce676850ec07b1c22de56040e7d4ee2426083cf058b.pdf) covers MAC-567IFB-E, MAC-567IF-E and MAC-587IF-E.
-- The [VG2 parts list](https://library.mitsubishielectric.co.uk/pdf/download_full/5101) names MAC-577IF2-E for MSZ-LN25VG2 variants.
-- Newer units with the MELCloud Home app use MAC-597IF-E.
+The PC controls them through the MELCloud Home cloud, with the same account the app uses:
 
-The docs cannot say which one these units have. Two checks avoid opening the units:
+- [`aiomelcloudhome`](https://github.com/erwindouna/aiomelcloudhome): async Python client for buildings, devices, air-to-air control and measurements, with a realtime websocket stream and polling as fallback.
+- [`melcloudhome`](https://github.com/andrew-blake/melcloudhome): a Home Assistant integration with its own client, reverse engineered from the MELCloud Home web app. A second reference if the first lacks something.
 
-1. **Which app do you use: MELCloud or MELCloud Home?** MELCloud Home points to MAC-597, which `pymitsubishi` reportedly does not support.
-2. **Try it.** Find the adapters' addresses in the Google Home app's Wi-Fi device list, then run a read-only `pymitsubishi` status call from the PC. If it answers, the route works.
+Both are unofficial. No new hardware is needed, and the MELCloud Home app keeps working alongside.
 
-The adapters use 2.4 GHz Wi-Fi only.
-
-## Routes
-
-Each indoor unit needs its own working adapter. Try these in order.
-
-| Route | Runtime | Notes |
-| --- | --- | --- |
-| Existing adapter with [`pymitsubishi`](https://github.com/pymitsubishi/pymitsubishi) | Local | Python, MIT licence. Uses the adapter's local `/smart` HTTP endpoint. Built for MAC-577IF2-E; MAC-587 reported working; MAC-597 reportedly not. No new hardware, and MELCloud keeps working. A [Home Assistant user report](https://github.com/pymitsubishi/homeassistant-mitsubishi/issues/61) mentions occasional timeouts, so use retries. |
-| CN105 serial adapter, e.g. ESP32 with [ESPHome](https://esphome.io/components/climate/mitsubishi_cn105/) | Local | Fallback. Prefer a ready-made board. It takes the Wi-Fi adapter's connector, so it replaces MELCloud on that unit. An [owner report](https://github.com/echavet/MitsubishiCN105ESPHome/discussions/317) confirms MSZ-LN25VG2W and MSZ-LN35VG2W. The PC talks to it with `aioesphomeapi`. |
-| MELCloud / MELCloud Home cloud API | Cloud | Temporary bridge only. |
-| REA on the adapter or the MELCloud app | — | Only if the adapter answers locally but `pymitsubishi` lacks a needed function. The [adapter analysis repo](https://github.com/pymitsubishi/mac-577if-e) is a starting point. |
+**Local alternative, only if the cloud proves unreliable:** replace each MAC-597 with a CN105 serial board running [ESPHome](https://esphome.io/components/climate/mitsubishi_cn105/). An [owner report](https://github.com/echavet/MitsubishiCN105ESPHome/discussions/317) confirms MSZ-LN25VG2W and MSZ-LN35VG2W. This takes the adapter's connector, so MELCloud Home stops working on that unit.
 
 ## First functions
 
@@ -46,9 +33,9 @@ Power, mode (cool, heat, dry, fan), target temperature, room temperature, fan sp
 
 ## First experiment
 
-1. Check which app you use and find the three adapters' LAN addresses. Keep the addresses in `scratch/`.
-2. From the PC, read one unit's status with `pymitsubishi` and compare it with the remote control.
-3. Change the setpoint by one degree, confirm the read-back, then restore it.
-4. Change something with the remote and confirm the read sees it.
+1. With the owner's go-ahead, sign in from the PC with `aiomelcloudhome` and list the three units. Keep credentials and device IDs in `scratch/`.
+2. Read one unit's state and compare it with the MELCloud Home app.
+3. Change its setpoint by one degree, confirm the read-back, then restore it.
+4. Change something in the MELCloud Home app and confirm the PC sees it.
 
-Done when one unit reads and sets reliably. Then repeat for the other two. If step 2 fails, choose a CN105 board.
+Done when one unit reads and sets reliably. Then check the other two.

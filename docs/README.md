@@ -1,13 +1,13 @@
 # Villa Kuppis design documents
 
-Status: tentative, 18 October 2026, revision 2. Design only; no device, account or network has been changed.
+Status: tentative, 18 October 2026, revision 3. Design only; no device, account or network has been changed.
 
 | Document | Purpose |
 | --- | --- |
 | [Architecture](architecture.md) | Decisions, PC service, model and remote access |
-| [Platform decision](platform-decision.md) | How the PC and phones reach the cottage without Premium |
-| [Cottage](cottage.md) | Hardware, heating policy, access routes and the direct Matter option |
-| [Mitsubishi](mitsubishi.md) | Three indoor units, local-control routes and first experiment |
+| [Platform decision](platform-decision.md) | How the PC reaches each device, and why Mill cloud rather than Matter |
+| [Cottage](cottage.md) | Hardware, setup steps and heating policy |
+| [Mitsubishi](mitsubishi.md) | Three indoor units, the MELCloud Home route and first experiment |
 | [Spot-price automation](spot-price.md) | Price data, policies and where plans run |
 | [Integration experiments](integration-experiments.md) | Steps and pass criteria for the first tests |
 | [Feasibility](feasibility.md) | Main unknowns and where REA helps |

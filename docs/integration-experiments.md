@@ -1,41 +1,31 @@
 # First integration experiments
 
-Experiment specifications, not results. Keep private records (account IDs, addresses, pairing codes) in ignored `scratch/`; publish only generic device labels and capability facts. Each live test needs the owner's go-ahead.
+Experiment specifications, not results. Keep private records (credentials, account and device IDs) in ignored `scratch/`; publish only generic device labels and capability facts. Each live test needs the owner's go-ahead.
 
-Order: C and D now; A and B when the cottage devices arrive.
+Order: C and D now; A when the heaters arrive.
 
-## C. Mitsubishi at home
+## C. Mitsubishi through MELCloud Home
 
 Follow [the Mitsubishi experiment](mitsubishi.md#first-experiment). Runs on the home PC.
 
 ## D. Spot prices and rules
 
-No hardware needed. Fetch tomorrow's 15-minute FI prices from ENTSO-E (Elering as backup), store them, and compute plans from owner rules for the cottage heaters (heating) and one pump (cooling). Test against saved price fixtures with the network mocked.
+No hardware needed. Fetch tomorrow's 15-minute FI spot prices from ENTSO-E (Elering as backup), store them, and compute plans from owner thresholds for the cottage heaters (heating) and one pump (cooling). Test against saved price fixtures with the network mocked.
 
-## A. Cottage through Google Home
+## A. Mill heater through Mill cloud
 
-Prerequisite: Mill heaters and ALPSTUGA sensors commissioned into Google Home over Matter.
+Prerequisite: one heater set up in Mill cloud mode in the Mill app.
 
-1. **Manual check, no code.** In the Google Home app and on [home.google.com](https://home.google.com), confirm all four heaters and both sensors appear. Set one heater to 5, 12 and 22 °C, and confirm each is accepted.
-2. **Android app.** Build [Google's sample](https://github.com/google-home/google-home-api-sample-app-android) at a pinned revision with the `home.platform.selected.devices` scope. List the cottage devices and their traits; read an ALPSTUGA temperature and a heater's temperature, setpoint and mode.
-3. **Remote.** Repeat over mobile data, away from the cottage.
-4. **Setpoint.** Change one heater's setpoint, confirm the read-back, restore it.
+1. From the PC, sign in with `millheater` and list the heater.
+2. Read its room temperature, setpoint and mode; compare with the Mill app.
+3. Set 5, 12 and 22 °C in turn, confirming each read-back, then restore the original.
 
-Pass: steps 2–4 work over mobile data.
-
-## B. Cottage price plan through the Automation API
-
-1. From the app, create one automation with a clock-time starter that sets a heater's heating setpoint. Confirm it runs with the phone off.
-2. Create a day's worth of automations from a sample plan. Record any limit on how many a home can hold.
-3. Replace them from a background job, as the daily upload will.
-4. Disable and re-enable them, as visit mode will.
-
-Pass: a day's plan runs from Google Home with the phone and PC off. If it fails, see the alternatives in [platform decision](platform-decision.md#alternatives).
+Pass: steps 1–3 work. If the library does not support Gen 4, try the Mill app's current API with REA before falling back to Matter ([platform decision](platform-decision.md#fallback-matter-through-google)).
 
 ## Next step
 
 | Evidence | Next |
 | --- | --- |
-| C and D pass | Build the PC service and the home side of the UI |
-| A and B pass | Build the Android app's cottage view, daily upload and visit button |
-| B fails | Owner decides between Mill cloud and the direct Matter route |
+| C and D pass | Build the PC service and the home side of the web app |
+| A passes | Set up all four heaters in Mill cloud mode; add the cottage to the app and the price plans |
+| A fails | Owner decides between repairing the cloud client and the Matter fallback |

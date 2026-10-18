@@ -3,32 +3,32 @@
 ## Decided
 
 - One Python service on the owner's home Windows 11 PC, which is almost always on. No Home Assistant box, VM or cottage computer; those are a last resort.
-- Finnish UI in a desktop browser and in a native Android app. All household phones are Android.
-- Home: three Mitsubishi indoor units, controlled locally from the PC. Their main job is summer cooling; the apartment's radiators are geothermal and outside the owner's control. The home network is a Google Nest Wifi Pro.
-- Cottage (devices arriving about early November 2026): four Mill heaters and two IKEA ALPSTUGA sensors, commissioned into Google Home over Matter, with the Google Home Speaker as hub. No Mill or IKEA app or cloud.
-- Premium is not used: the speaker includes Standard, and Home MCP needs Advanced. See [platform decision](platform-decision.md).
-- Spot-price automation with owner-defined rules is a high priority. See [spot-price automation](spot-price.md).
+- One Finnish web app, served by the PC, used from a desktop browser and installed on Android phones' home screens. No native Android app for now.
+- The whole idea is one app instead of many. Take the simplest working route to each device, even if it goes through the manufacturer's cloud.
+- Home: three Mitsubishi indoor units with MAC-597 Wi-Fi adapters (MELCloud Home), controlled through the MELCloud Home cloud. Their main job is summer cooling; the apartment's radiators are geothermal and outside the owner's control.
+- Cottage (devices arriving early November 2026): four Mill heaters in **Mill cloud** mode, controlled through the Mill cloud. The heaters run either Mill cloud or Matter, not both; Mill cloud lets the PC control them directly. Two IKEA ALPSTUGA sensors are in Google Home with the Google Home Speaker as Thread border router.
+- Spot-price automation with owner-defined thresholds is a high priority. See [spot-price automation](spot-price.md).
 
 ## Shape
 
 ```mermaid
 flowchart LR
-  Desktop[Desktop browser] --> PC[Home PC: Python service]
-  Phone[Villa Kuppis Android app] -->|Tailscale| PC
-  PC -->|Local LAN| Pumps[3 Mitsubishi indoor units]
-  PC --> Prices[Day-ahead spot prices]
+  Desktop[Desktop browser] --> PC[Home PC: Python service and web app]
+  Phone[Android phone: installed web app] -->|Tailscale| PC
+  PC -->|MELCloud Home cloud| Pumps[3 Mitsubishi indoor units]
+  PC -->|Mill cloud| Mill[4 Mill heaters]
+  PC --> Prices[ENTSO-E spot prices]
   PC --> DB[(SQLite)]
-  Phone -->|Home APIs| Google[Google Home cloud]
-  Google --> Hub[Cottage Google Home Speaker]
-  Hub --> Mill[4 Mill heaters: Matter over Wi-Fi]
-  Hub --> Sensors[2 ALPSTUGA: Matter over Thread]
+  Google[Google Home app] --> Sensors[2 ALPSTUGA via the speaker]
 ```
 
-The PC service owns configuration, history, rules and plans. It controls the pumps directly. It cannot reach Google Home, so the Android app carries cottage plans to Google as automations and reports cottage state back to the PC. Google's own app and [home.google.com](https://home.google.com) remain usable for manual cottage control.
+The PC service owns configuration, history, rules and plans, and it sends every command. Both sites work the same way: the PC calls the manufacturer's cloud. The ALPSTUGA readings stay in the Google Home app for now; showing them in Villa Kuppis needs a native Android app (a later card).
 
 ## Stack
 
-Python for the PC service: the leading pump route (`pymitsubishi`) is a Python library, and so is the ESPHome client for the CN105 fallback. Kotlin for the Android app. The service runs natively on Windows and starts at boot without an interactive login. The owner may still override the language choice before code lands.
+Python for the service: the MELCloud Home client (`aiomelcloudhome`) and the Mill cloud client (`millheater`) are Python libraries. The web UI is served by the same service and works as an installable web app on Android. The service runs natively on Windows and starts at boot without an interactive login.
+
+Both cloud APIs are unofficial: the community reverse engineered them from the manufacturers' apps. If one changes and the library breaks, REA on the current app is the repair tool. Poll gently and send a command only when a setpoint changes.
 
 ## Model
 
@@ -38,7 +38,7 @@ Each reading has a value, a timestamp and a fresh/stale flag. Each command recor
 
 ## Heating and cooling
 
-Devices remain their own thermostats; the app only changes setpoints and modes. If the PC or internet is down, devices keep their last setpoint. The Mill heaters have built-in frost protection that does not depend on Wi-Fi, so the app needs no fallback of its own.
+Devices remain their own thermostats; the app only changes setpoints and modes. If the PC or internet is down, devices keep their last setpoint. The Mill heaters have built-in frost protection that does not depend on Wi-Fi.
 
 Plans use Europe/Helsinki local time; store timestamps in UTC.
 
@@ -46,6 +46,6 @@ Plans use Europe/Helsinki local time; store timestamps in UTC.
 
 [Tailscale](https://tailscale.com/pricing) connects the phones to the PC. Its free Personal plan should cover this: recent reports say it has allowed six users and unlimited personal devices since April 2026; confirm on the pricing page. Install it on the PC and each phone and sign in with the same account. Nothing is exposed to the public internet.
 
-Keep the pump Wi-Fi adapters on the LAN only; published research describes weak security in their firmware. Keep credentials outside Git and back them up with the database.
+Keep the MELCloud Home and Mill account credentials outside Git, in the Windows credential store or a restricted local file, and back them up with the database.
 
 No AI model is in the command path. Rules and plans are deterministic code.

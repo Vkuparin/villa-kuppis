@@ -1,6 +1,6 @@
 # Villa Kuppis
 
-A personal Finnish-language home automation app for local device control at home and at a cottage.
+A personal Finnish-language home automation app that brings the home and cottage devices into one app.
 
 **Status: research and design scaffold. No working app or device integration yet.** The UI will be Finnish. Start with the [design documents](docs/README.md), the [cottage plan](docs/cottage.md) and [spot-price automation](docs/spot-price.md).
 

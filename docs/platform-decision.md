@@ -1,43 +1,37 @@
-# Client and cottage access decision
+# Client and device access decision
 
-Status: proposed, 18 October 2026.
+Status: proposed, 18 October 2026, revision 3.
 
 ## Decided
 
-- Android phones and a desktop browser. The PC service is the shared backend and the only place plans are computed.
-- Google Home is the cottage hub. One Google account holds both homes; the home already has a Google Nest Wifi Pro.
-- No Home Assistant box, VM or cottage computer unless every other route fails.
+- The PC talks to every controllable device through its manufacturer's cloud: MELCloud Home for the pumps, Mill cloud for the heaters. Everything, including price automation, runs on the PC.
+- One web app served by the PC, used from a desktop browser and installed on Android phones over Tailscale.
+- Premium is not used, and nothing in the design needs Google's developer APIs.
 
-## What the PC cannot do
+## Why Mill cloud rather than Matter
 
-The PC has no supported way to talk to Google Home from Finland today:
+The Mill heaters run either Mill cloud or Matter, not both.
 
-- The Home APIs exist only for Android and iOS.
-- [Google Home MCP](https://developers.home.google.com/mcp/home) requires Premium **Advanced** and, during early access, a US account in English ([coverage](https://dev.to/techaiwire/google-home-adds-an-mcp-server-gated-at-20-a-month-5gop)). The Google Home Speaker comes with six months of Premium **Standard** ([offer](https://chromeunboxed.com/gemini-live-might-be-the-real-reason-to-buy-the-new-google-home-speaker-and-you-can-try-it-free-for-6-months/)). Premium is therefore not part of the design.
+| | Mill cloud | Matter through Google Home |
+| --- | --- | --- |
+| PC controls the heaters | Yes, directly | No. Google Home MCP needs Premium Advanced and is US-only; the speaker includes Standard. |
+| Price automation | PC changes setpoints every 15 minutes, same engine as the pumps | Android app uploads a daily plan as Google Home automations; limits untested |
+| Desktop control | In Villa Kuppis | Only through home.google.com |
+| Needs | `millheater` working with Gen 4; Mill cloud up | Native Kotlin Android app with the Home APIs and a daily background job |
+| Google Home app and voice | Heaters not in Google Home (no official Mill integration found) | Heaters in Google Home |
 
-Being at home does not change this: linking an app to Google Home is an OAuth sign-in, not a local pairing.
+Mill cloud is simpler. It removes the native Android app, the Google APIs and the daily upload.
 
-## How the cottage is controlled
+**Check first:** set up the first heater in Mill cloud mode and confirm `millheater` reads and sets it from the PC. Gen 4 support in the library is unverified. If it fails, switch the heaters to Matter and use the Google route below.
 
-| Use | Route |
-| --- | --- |
-| Manual control | Google Home app, [home.google.com](https://home.google.com) on desktop, or the Villa Kuppis Android app |
-| Price automation | The Android app uploads the PC's daily plan as Google Home automations ([Automation API](https://developers.home.google.com/apis/android/device/thermostat)); Google runs them |
-| Visit button | The Android app sets the heaters directly and suspends the automations |
-| Desktop UI | Shows the cottage plan and the state the Android app last reported; manual cottage control from the desktop goes through home.google.com |
+## Fallback: Matter through Google
 
-The Automation API supports thermostat elements and clock-time starters. Still to verify: that an automation can set a heater's heating setpoint, how many automations a home can hold, and that a background job can replace them daily.
+Keep this only if Mill cloud fails:
 
-The upload needs an Android phone that runs a daily background job. A spare Android phone left on a charger at home is more dependable than a personal phone that travels.
+- Commission the heaters into Google Home over Matter.
+- Build a small Kotlin Android app with the [Home APIs](https://developers.home.google.com/apis/android/connectivity) (scope `home.platform.selected.devices`).
+- The app fetches the PC's daily plan and writes it as Google Home automations ([Automation API](https://developers.home.google.com/apis/android/device/thermostat), clock-time starters).
 
-## Alternatives
+## ALPSTUGA
 
-| Route | Gain | Cost | Status |
-| --- | --- | --- | --- |
-| Mill cloud instead of Matter for the heaters | PC controls the heaters directly every 15 minutes; no phone needed | Mill cloud dependency; Gen 4 cloud API unverified; the manuals offer cloud **or** Matter | Owner decision if the Automation API falls short |
-| Direct Matter from the PC | No Google or phone in the automation path | Routed IPv6 to the cottage; probably router changes | Secondary research; see [cottage](cottage.md#secondary-route-direct-matter-from-the-home-pc) |
-| Premium Advanced, if MCP reaches Finland | PC controls the cottage through Google | About $20 a month | Watch; not planned |
-
-## Client choice
-
-A native Kotlin Android app, because the Home APIs and the background upload need it. The desktop UI is a browser app served by the PC.
+The sensors are Matter over Thread and only reach Google Home, through the speaker. They stay in the Google Home app. The Mill heaters report their own room temperature, which is enough for the plan and the UI. Bringing ALPSTUGA readings into Villa Kuppis later needs a native Android app with the Home APIs.

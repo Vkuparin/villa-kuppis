@@ -2,9 +2,9 @@
 
 Project: Villa Kuppis.
 
-Purpose: A personal Finnish-language home automation app for local device control at home and at a cottage.
+Purpose: A personal Finnish-language home automation app that brings the home and cottage devices into one app.
 
-Stack: Design phase. Python service on the home Windows PC with SQLite and reusable device adapters (pymitsubishi first); no Home Assistant or VM unless last resort. Browser UI and native Kotlin Android app (Google Home APIs); cottage devices through Google Home over Matter. Update this line when the runtime, framework or key libraries change.
+Stack: Design phase. Python service on the home Windows PC with SQLite and cloud client libraries (aiomelcloudhome for the pumps, millheater for the heaters); no Home Assistant or VM unless last resort. One Finnish web app for desktop and Android over Tailscale. Update this line when the runtime, framework or key libraries change.
 
 Codex, Hermes and Claude Code (through `CLAUDE.md`) all read this file. This is a hobby project: move quickly, keep process small, and ask the owner only about real product choices.
 
