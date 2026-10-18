@@ -84,13 +84,13 @@ Each reading has a value, a timestamp and a fresh/stale flag. Each command recor
 
 ## Heating and cooling
 
-Devices remain their own thermostats; plans only change setpoints, on/off and fan. The planner never switches the pumps between heating and cooling: the owner picks the season mode in the app, which also keeps the two units on the shared outdoor unit in one mode. If the PC, phone or internet is down, the last uploaded automations and the devices' own setpoints keep working. The Mill heaters also have built-in frost protection.
+Devices remain their own thermostats; plans only change setpoints, on/off and fan, never the mode. Every automation acts on measured room temperatures, so idle seasons take care of themselves: the cottage heaters do nothing when the room is already warm, and pump automation is cooling-only and leaves alone any unit not in cooling mode. If the PC, phone or internet is down, the last uploaded automations and the devices' own setpoints keep working. The Mill heaters also have built-in frost protection.
 
 Plans use Europe/Helsinki local time; store timestamps in UTC.
 
 ## Remote access and security
 
-[Tailscale](https://tailscale.com/pricing) connects phones to the PC. The service listens only on the PC itself (localhost); `tailscale serve` publishes it to the owner's Tailscale network, so the user identity it passes on cannot be faked from the home LAN. On the PC itself, the browser uses localhost. The free Personal plan should cover this: recent reports say it has allowed six users and unlimited personal devices since April 2026; confirm on the pricing page. Nothing is exposed to the public internet.
+[Tailscale](https://tailscale.com/pricing) connects phones to the PC from anywhere. It is a small app installed once on the PC and on each phone; it then runs in the background as a private VPN. Wi-Fi passwords protect each local network, but they do not let a phone on mobile data or the cottage Wi-Fi reach the home PC, which is not reachable from the internet. The Android app needs that link to report cottage readings and fetch the daily plan wherever the phone is. Opening a port on the home router would expose the PC to the internet and need its own login and certificates, so Tailscale is the simpler free option. The service listens only on the PC itself (localhost); `tailscale serve` publishes it to the owner's Tailscale network, so the user identity it passes on cannot be faked from the home LAN. On the PC itself, the browser uses localhost. The free Personal plan should cover this: recent reports say it has allowed six users and unlimited personal devices since April 2026; confirm on the pricing page. Nothing is exposed to the public internet.
 
 ## Users
 

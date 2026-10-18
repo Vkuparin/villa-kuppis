@@ -11,7 +11,7 @@ No release is published yet. After publication, record the actual release link a
 | Version | Goal | Canonical tasks | Release criterion |
 | --- | --- | --- | --- |
 | 0.1.0 | Prove the integrations | [0.1.0](tasks/0.1.0.md) | One pump reads and sets from the PC; price plans compute from fixed thresholds; the cottage reads and sets through the Home APIs; sensor-driven automations run a day's plan |
-| 0.2.0 | Home: PC service, web app and pump automation | [0.2.0](tasks/0.2.0.md) | The pumps follow fixed price thresholds for heating and cooling; home-away button and night mode work; graphs of readings; all settings changeable in the app |
+| 0.2.0 | Home: PC service, web app and pump automation | [0.2.0](tasks/0.2.0.md) | The pumps follow fixed price thresholds for cooling; home-away button and night mode work; graphs of readings; all settings changeable in the app |
 | 0.3.0 | Cottage: Android app and automation | [0.3.0](tasks/0.3.0.md) | The cottage follows fixed thresholds through the daily upload; visit heating reaches its target in time |
 | 0.4.0 | Optimizer for both sites | [0.4.0](tasks/0.4.0.md) | Smart maintenance heating, optimized visits and cooling optimization run from learned room rates and the FMI forecast |
 | Unassigned | Ideas without a release | [Later](tasks/later.md) | Owner scope and release assignment |
@@ -28,6 +28,7 @@ No release is published yet. After publication, record the actual release link a
 - 2026-10-18: Household members use the app with full control, without an app login. Android notifications. Time-series graphs of all readings.
 - 2026-10-18: Pumps are used mainly for summer cooling; both sites are on spot-price contracts.
 - 2026-10-18: Home ships first, because the pumps are available now. Cooling defaults: maximum 25 °C, precooling 21 °C, switching off allowed with a minimum off time; separate home-away button; quiet night fan in chosen rooms. Every setting is changeable in the app.
+- 2026-10-18: No season mode: automations act on measured room temperatures; pump automation is cooling-only and never changes a mode. Cottage automations fit Google's limits: one per room, every 30 minutes, at most 12 time windows a day.
 - 2026-10-18: Still in the design phase; live tests start when implementation begins, with the owner's go-ahead.
 
 ## Decisions still needed

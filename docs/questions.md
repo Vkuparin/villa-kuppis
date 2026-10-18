@@ -13,7 +13,7 @@ None at the moment.
 - No Home Assistant box, VM or cottage computer unless every other route fails. No Premium.
 - Home: three indoor units (LN25 on outdoor unit 1; LN35 and LN25 on outdoor unit 2), all in MELCloud Home and controlled through its cloud. Summer cooling matters most; radiators are geothermal and outside our control.
 - Cottage: four Mill heaters and two ALPSTUGA sensors in Google Home over Matter, arriving early November 2026. Large room: 2 × 1050 W and 1 × 500 W heaters plus one ALPSTUGA; small room: 1 × 1050 W heater plus one ALPSTUGA. Heaters follow the ALPSTUGA readings through sensor-driven automations uploaded daily by the Android app. Network stays NE200-Outdoor and Archer BE230. Mill built-in frost protection; no water pipes.
-- Spot prices: the raw spot price only. Fixed thresholds first, then a smart maintenance heating optimizer (minimum and maximum storage temperature, low and high price, learned rates, FMI forecast); settings per site or per room. Cooling in reverse.
+- Spot prices: the raw spot price only. Fixed thresholds first, then a smart maintenance heating optimizer (minimum and maximum storage temperature, low and high price, learned rates, FMI forecast); settings per site or per room. Pump cooling in reverse; no season mode.
 - Summer cooling defaults: maximum 25 °C, precooling 21 °C, switching off allowed with a minimum off time. Separate home-away button. Quiet fan at night in chosen rooms. All settings changeable in the app.
 - Visit: arrival time and target; cheapest heat-up that reaches the target in time; ended by button.
 - Time-series graphs of all sensor readings, setpoints and prices.

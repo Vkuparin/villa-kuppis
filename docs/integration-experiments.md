@@ -26,13 +26,14 @@ Pass: steps 2–3 work over mobile data. Step 4 shows how complete the cottage g
 
 ## B. Sensor-driven automations
 
-1. From the app, create the automation pair for the small room: below target, set the heater to target + 2 °C; above, set it to target − 2 °C.
-2. Confirm it reacts to the ALPSTUGA reading with the phone off.
-3. Add a time-of-day condition so the pair only applies in one plan period.
-4. Upload a full day's plan for both rooms. Record any limit on the number of automations.
-5. Replace the plan from a background job, as the daily upload will.
+1. Give the cottage home a street address in Google Home (needed for time-based starters).
+2. From the app, create the small room's automation: every 30 minutes, read the ALPSTUGA; below target minus hysteresis, set the heater to target + margin; above target plus hysteresis, set it to target − margin.
+3. Confirm it sets the heater's absolute setpoint and runs with the phone off.
+4. Encode a day of 12 time windows with different targets in both rooms' automations. Confirm it fits Google's limits and follows the windows.
+5. Replace both automations from a background job, as the daily upload will.
+6. Try one automation with separate branches for both rooms, every 15 minutes.
 
-Pass: a day's plan runs from Google Home with the phone and PC off. If it fails, see [platform decision](platform-decision.md#sensor-driven-automations).
+Pass: a day's plan runs from Google Home with the phone and PC off. If it fails, use the time-based fallback in [platform decision](platform-decision.md#sensor-driven-automations).
 
 ## Next step
 
