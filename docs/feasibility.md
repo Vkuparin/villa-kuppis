@@ -2,17 +2,17 @@
 
 ## Assessment
 
-Feasible. A Finnish UI and a PC service are ordinary work. The real unknowns are three integration questions, all testable cheaply:
+Feasible. A Finnish UI, a PC service and a spot-price planner are ordinary work. The real unknowns are three integration questions, all cheap to test:
 
-1. Can the PC control the pumps locally? Likely yes, through the existing Wi-Fi adapter or a CN105 board. See [Mitsubishi](mitsubishi.md).
-2. Can the PC control the cottage heaters? Yes through Home MCP during the Premium trial, if the trial includes it. After that, it depends on the Automation API fallback. See [platform decision](platform-decision.md).
-3. Does Google expose the setpoints the plan needs (5 °C and 22 °C) for the Mill heaters over Matter?
+1. Can the PC control the pumps locally? Likely yes, through the existing Wi-Fi adapter with `pymitsubishi`, or a CN105 board. See [Mitsubishi](mitsubishi.md).
+2. Can the Android app upload a day's cottage plan as Google Home automations? The PC cannot reach Google Home from Finland, so this is the cottage automation route. See [platform decision](platform-decision.md).
+3. Does Google accept the setpoints the rules need (5–22 °C) for the Mill heaters over Matter?
 
-Everything else (UI, history, spot prices, scheduling) depends only on our own code.
+Everything else (UI, history, prices, rules) depends only on our own code.
 
 ## Approach
 
-A bespoke UI and a small service that reuses existing protocol libraries. Home Assistant, VMs and extra boxes are a last resort, used only if a device can be reached no other way. Do not reimplement Matter, Thread or Mitsubishi serial protocols.
+A bespoke UI and a small Python service that reuses existing protocol libraries. Home Assistant, VMs and extra boxes are a last resort, used only if a device can be reached no other way. Do not reimplement Matter, Thread or Mitsubishi serial protocols.
 
 ## Reverse Engineer Anything (REA)
 
@@ -20,16 +20,16 @@ A bespoke UI and a small service that reuses existing protocol libraries. Home A
 
 Where it helps here:
 
-- The Mitsubishi Wi-Fi adapter or MELCloud app, if the adapter has a local endpoint that existing libraries do not cover.
+- The Mitsubishi Wi-Fi adapter or MELCloud app, if the adapter answers locally but `pymitsubishi` lacks a needed function.
 - Any future device with no documented local API.
 
 Where it does not help:
 
-- Matter devices. Matter is an open standard with open-source controllers. Its sessions are encrypted with fabric keys, so captured traffic cannot be reused. The obstacle to reaching them is the network, not the protocol; see [cottage](cottage.md#secondary-route-direct-matter-from-the-home-pc).
-- A device that only trusts its manufacturer's cloud. Reading the app does not make the device trust another server.
+- Matter devices. Matter is an open standard with open-source controllers, and its sessions are encrypted with fabric keys, so captured traffic cannot be reused. The obstacle is the network, not the protocol; see [cottage](cottage.md#secondary-route-direct-matter-from-the-home-pc).
+- A device that only trusts its manufacturer's cloud.
 
 Ask one concrete question per REA session, such as "does this adapter accept commands on the LAN?", and stop after one or two sessions if the answer stays unclear. Keep app packages, captures and tokens in `scratch/`; publish only our own notes.
 
 ## Effort
 
-The first useful result is one pump controlled locally, plus a price plan for it. Hardware tests dominate the schedule, not code.
+The first useful result is one pump controlled locally from the PC, and tomorrow's price plan computed from owner rules. Hardware tests dominate the schedule, not code.

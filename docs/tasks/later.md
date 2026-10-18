@@ -6,6 +6,7 @@ Ideas the owner agreed to that have no release yet. Add a feature heading and th
 
 | ID | Task and Done when | Agent | Depends on | Status |
 | --- | --- | --- | --- | --- |
-| L1.1 | No-Premium fallback: the Android app writes the day's cottage price plan into Google Home automations. Done when a plan runs with the phone and PC off. | Tier 1 | F2.2, F4.2 | Planned |
+| L1.1 | No-Premium fallback for cottage price plans through the Android app. | Tier 1 | F2.2 | Dropped: now the primary route, F4.2 |
 | L1.2 | Secondary route: direct Matter control of cottage devices from the PC. Done when feasibility on the actual routers is recorded. | Tier 1 | F2.2 | Planned |
-| L1.3 | Start visit mode from a Google Calendar event. Done when an event triggers a preheat. | Tier 2 | F4.3 | Planned |
+| L1.3 | Start visit mode from a Google Calendar event. | Tier 2 | F4.3 | Dropped: owner prefers a button |
+| L1.4 | Show measured cottage heating and cooling rates from ALPSTUGA history, to help tune price rules and visit timing. Done when the UI shows °C per hour for recent heat-ups and cool-downs. | Tier 2 | F4.2 | Planned |

@@ -1,11 +1,11 @@
 # Villa Kuppis design documents
 
-Status: tentative, 18 October 2026. Design only; no device, account or network has been changed.
+Status: tentative, 18 October 2026, revision 2. Design only; no device, account or network has been changed.
 
 | Document | Purpose |
 | --- | --- |
 | [Architecture](architecture.md) | Decisions, PC service, model and remote access |
-| [Platform decision](platform-decision.md) | How the PC and phones reach the cottage, with and without Premium |
+| [Platform decision](platform-decision.md) | How the PC and phones reach the cottage without Premium |
 | [Cottage](cottage.md) | Hardware, heating policy, access routes and the direct Matter option |
 | [Mitsubishi](mitsubishi.md) | Three indoor units, local-control routes and first experiment |
 | [Spot-price automation](spot-price.md) | Price data, policies and where plans run |
