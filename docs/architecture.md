@@ -59,7 +59,22 @@ The MELCloud Home client is unofficial; if it breaks, REA on the current app is 
 
 ## History and graphs
 
-The PC stores every reading as a time series in SQLite: temperatures from all rooms, the ALPSTUGA air-quality values (CO2, PM2.5 and humidity, as exposed), setpoints and prices. The web app draws them as graphs per room and per site, with prices and setpoint changes on the same time axis.
+The PC stores every reading as a time series in SQLite and keeps it all; a few years of data at these rates is small.
+
+| Series | Source | Interval |
+| --- | --- | --- |
+| Room temperature, setpoint, mode, fan, on/off: each pump | MELCloud Home, polled by the PC | 5 minutes, plus every change |
+| Pump energy use, if exposed | MELCloud Home measurements | As reported |
+| Room temperature, CO2, PM2.5, humidity, as exposed: each ALPSTUGA | Android app, through the Home APIs | About 15 minutes |
+| Temperature, setpoint, mode: each Mill heater | Android app, through the Home APIs | About 15 minutes |
+| Heater power or energy | Matter energy measurement if the heaters expose it; otherwise estimated from heating time × rated power | 15 minutes |
+| Outdoor temperature: both sites | FMI observations (no key) | Hourly |
+| Spot price | Elering | 15 minutes |
+| Plan targets, commands and their results | PC | Every change |
+
+The web app draws the series as graphs per room and per site, over a day, week, month or year. Prices, setpoints and outdoor temperature share the time axis, and energy and cost (energy × spot price) can be shown per day.
+
+Cottage history starts when the Android app starts recording; Google Home does not hand over past readings. Gaps appear when Android delays the background job or the phone is offline, and the graphs show them as gaps rather than drawing a line across.
 
 ## Model
 

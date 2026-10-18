@@ -20,6 +20,7 @@ Prerequisite: heaters and sensors commissioned into Google Home over Matter.
 2. List the cottage devices and their traits. Read each ALPSTUGA (temperature, CO2, PM2.5, humidity, as exposed) and each heater (temperature, setpoint, mode).
 3. Over mobile data, change one heater's setpoint, confirm the read-back, restore it.
 4. Run a background job that reads all devices every 15 minutes for a day; record how often Android actually runs it.
+5. Check whether the heaters expose power or energy over Matter.
 
 Pass: steps 2–3 work over mobile data. Step 4 shows how complete the cottage graphs will be.
 
