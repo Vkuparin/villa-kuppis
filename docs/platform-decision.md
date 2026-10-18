@@ -22,9 +22,12 @@ The PC cannot reach Google Home; only an Android or iOS app signed in as the use
 
 ## Sensor-driven automations
 
-Google's documented [automation limits](https://developers.home.google.com/apis/android/automation) shape the design: 64 automations per home, 128 runs per day per developer per home, and 64 comparisons per automation. Automations triggered by every sensor change would exceed the run limit, so the heaters follow the sensors on a timer instead:
+Google's documented [automation limits](https://developers.home.google.com/apis/android/automation) shape the design: 64 automations per home, 128 runs per day per developer per home, and 64 comparisons per automation. Automations triggered by every sensor change would exceed the run limit, so the heaters follow the sensors on a timer instead.
 
-- **One automation per room** (two in total), started every 30 minutes by a recurring clock-time starter: 2 × 48 = 96 runs a day, under the 128 limit.
+**Uploaded once a day, run every 30 minutes.** The phone uploads the day's automations once, after the 14:25 price fetch. The plan inside them (which target applies when) is fixed for the day. Google then runs them every 30 minutes on its own, to compare each room's ALPSTUGA with the plan and nudge the heaters. Nothing is sent from the phone or PC between uploads. The repeated runs are needed because Google cannot make a heater use the ALPSTUGA instead of its own thermostat. The owner chose this over changing setpoints only at plan times, which would be less precise.
+
+
+- **One automation per room** (two in total), run by Google every 30 minutes through a recurring clock-time starter: 2 × 48 = 96 runs a day, under the 128 limit.
 - **Each run** reads the room's ALPSTUGA and the plan target for the current time window, then sets that room's heaters. If the reading is below target minus the hysteresis, the heaters go to target + margin. If it is above target plus the hysteresis, they go to target − margin.
 - **The day's plan is encoded as time-window conditions** inside each automation. To fit the comparison limit, the planner merges each room's day into at most 12 time windows (a setting).
 - **Defaults:** margin 2 °C, hysteresis 0.3 °C; both are settings. Setpoints are clamped to each heater's reported range, so a 5 °C target's "off" setting becomes the heater's minimum rather than 3 °C. Between runs the heaters' own thermostats cap any overshoot at about the margin, even if a sensor stops reporting. If the heaters' own sensors read much warmer than the room, a larger margin may be needed; the graphs will show it.
