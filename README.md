@@ -2,7 +2,7 @@
 
 A personal Finnish-language home automation app for local device control at home and at a cottage.
 
-**Status: research and design scaffold. No working app or device integration yet.** The UI will be Finnish. Start with the [design documents](docs/README.md), [Mitsubishi case study](docs/mitsubishi.md), and [cottage feasibility](docs/cottage.md). The cottage has no computer in the initial plan.
+**Status: research and design scaffold. No working app or device integration yet.** The UI will be Finnish. Start with the [design documents](docs/README.md), the [cottage plan](docs/cottage.md) and [spot-price automation](docs/spot-price.md).
 
 Repository: [Vkuparin/villa-kuppis](https://github.com/Vkuparin/villa-kuppis). The project is based on the owner's template and contains no private template history. See the [setup record](docs/setup.md) for verification and environment limitations.
 

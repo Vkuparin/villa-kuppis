@@ -19,5 +19,7 @@ Only the coordinator edits cards. A small fix can reuse an existing card. The da
 
 | File | Scope |
 | --- | --- |
-| [0.1.0](0.1.0.md) | Prove one local Mitsubishi integration and resolve cottage connectivity |
+| [0.1.0](0.1.0.md) | Prove the integrations |
+| [0.2.0](0.2.0.md) | Finnish UI and PC service with manual control |
+| [0.3.0](0.3.0.md) | Spot-price automation |
 | [Later](later.md) | Unassigned work |

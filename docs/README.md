@@ -1,18 +1,19 @@
 # Villa Kuppis design documents
 
-Status: tentative, 17 October 2026. This is a research and project scaffold, not a working controller. No live device, account, firmware or network has been changed.
+Status: tentative, 18 October 2026. Design only; no device, account or network has been changed.
 
 | Document | Purpose |
 | --- | --- |
-| [Feasibility](feasibility.md) | What is realistic, alternatives and evidence |
-| [Architecture](architecture.md) | PC service, Finnish web app, adapters and command semantics |
-| [Mitsubishi case study](mitsubishi.md) | LN25/LN35 local-control routes and first experiment |
-| [Cottage network](cottage.md) | Known hardware and feasibility without a cottage computer |
-| [Finnish UI](ui-fi.md) | Initial screens, terms and state feedback |
-| [Platform decision](platform-decision.md) | Android versus desktop access, including the optional paid MCP route |
-| [Integration experiments](integration-experiments.md) | Prerequisites, steps and pass/fail criteria for the first devices |
-| [Questions](questions.md) | Decisions that affect the implementation |
-| [Setup record](setup.md) | Template adaptation, verification and publication status |
-| [Roadmap](roadmap.md) | Proposed delivery sequence |
+| [Architecture](architecture.md) | Decisions, PC service, model and remote access |
+| [Platform decision](platform-decision.md) | How the PC and phones reach the cottage, with and without Premium |
+| [Cottage](cottage.md) | Hardware, heating policy, access routes and the direct Matter option |
+| [Mitsubishi](mitsubishi.md) | Three indoor units, local-control routes and first experiment |
+| [Spot-price automation](spot-price.md) | Price data, policies and where plans run |
+| [Integration experiments](integration-experiments.md) | Steps and pass criteria for the first tests |
+| [Feasibility](feasibility.md) | Main unknowns and where REA helps |
+| [Finnish UI](ui-fi.md) | Screens, terms and state feedback |
+| [Questions](questions.md) | Open owner decisions |
+| [Roadmap](roadmap.md) | Releases and decisions |
+| [Setup record](setup.md) | Repository origin and tooling notes |
 
-Facts, proposals and unknowns are distinguished in each document. Hardware family names are requirements, not a compatibility certification. Private addresses, account identifiers, pairing codes and captures belong outside Git.
+Private addresses, account identifiers, pairing codes and captures belong outside Git.

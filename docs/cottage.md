@@ -1,71 +1,56 @@
-# Cottage without a computer
+# Cottage
 
-## Confirmed inventory
+## Inventory
 
-| Item | Count | Role / evidence |
+| Item | Count | Role |
 | --- | --- | --- |
-| TP-Link NE200-Outdoor | 1 | 5G connection; operator, public addressing and firmware unknown |
-| TP-Link Archer BE230 | 1 | Wi-Fi router; hardware revision and firmware unknown |
-| Mill Invisible Gen 4 Wi-Fi heaters | 4 | Candidate local REST control; individual models and API behavior to verify |
-| IKEA ALPSTUGA | 2 | Matter-over-Thread air-quality sensors, including temperature; not Wi-Fi sensors |
-| Google Home Speaker (2026) | 1 | Google lists a Thread 1.3 border router and Matter hub |
-| Cottage computer | 0 | Explicit owner constraint for the initial design |
+| TP-Link NE200-Outdoor | 1 | 5G connection |
+| TP-Link Archer BE230 | 1 | Wi-Fi router |
+| Mill Invisible Gen 4 Wi-Fi heaters | 4 | Matter over Wi-Fi, commissioned into Google Home |
+| IKEA ALPSTUGA | 2 | Matter-over-Thread air-quality sensors with temperature |
+| Google Home Speaker (2026) | 1 | Matter hub and Thread border router ([specs](https://store.google.com/product/google_home_speaker_specs?hl=en-US)) |
+| Cottage computer | 0 | None planned |
 
-[IKEA's Finnish product page](https://www.ikea.com/fi/fi/p/alpstuga-ilmanlaaduntunnistin-aelylaite-50604187/) identifies ALPSTUGA as Matter over Thread. [Google's specifications](https://store.google.com/product/google_home_speaker_specs?hl=en-US) identify the speaker's border-router role. Confirm the purchased model and exposed sensor clusters when commissioned. The four heaters should not be assumed to have four independent external room sensors: there are only two ALPSTUGA devices.
+The Mill manuals offer either Mill cloud or Matter. The owner chose Matter through Google Home, so the Mill app and cloud are not part of the design. ALPSTUGA is added to Google Home directly, without the IKEA app.
 
-## Mill: easier protocol, still needs a network path
+## Heating policy
 
-Update from owner clarification: replicating Google Home's remote functionality is the goal. Evaluate the Google Home APIs route below before requiring a direct PC-to-cottage VPN. The routing requirements in this section apply to direct local REST access, not to control through Google's hub infrastructure.
+- **Away:** keep the cottage at 5–8 °C. The spot-price planner chooses where in that band to sit; see [spot-price automation](spot-price.md).
+- **Visit:** raise the heaters to 22 °C before arrival.
+- **Fallback:** the heaters keep their last setpoint if anything upstream fails, and have built-in frost protection that does not depend on Wi-Fi. There are no water pipes.
 
-[Mill's Gen 4 page](https://millnorway.com/product/mill-invisible-smart-wifi-panel-heater-1200w/) advertises a local REST API. Use it as the first cottage control candidate instead of requiring remote Matter control for the heaters. Verify authentication, supported endpoints, temperature ranges, schedule persistence and whether onboarding needs the Mill cloud. Do not treat Gen 3 library support as verified Gen 4 compatibility.
+Check early that Google exposes 5 °C and 22 °C as valid setpoints for these heaters. Matter thermostats report their own minimum and maximum, and the minimum might be above 5 °C.
 
-The [Home Assistant Mill integration](https://www.home-assistant.io/integrations/mill/) documents local access for Gen 3; inspect and test its library against Gen 4 before reuse. Matter support may be another route for the exact heater, but it does not solve the WAN routing problem.
+## Access routes
 
-## Network feasibility gate
+| Route | Manual control | PC automation | Cost | Status |
+| --- | --- | --- | --- | --- |
+| Google Home app on Android | Yes | No | Free | Works once devices are commissioned |
+| [home.google.com](https://home.google.com) | Yes, from desktop | No | Free | Has had device controls, including thermostats, since September 2025; check Mill and ALPSTUGA appear |
+| Villa Kuppis Android app with [Home APIs](https://developers.home.google.com/apis/android/connectivity) | Yes | Through Google Home automations the app writes | Free | First experiment |
+| Google Home MCP from the PC | Yes | Yes | Premium Advanced | Usable during the trial |
+| Direct Matter from the PC | Yes | Yes | Possibly a cottage router | Secondary research, below |
 
-1. Determine whether the NE200 is in router or IP-passthrough mode and whether the BE230 is routing or acting as an access point. [TP-Link documents NE200 IP passthrough](https://www.tp-link.com/ca/support/faq/4752/). Passing through an operator-private address does not remove carrier-grade NAT.
-2. Confirm the 5G operator/APN, public IPv4 availability, IPv6 prefix and inbound restrictions. Use non-overlapping private subnets at home and cottage. Keep actual addresses in private configuration.
-3. Verify WireGuard support on the exact BE230 hardware/firmware. [TP-Link's guide](https://www.tp-link.com/ae/support/faq/3772/) covers client and server modes, but a consumer VPN client may only forward selected LAN devices' outbound traffic. It does not establish arbitrary incoming access to the cottage LAN or routed IPv6.
-4. If cottage WAN is publicly reachable, test a tightly restricted VPN server on the cottage router and connect the PC as a client. If cottage is behind CGNAT, investigate an outbound tunnel to a reachable home endpoint or relay. This requires testing return routes, firewall policy and LAN reachability, not merely seeing “connected” in the VPN UI.
-5. First prove PC-to-heater REST requests in both directions. Then test reconnection after router and 5G restarts. Do not expose heater HTTP ports to the internet.
-6. Independently test Matter IPv6 routing and discovery. IPv4 REST working does not imply Matter will work.
+The PC needs a route for spot-price automation. Use Home MCP while Premium lasts. The fallback is in [platform decision](platform-decision.md).
 
-No claim is made that the existing routers support a complete site-to-site solution. Their actual firmware behavior is a blocker to settle early, before writing a remote cottage controller.
+## Home APIs setup notes
 
-## ALPSTUGA and Google hub boundary
+Start from [Google's Android sample app](https://github.com/google-home/google-home-api-sample-app-android). Its [authorization guide](https://developers.home.google.com/apis/android/sample-app/authorization) defaults to the partner-gated `home.platform.v2` scope; for a personal app, select `HOME_PLATFORM_SCOPE_VERSION_1` (`home.platform.selected.devices`). Add household accounts as OAuth test users. A Google Cloud project and OAuth credentials are needed; [unregistered apps allow 100 users](https://developers.home.google.com/apis/android/oauth). No usage fee was found in the documentation. The sample may lack thermostat and sensor screens; add them if so.
 
-A Thread border router routes IP traffic between Thread and the LAN; a Matter controller owns fabric credentials and device subscriptions. Google Home's fabric does not automatically grant our PC access. Multi-admin commissioning may add our controller to a device, but does not provide an internet transport to it.
+The Home APIs also include an Automation API, so the app can create and manage Google Home automations. Those automations run in Google Home without the PC or the phone.
 
-[Matter deployment guidance](https://www.home-assistant.io/integrations/matter/) calls for local IPv6 and mDNS. Discovery, commissioning, routable addresses, return routes, subscriptions and recovery all need to work. Ordinary VPNs do not automatically carry link-local multicast. Do not assume an mDNS reflector alone solves the problem, or that the Google speaker exposes a generic REST API for all its devices.
+## Secondary route: direct Matter from the home PC
 
-With no cottage computer, dependable Google-independent ALPSTUGA readings on the distant PC are **unproven**. This restriction does not apply in the same way when reusing Google's remote-access infrastructure.
+The idea: let the PC talk to the heaters and sensors itself, through the cottage router. It is possible in principle, but reverse engineering is not the way in and port forwarding is not enough.
 
-## Google Home APIs: first candidate after clarification
+**Why reverse engineering does not help.** Matter is an open standard with open-source controllers ([connectedhomeip](https://github.com/project-chip/connectedhomeip), [matter.js](https://github.com/project-chip/matter.js)). Nothing in the protocol is hidden. Each session is encrypted with keys held by the controller's fabric, so captured Google traffic cannot be replayed or reused. The PC has to become a Matter controller in its own right.
 
-The owner clarified that the app should replicate the cottage's Google Home remote-control functionality. [Google's Home APIs connectivity documentation](https://developers.home.google.com/apis/android/connectivity) explicitly discusses third-party controllers on remote networks and supported hubs enabling remote Matter access. A custom mobile app can therefore investigate this supported route instead of reproducing Google's network transport or tunneling Matter across sites.
+**What it takes:**
 
-The candidate path is: Villa Kuppis Android app → Google Home APIs / Google infrastructure → online cottage Google hub → Matter devices. The owner accepts this Google dependency and confirms all household mobile devices are Android. This can avoid individual device manufacturers' clouds for Matter control, but does not route all devices directly to the PC.
+1. **Join a second fabric (multi-admin).** In Google Home, a device can be shared with another Matter app; Google generates a pairing code. Commissioning finds the device by mDNS on the local network, so this step happens at the cottage: run the controller on a laptop there, then move its fabric storage to the home PC.
+2. **Reach the devices over IPv6.** Matter runs over IPv6 on UDP port 5540. The Mill heaters have IPv6 addresses on the cottage Wi-Fi. The ALPSTUGA sensors sit on the Thread network behind the speaker, which advertises their route only on the cottage LAN. An IPv4 port forward on the router cannot reach either.
+3. **Carry that across sites.** The PC needs a routed IPv6 tunnel to the cottage LAN that includes the Thread prefix. It also needs to find devices without mDNS, which does not cross a VPN. Matter controllers normally rely on mDNS, so this needs fixed addresses or unicast DNS-SD.
 
-[The documented standard Home APIs platforms](https://developers.home.google.com/apis) are Android/Kotlin and iOS/Swift. Home MCP is retained only as an optional trial experiment: the owner requires the production architecture to avoid Premium. See [platform decision](platform-decision.md). No free general PC API has been established. Google Home for web existing does not establish a public web SDK. Do not rely on a background phone bridge or emulator as an unattended production server without a separate design and proof.
+**Likely verdict:** the NE200 and BE230 consumer firmware probably cannot do step 3. The cheapest way to get it is a small router at the cottage that supports WireGuard with IPv6 routing (for example an OpenWrt or GL.iNet model, roughly €50–100). That is a router, not a computer, but it is extra hardware. Pursue this only if the Google routes fall short.
 
-First spike: use Google's official sample on the owner's phone platform, obtain appropriate user permissions, enumerate the cottage structure and actual device traits, read an ALPSTUGA temperature and perform an authorized Mill setpoint/read-back test over mobile data. Verify stale/offline behavior and exact exposed functions. [Supported Android device types](https://developers.home.google.com/apis/android/supported-device-types) include thermostat and temperature-sensor types; this is not a guarantee of every device feature. Check development-account and distribution requirements before choosing this route.
-
-Cost research, 17 October 2026: no Home APIs subscription or per-call price was found in the reviewed official setup documentation. Budget zero API fees provisionally; this is not an explicit pricing guarantee. [OAuth setup](https://developers.home.google.com/apis/android/oauth) permits testing/use without Home Developer Console registration and documents a 100-user limit before registration. A Google Cloud project and OAuth credentials are still needed. Separate hosting, app-store distribution and optional paid services must not be confused with Home APIs usage. Validate the personal-account setup before committing to the integration; publishing the source repository does not itself require distributing the app through an app store.
-
-In parallel, establish how the required desktop interface and PC-side automations would access cottage functions. Until that is solved, this is a promising mobile integration, not a complete solution to all requested platforms. Do not confuse Cloud-to-cloud device-provider integration or Nest-specific Device Access with general access to the user's Matter devices.
-
-Sample-app setup detail: [Google's current authorization guide](https://developers.home.google.com/apis/android/sample-app/authorization) says the sample defaults to the partner-gated `home.platform.v2` scope. For the personal prototype, use the documented standard `home.platform.selected.devices` scope by selecting `HOME_PLATFORM_SCOPE_VERSION_1`. Add household accounts as OAuth test users. The sample's stock controls do not include every supported SDK device type, so thermostat and temperature-reading UI may need to be added. The guide currently says Developer Console registration is unavailable; public production distribution must be assessed separately from a household test app.
-
-## Choices if the router test fails
-
-| Choice | Consequence |
-| --- | --- |
-| Keep exact hardware and no computer | Defer unsupported cottage functions; accept vendor/Google access only if the owner agrees |
-| Replace/add networking with verified routing support | May make Mill REST reachable; Matter still requires its own proof |
-| Add a small local controller later | Most robust route for local Matter and automation; explicitly outside the initial constraint |
-
-Do not quietly select the third choice. A router capable of running arbitrary software is also an added compute dependency and must be discussed honestly.
-
-## Offline behavior
-
-Each heater must regulate from its own sensor and retain an appropriate locally tested setting during PC/WAN outages. ALPSTUGA is monitoring-only initially. Verify power-restoration behavior, local schedules and manual controls on actual heaters. Remote alerts cannot be delivered without a communications path; an unavailable sensor must never be displayed as a current temperature. If frost protection is required, define it independently of this remote app.
+If both Google and the PC control the same device, the last write wins. The app shows the device's reported state, so this is visible.

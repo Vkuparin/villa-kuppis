@@ -4,7 +4,7 @@ Project: Villa Kuppis.
 
 Purpose: A personal Finnish-language home automation app for local device control at home and at a cottage.
 
-Stack: Design phase; Android Home APIs experiment, browser desktop UI, and a proposed PC service with SQLite and reusable device adapters. Final client and service choices depend on the integration experiments. Update this line when the runtime, framework or key libraries change.
+Stack: Design phase. Own service on the home Windows PC with SQLite and reusable device adapters (Python or TypeScript, undecided); no Home Assistant or VM unless last resort. Browser and Android UI; cottage devices through Google Home over Matter. Update this line when the runtime, framework or key libraries change.
 
 Codex, Hermes and Claude Code (through `CLAUDE.md`) all read this file. This is a hobby project: move quickly, keep process small, and ask the owner only about real product choices.
 

@@ -1,47 +1,43 @@
-# Mitsubishi LN25 / LN35 case study
+# Mitsubishi LN25 / LN35
 
-## Finding
+## Installation
 
-Confirmed by the owner: the Mitsubishi pumps are at the main residence, not the cottage. Their local adapters can communicate with the home PC over the home LAN; cottage WAN and Thread routing constraints do not apply to this integration.
+At the main residence, controlled from the home PC over the home LAN.
 
-Owner-supplied model identifiers, recorded verbatim on 17 October 2026: `LN25VGHZ2LU`, `LN35VG2WLU`, `LN25VG2WLU`. Treat these as three supplied identifiers, not proof of three separate indoor units: a sales/package identifier may overlap with an indoor-unit identifier. Do not silently rewrite the suffixes or infer an installed Wi-Fi adapter from them. Exact indoor-unit labels, adapter model/firmware and unit count remain to be matched before hardware selection.
-
-Manufacturer documentation narrows the family but not the installed adapter: the [VG2 parts list](https://library.mitsubishielectric.co.uk/pdf/download_full/5101) lists MAC-577IF2-E for covered MSZ-LN25VG2 variants, while [an earlier LN Wi-Fi manual](https://library.mitsubishielectric.co.uk/pdf/download_full/3419) identifies MAC-567IFB-E. These are candidates to check on the installed units, not a reason to assume an ECHONET or other local path is enabled. No exact match for the supplied `LU` identifiers was established in this research.
-
-Local control is plausible, but “LN25/LN35” is insufficient to select the integration. Record the complete indoor-unit suffix, region, Wi-Fi adapter model and firmware, and whether the installed app is MELCloud or MELCloud Home. These are distinct cloud integrations.
-
-| Route | Cloud independence | Evidence / next test |
+| Indoor unit | Outdoor unit | Owner-supplied identifier |
 | --- | --- | --- |
-| Existing adapter using ECHONET Lite | Potentially local at runtime | [ECHONET integration](https://github.com/scottyphillips/echonetlite_homeassistant) lists specific adapters, including MAC-568IF-E with LN25VG2/LN35VG2. This does not establish European adapter support. Identify installed adapter first. |
-| CN105 serial adapter, e.g. ESP32 + ESPHome | Local runtime; strongest fallback | Existing implementation and model-specific reports. Requires compatible connector, electrical design and installation. |
-| MELCloud Home API | No | [HA integration](https://www.home-assistant.io/integrations/melcloud_home/) uses the manufacturer's cloud. Useful only if the owner accepts a temporary bridge. |
-| Emulated manufacturer server | Unknown | No verified trust/provisioning path for these units in this research. Do not plan delivery around it. |
-| Infrared controller | Local but limited feedback | Possible fallback; commanded state may diverge when other remotes are used. Inferior where verified bidirectional control is available. |
+| LN25 | Outdoor unit 1 (single split) | To match |
+| LN35 | Outdoor unit 2 (shared) | To match |
+| LN25 | Outdoor unit 2 (shared) | To match |
 
-The [LN25/LN35 owner report](https://github.com/echavet/MitsubishiCN105ESPHome/discussions/317) names MSZ-LN25VG2W and MSZ-LN35VG2W working on CN105. This is useful compatibility evidence, not a guarantee for another suffix. A [newer-adapter discussion](https://github.com/echavet/MitsubishiCN105ESPHome/discussions/681) concerns MAC-597IFB-E and MELCloud Home; firmware/region assumptions must not be carried across adapters.
+Supplied identifiers: `LN25VGHZ2LU`, `LN35VG2WLU`, `LN25VG2WLU`, one per indoor unit. Match each to its unit from the label. All three can be operated independently.
 
-## Feature boundary
+Two indoor units share outdoor unit 2. Multi-split outdoor units usually cannot heat in one room and cool in another at the same time. Check this on the real units; if so, the UI should not offer a mode that conflicts with the other unit on the same outdoor unit.
 
-Start with power, heat/cool mode, target temperature, current temperature, fan setting and availability. Test vane controls separately. Do not promise i-see sensor features, independent split vanes, energy reporting, low-temperature maintenance mode, schedules or full app parity without observed support.
+## Routes
 
-The current [ESPHome component](https://esphome.io/components/climate/mitsubishi_cn105/) documents UART control/state reporting and a 16–31 °C target range. A requirement for 8–10 °C maintenance heating is therefore a separate acceptance gate; do not silently clamp it to 16 °C or assume another component implements it for this pump.
+Each indoor unit needs its own adapter. Try these in order.
+
+| Route | Runtime | Notes |
+| --- | --- | --- |
+| Existing Wi-Fi adapter, local API | Local | [`pymitsubishi`](https://mynixos.com/nixpkgs/package/python313Packages.pymitsubishi) describes itself as local control for MAC-577IF2-E adapters. The [VG2 parts list](https://library.mitsubishielectric.co.uk/pdf/download_full/5101) names MAC-577IF2-E for MSZ-LN25VG2 variants. If the units have it, this needs no new hardware and MELCloud keeps working. Check the library's protocol and maintenance before relying on it. |
+| Existing adapter, ECHONET Lite | Local | [ECHONET integration](https://github.com/scottyphillips/echonetlite_homeassistant) lists MAC-568IF-E with LN25VG2/LN35VG2; European adapter support unknown. |
+| CN105 serial adapter, e.g. ESP32 with [ESPHome](https://esphome.io/components/climate/mitsubishi_cn105/) | Local | Strong fallback. Prefer a ready-made board. It takes the connector the Wi-Fi adapter uses, so it replaces MELCloud on that unit. An [owner report](https://github.com/echavet/MitsubishiCN105ESPHome/discussions/317) confirms MSZ-LN25VG2W and MSZ-LN35VG2W. The PC talks to it over the ESPHome native API. |
+| MELCloud / MELCloud Home cloud API | Cloud | Works, but adds a cloud dependency. Temporary bridge only. |
+| REA on the MELCloud app or adapter | — | If the existing adapter has a local endpoint that `pymitsubishi` does not cover, REA is the tool for finding it. |
+
+## First functions
+
+Power, mode (heat, cool, dry, fan), target temperature, room temperature, fan speed and availability. Vanes and extras come after these work.
+
+The ESPHome CN105 component documents a 16–31 °C target range. The spot-price planner keeps setpoints inside whatever range the chosen route reports.
 
 ## First experiment
 
-1. Identify one unit and its adapter; collect model/firmware facts privately. No serial number or pairing QR code is needed in the public repo.
-2. Determine whether its existing adapter offers a supported or already implemented local path. Inspect existing projects before reverse engineering the app.
-3. If not, select an exact CN105 adapter/harness and verify compatibility with service documentation. Installation should be performed with power isolated by someone competent for the equipment. Do not assume cable colors or a generic UART voltage are correct. Check whether the current Wi-Fi module occupies the port and whether coexistence is supported; do not connect two controllers with an improvised Y cable.
-4. Read state first. Compare readings and supported modes against the physical remote.
-5. With the owner present, apply one small setpoint change, observe physical response and read-back, then restore the original setting.
-6. Test physical remote changes, adapter reboot, service reboot, Wi-Fi loss and loss of vendor internet access. Block vendor access only after basic operation is proven and preserve rollback.
-7. Record a capability table, tested firmware, adapter revision, observed delays and failure behavior. Keep the original module available for restoration.
+1. Read the Wi-Fi adapter model from one indoor unit (behind the front panel) and note whether it uses MELCloud or MELCloud Home.
+2. If it is MAC-577IF2-E, try `pymitsubishi` read-only from the PC. Otherwise check ECHONET Lite, then choose a CN105 board.
+3. Compare readings with the remote control.
+4. Change the setpoint by one degree, confirm the read-back, then restore it.
+5. Change something with the physical remote and confirm the app sees it.
 
-Acceptance: device-reported state converges after commands and remote changes; no stale command is applied after an outage; the pump continues autonomous thermostat operation without the PC or manufacturer cloud. Set a measurable convergence target after observing the hardware, provisionally within 10 seconds for basic state.
-
-## If REA is needed
-
-Analyze the exact app version for LAN discovery, local endpoints, provisioning and authentication logic. Use sanitized captures from the owner's own device/account only after live testing is authorized. Establish what the device speaks separately from what the phone app speaks. A cloud REST client in the app is evidence of a cloud route, not evidence of a usable local protocol.
-
-Stop the emulation branch if the firmware requires a manufacturer trust relationship that cannot be provisioned locally through an acceptable method. Reassess hardware replacement or an explicitly accepted cloud bridge.
-
-Research date: 17 October 2026. No pump has been accessed or tested.
+Done when one unit reads and sets reliably. Then repeat for the other two.
