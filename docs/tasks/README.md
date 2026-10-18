@@ -20,6 +20,7 @@ Only the coordinator edits cards. A small fix can reuse an existing card. The da
 | File | Scope |
 | --- | --- |
 | [0.1.0](0.1.0.md) | Prove the integrations |
-| [0.2.0](0.2.0.md) | PC service, Finnish web app and cottage price automation |
-| [0.3.0](0.3.0.md) | Pump cooling automation |
+| [0.2.0](0.2.0.md) | PC service, web app, Android app and cottage automation |
+| [0.3.0](0.3.0.md) | Optimizer |
+| [0.4.0](0.4.0.md) | Pump cooling automation |
 | [Later](later.md) | Unassigned work |

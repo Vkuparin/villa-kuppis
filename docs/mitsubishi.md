@@ -8,7 +8,7 @@ At home. Not in Google Home.
 | --- | --- | --- | --- |
 | LN35 | Outdoor unit 2 (shared) | MAC-577IF2-E | MELCloud Home cloud |
 | LN25 upstairs | To confirm | MAC-597IFB-E | MELCloud Home cloud |
-| LN25 downstairs | To confirm | Not yet checked | MELCloud Home cloud, if it is in the app |
+| LN25 downstairs | To confirm | Not yet checked | MELCloud Home cloud |
 
 One LN25 is on outdoor unit 1 (single split); the other shares outdoor unit 2 with the LN35.
 
@@ -18,7 +18,7 @@ Supplied identifiers, one per indoor unit: `LN25VGHZ2LU`, `LN35VG2WLU`, `LN25VG2
 
 ## Routes
 
-One route for every unit: the MELCloud Home cloud. The owner uses both checked units in the MELCloud Home app.
+One route for every unit: the MELCloud Home cloud. All three units are in the owner's MELCloud Home app.
 
 **MAC-597IFB-E (LN25 upstairs):** MELCloud Home's current adapter. Mitsubishi says it needs continuous internet; there is no known local API, and `pymitsubishi` does not support it. Cloud only.
 

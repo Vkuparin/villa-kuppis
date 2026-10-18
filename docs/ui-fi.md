@@ -1,15 +1,17 @@
 # Käyttöliittymän alustava suunnitelma
 
-Käyttöliittymän kieli on suomi. Sama verkkosovellus toimii tietokoneen selaimessa ja Android-puhelimen kotinäytölle asennettuna.
+Käyttöliittymän kieli on suomi. Tietokoneella käytetään selainta. Android-sovellus näyttää saman verkkosovelluksen ja lisää mökin toiminnot, jotka tarvitsevat Google Homea.
 
 ## Näkymät
 
 - **Yleiskuva:** kohteet `Koti` ja `Mökki`, huoneet, viimeisimmät lämpötilat, yhteyden tila ja tämän päivän sähkön hinta.
 - **Laite:** mitattu lämpötila, tavoitelämpötila, toimintatila, laitteen tukemat säädöt ja viimeisin vahvistettu muutos.
-- **Pörssisähkö:** päivän ja huomisen hinnat 15 minuutin jaksoissa sekä suunnitelma: mikä tavoitelämpötila on voimassa kussakin jaksossa.
-- **Hintasäännöt:** käyttäjä asettaa itse hintarajat ja lämpötilat, esimerkiksi `Kun pörssihinta on alle 5 c/kWh → 12 °C`. Hinta on pelkkä pörssihinta ilman veroja ja marginaaleja. Perustaso on mökillä 5 °C. Kotona säännöt koskevat kesällä jäähdytystä.
-- **Mökki:** painike `Aloita vierailulämmitys` nostaa lämmittimet 22 asteeseen ja keskeyttää hintasäännöt. `Lopeta vierailu` palauttaa ne.
+- **Kuvaajat:** lämpötilat, ilmanlaatu (ALPSTUGA), tavoitelämpötilat ja hinnat samalla aika-akselilla, huoneittain ja kohteittain.
+- **Pörssisähkö:** päivän ja huomisen hinnat 15 minuutin jaksoissa sekä suunnitelma: mikä tavoitelämpötila on voimassa kussakin jaksossa ja miksi.
+- **Hintasäännöt:** kiinteät hintarajat, esimerkiksi `Kun pörssihinta on alle 5 c/kWh → 12 °C`, tai kytkin `Älykäs ylläpitolämmitys` (vähimmäislämpötila, suurin varaava lämpötila, halpa ja kallis hinta). Asetukset koko kohteelle tai huoneittain. Hinta on pelkkä pörssihinta ilman veroja ja marginaaleja. Kotona säännöt koskevat kesällä jäähdytystä.
+- **Mökki:** `Vierailu` kysyy saapumisajan ja tavoitelämpötilan, ja sovellus lämmittää halvimmilla jaksoilla ajoissa. `Lopeta vierailu` palauttaa ylläpitolämmityksen. `Lähetä suunnitelma uudelleen`, jos päivän siirto Google Homeen epäonnistui.
 - **Tapahtumat:** kuka tai mikä muutti asetusta, milloin ja onnistuiko muutos.
+- **Ilmoitukset (Android):** päivän siirto epäonnistui, laite ei ole yhteydessä tai vierailun tavoite ei toteudu ajoissa.
 - **Asetukset:** laitteet, kohteet, käyttäjät, yhteydet ja hinnanohjauksen rajat.
 
 ## Sanasto
@@ -29,7 +31,13 @@ Käyttöliittymän kieli on suomi. Sama verkkosovellus toimii tietokoneen selaim
 | Price rule | Hintasääntö |
 | Base temperature | Perustaso |
 | Away / visit | Poissa / Vierailu |
-| Start / end visit heating | Aloita vierailulämmitys / Lopeta vierailu |
+| Start / end visit | Vierailu / Lopeta vierailu |
+| Arrival time | Saapumisaika |
+| Smart maintenance heating | Älykäs ylläpitolämmitys |
+| Minimum / maximum storage temperature | Vähimmäislämpötila / Suurin varaava lämpötila |
+| Low / high price | Halpa hinta / Kallis hinta |
+| Re-send plan | Lähetä suunnitelma uudelleen |
+| Graphs | Kuvaajat |
 | Precooling | Esijäähdytys |
 
 Laitteen ilmoittama tila ja pyydetty muutos näytetään erikseen, kunnes laite vahvistaa muutoksen. Kun pörssisähköohjaus muuttaa asetusta, tapahtumissa näkyy syy, esimerkiksi `Pörssisähköohjaus: halpa jakso`.

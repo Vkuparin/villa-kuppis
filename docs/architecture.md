@@ -8,7 +8,8 @@
 - Home: three Mitsubishi indoor units, all in MELCloud Home, controlled from the PC through the MELCloud Home cloud. Their main job is summer cooling; the apartment's radiators are geothermal and outside the owner's control.
 - Cottage (devices arriving early November 2026): four Mill heaters and two IKEA ALPSTUGA sensors in Google Home over Matter, with the Google Home Speaker as hub. The heaters follow the ALPSTUGA readings rather than their own sensors.
 - Spot-price automation is a high priority: fixed thresholds first, then an optimizer. See [spot-price automation](spot-price.md).
-- Household members use the app with full control. No app login: being on the owner's Tailscale network is the access control.
+- Household members use the app with full control, each with their own Google account. No separate app login.
+- No paid services, stores or signing: free Google Cloud project and OAuth setup without billing, a self-signed Android APK installed directly, free Tailscale, ENTSO-E and FMI.
 
 ## Shape
 
@@ -32,7 +33,7 @@ flowchart LR
 
 **The Android app** is the cottage link. It:
 
-- reads cottage readings through the Home APIs and reports them to the PC;
+- reads cottage readings through the Home APIs and reports them to the PC about every 15 minutes, for graphs and the optimizer (Android may stretch this in battery saver; gaps show in the graphs);
 - fetches the cottage plan from the PC and uploads it as Google Home automations, once a day after prices are published, plus a manual re-send button;
 - starts and ends visit heating;
 - shows notifications.
@@ -55,6 +56,10 @@ Google runs the uploaded automations, so the cottage follows its plan with the P
 
 The MELCloud Home client is unofficial; if it breaks, REA on the current app is the repair tool.
 
+## History and graphs
+
+The PC stores every reading as a time series in SQLite: temperatures from all rooms, the ALPSTUGA air-quality values (CO2, PM2.5 and humidity, as exposed), setpoints and prices. The web app draws them as graphs per room and per site, with prices and setpoint changes on the same time axis.
+
 ## Model
 
 Stable internal IDs for Site, Room, Device and Capability. Finnish display labels; language-neutral protocol identifiers. Store only capabilities a device actually reports.
@@ -69,7 +74,16 @@ Plans use Europe/Helsinki local time; store timestamps in UTC.
 
 ## Remote access and security
 
-[Tailscale](https://tailscale.com/pricing) connects phones to the PC. Each household member installs it and joins the owner's network. The free Personal plan should cover this: recent reports say it has allowed six users and unlimited personal devices since April 2026; confirm on the pricing page. Nothing is exposed to the public internet.
+[Tailscale](https://tailscale.com/pricing) connects phones to the PC. The free Personal plan should cover this: recent reports say it has allowed six users and unlimited personal devices since April 2026; confirm on the pricing page. Nothing is exposed to the public internet.
+
+## Users
+
+Each household member uses their own Google account; nothing new to remember:
+
+- **Cottage:** invite them into the owner's Google Home home and add them as OAuth test users of the Android app.
+- **PC:** they sign in to Tailscale with Google and join the owner's network. The web app is published with `tailscale serve`, which tells the service who each request comes from. The change history shows names without an app login.
+
+Google Family Link manages supervised child accounts but offers no sign-in for other apps. Supervised accounts may be limited in Google Home and Tailscale; check before relying on them.
 
 Keep MELCloud Home and Google credentials outside Git and back them up with the database.
 
