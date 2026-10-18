@@ -1,39 +1,52 @@
 # Spot-price automation
 
-High priority. The owner sets price thresholds and temperatures; the PC applies them for every 15-minute price period, at both sites.
+High priority. Plans are computed on the PC for every 15-minute price period. The home pumps get them directly; the cottage gets them through the Android app's daily upload.
 
-## Price data
+## Inputs
 
-- The raw Finnish day-ahead spot price (bidding zone FI), in 15-minute periods, with no VAT, margin or transfer fees added. Shown in c/kWh.
-- Next-day prices are usually published around 14:00 Finnish time.
-- Primary source: [ENTSO-E Transparency Platform](https://transparency.entsoe.eu/) (free API token). Backup: Elering's public API, which needs no key. Cache prices in SQLite.
+- **Prices:** the raw Finnish day-ahead spot price (bidding zone FI), with no VAT, margin or fees, in c/kWh. Next-day prices are usually published around 14:00 Finnish time. Source: [ENTSO-E Transparency Platform](https://transparency.entsoe.eu/) (free API token); backup: Elering's public API.
+- **Outdoor forecast:** the Finnish Meteorological Institute's free open data, for the optimizer.
+- **History:** room readings (ALPSTUGA at the cottage, unit sensors at home) and setpoints, stored on the PC.
 
-## Rules
+## Scope
 
-Each site, or group of devices, has a **base** setpoint and a list of thresholds: "when the spot price is below X c/kWh, use T".
+Every setting can apply to a whole site or to a single room; a room setting overrides the site setting.
 
-For each 15-minute period, the planner applies every matching threshold:
+## Mode 1: fixed thresholds
 
-- **Heating** (cottage heaters): use the highest matching temperature, never below the base.
-- **Cooling** (home pumps in summer): use the lowest matching temperature, never above the base. A rule may also switch a unit off, e.g. above 30 c/kWh.
+A base temperature and thresholds: "when the spot price is below X c/kWh, use T". For heating, the highest matching temperature wins, never below the base. For cooling, the lowest wins, never above the base; a rule may also switch a unit off.
 
-Example cottage rules (the owner sets the real values):
+Example for the cottage:
 
-| Rule | Setpoint |
+| Rule | Target |
 | --- | --- |
 | Base | 5 °C |
 | Spot price below 8 c/kWh | 8 °C |
 | Spot price below 5 c/kWh | 12 °C |
 
-This heats in cheap periods and lets the cottage cool towards 5 °C in expensive ones. The heaters' own thermostats do the rest. The PC sends a new setpoint only when it changes between periods. Setpoints stay inside each device's reported range.
+## Mode 2: smart maintenance heating (Älykäs ylläpitolämmitys)
 
-The plan view shows today's and tomorrow's prices with the planned setpoint for each period.
+A switch per site or room. The owner sets:
 
-## Visit mode
+- **Minimum temperature:** never go below this, whatever the price.
+- **Maximum storage temperature:** never heat above this to store cheap energy.
+- **Low price:** below this, storing heat is worth it.
+- **High price:** above this, avoid heating and let the room cool towards the minimum.
 
-**Aloita vierailulämmitys** sets all cottage heaters to 22 °C and suspends the price rules. **Lopeta vierailu** returns to them. Nothing ends a visit automatically.
+The optimizer chooses a target for each 15-minute period that minimizes the cost of the known price window while staying between the minimum and the maximum. It uses each room's learned heat-up and cool-down rates and the outdoor forecast. Until enough history exists (a few weeks of readings), it falls back to the fixed thresholds implied by the low and high prices.
 
-## Later, if wanted
+**Cooling** works the same in reverse for the pumps: a maximum temperature, a minimum precooling temperature, and low and high prices.
 
-- A "cheapest hours" rule: in the cheapest N hours of each day, use T, whatever the actual price. This would give the cottage a boost even on winter days when the price never drops below a threshold.
-- Measured heat-up and cool-down rates from the heaters' own temperature readings, to tune the thresholds and the visit lead time.
+## Visit heating
+
+The owner enters an arrival time and a target temperature, e.g. Friday 18:00 and 22 °C. The planner picks the cheapest periods that still reach the target by arrival:
+
+- Until each room's heat-up rate is learned, it assumes the heat-up from maintenance temperature takes 12 hours.
+- If arrival is beyond the published prices, it plans with the prices it has and recalculates when the next day's prices arrive.
+- The Android app uploads the visit plan at once, and again after each recalculation.
+- The end-visit button returns the cottage to maintenance heating.
+- A notification warns if the plan cannot reach the target in time.
+
+## Plan view
+
+Today's and tomorrow's prices with the planned target per period and per room, the estimated cost, and the reason for each change (threshold, optimizer, visit).

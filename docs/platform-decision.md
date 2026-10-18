@@ -1,37 +1,53 @@
 # Client and device access decision
 
-Status: proposed, 18 October 2026, revision 3.
+Status: proposed, 18 October 2026, revision 4.
 
 ## Decided
 
-- The PC talks to every controllable device through its manufacturer's cloud: MELCloud Home for the pumps, Mill cloud for the heaters. Everything, including price automation, runs on the PC.
-- One web app served by the PC, used from a desktop browser and installed on Android phones over Tailscale.
-- Premium is not used, and nothing in the design needs Google's developer APIs.
+- **Pumps:** the PC controls them through the MELCloud Home cloud.
+- **Cottage:** Mill heaters and ALPSTUGA sensors in Google Home over Matter. The owner wants the heaters to follow the ALPSTUGA readings, and Matter keeps both in one place. Mill cloud mode was considered and rejected for this reason; the heaters run either Mill cloud or Matter, not both.
+- **Clients:** a desktop web app served by the PC, and a native Kotlin Android app that shows the same web app and adds the cottage functions.
+- **No Premium.** The speaker includes Premium Standard; Home MCP needs Advanced and is US-only.
 
-## Why Mill cloud rather than Matter
+## How the cottage is controlled
 
-The Mill heaters run either Mill cloud or Matter, not both.
+The PC cannot reach Google Home; only an Android or iOS app signed in as the user can. So the work is split:
 
-| | Mill cloud | Matter through Google Home |
-| --- | --- | --- |
-| PC controls the heaters | Yes, directly | No. Google Home MCP needs Premium Advanced and is US-only; the speaker includes Standard. |
-| Price automation | PC changes setpoints every 15 minutes, same engine as the pumps | Android app uploads a daily plan as Google Home automations; limits untested |
-| Desktop control | In Villa Kuppis | Only through home.google.com |
-| Needs | `millheater` working with Gen 4; Mill cloud up | Native Kotlin Android app with the Home APIs and a daily background job |
-| Google Home app and voice | Heaters not in Google Home (no official Mill integration found) | Heaters in Google Home |
+| Job | Where |
+| --- | --- |
+| Prices, forecast, rules, optimizer, plans, history | PC |
+| Reading the cottage | Android app, through the [Home APIs](https://developers.home.google.com/apis/android/connectivity); reported to the PC |
+| Applying the plan | Android app uploads Google Home automations; Google runs them |
+| Manual control | Villa Kuppis Android app, or the Google Home app and [home.google.com](https://home.google.com) |
 
-Mill cloud is simpler. It removes the native Android app, the Google APIs and the daily upload.
+## Sensor-driven automations
 
-**Check first:** set up the first heater in Mill cloud mode and confirm `millheater` reads and sets it from the PC. Gen 4 support in the library is unverified. If it fails, switch the heaters to Matter and use the Google route below.
+For each room and each plan period, the app uploads a pair of [Automation API](https://developers.home.google.com/apis/android/device/thermostat) automations:
 
-## Fallback: Matter through Google
+- **When the room's ALPSTUGA reads below the period's target:** set that room's heaters to target + 2 °C.
+- **When it reads above the target:** set them to target − 2 °C.
 
-Keep this only if Mill cloud fails:
+The heaters' own thermostats cap any overshoot at about 2 °C, even if a sensor stops reporting.
 
-- Commission the heaters into Google Home over Matter.
-- Build a small Kotlin Android app with the [Home APIs](https://developers.home.google.com/apis/android/connectivity) (scope `home.platform.selected.devices`).
-- The app fetches the PC's daily plan and writes it as Google Home automations ([Automation API](https://developers.home.google.com/apis/android/device/thermostat), clock-time starters).
+The plan is uploaded once a day, after next-day prices are published around 14:00. A visit uploads at once. A **re-send** button covers a failed upload. If an upload is missed, the previous automations keep running.
 
-## ALPSTUGA
+The owner's own phone does the upload. It works wherever the phone has internet. The weak points are Android delaying background jobs in battery saver, and no data connection at that hour; the app sends a notification if the upload fails.
 
-The sensors are Matter over Thread and only reach Google Home, through the speaker. They stay in the Google Home app. The Mill heaters report their own room temperature, which is enough for the plan and the UI. Bringing ALPSTUGA readings into Villa Kuppis later needs a native Android app with the Home APIs.
+**To verify when the devices arrive:**
+
+- that an automation can start on an ALPSTUGA temperature change and set the heaters;
+- that time-of-day conditions can limit an automation to its plan period;
+- how many automations a home can hold;
+- that a background job can replace them.
+
+If the automation count is limited, merge plan periods with the same target.
+
+## Setup notes
+
+Start from [Google's Android sample app](https://github.com/google-home/google-home-api-sample-app-android). Its [authorization guide](https://developers.home.google.com/apis/android/sample-app/authorization) defaults to the partner-gated `home.platform.v2` scope; use `HOME_PLATFORM_SCOPE_VERSION_1` (`home.platform.selected.devices`). Add household accounts as OAuth test users; [unregistered apps allow 100 users](https://developers.home.google.com/apis/android/oauth). A Google Cloud project and OAuth credentials are needed. No usage fee was found.
+
+## Not pursued
+
+- **Mill cloud mode:** the heaters could not follow the ALPSTUGA sensors.
+- **Direct Matter from the PC:** needs routed IPv6 into the cottage network, which the current routers are unlikely to provide; see [cottage](cottage.md).
+- **Home MCP:** Premium Advanced and US-only.
