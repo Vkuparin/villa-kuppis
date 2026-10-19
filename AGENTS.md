@@ -21,6 +21,7 @@ Codex, Hermes and Claude Code (through `CLAUDE.md`) all read this file. This is 
 | Create the project environment | py -3.13 -m venv .venv; .venv\Scripts\python -m pip install -r requirements.txt |
 | Run the spot-price experiment | .venv\Scripts\python -m villa_kuppis --help (development commands require an explicit temporary data directory) |
 | Spot-price tests (mocked network, temporary SQLite) | .venv\Scripts\python -m unittest discover -s tests -v |
+| Development tool verification (new terminal after installation) | py -3.13 --version; java -version; adb version; sdkmanager --sdk_root="$env:ANDROID_HOME" --list_installed; tailscale version |
 | Type, build and format checks | node scripts/check-docs.mjs (requires shared dev-dashboard); git diff --check |
 
 Define a command here before first relying on it. Add rows when the project needs them.
