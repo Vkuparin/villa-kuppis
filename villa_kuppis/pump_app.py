@@ -893,7 +893,8 @@ function onControl(e) {
   const unitId = el.dataset.unit;
   const action = el.dataset.action;
   if (action === "setpoint-select") {
-    sendCommand(unitId, "setpoint", Number(el.value));
+    // A click only opens the list; send once the value has been chosen.
+    if (e.type === "change") sendCommand(unitId, "setpoint", Number(el.value));
     return;
   }
   if (el.tagName === "SELECT") {
