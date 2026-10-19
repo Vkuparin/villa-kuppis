@@ -430,9 +430,8 @@ function unitStep(unit) {
   if (caps && caps.half_step === false) return 1;
   return 0.5;
 }
-function setpointAllowed(unit) {
-  if (unit.mode === null) return false;
-  if (unit.mode === "Fan") return false;
+function setpointRange(unit) {
+  if (unit.mode === null || unit.mode === "Fan") return null;
   const caps = unit.caps;
   let lo = null, hi = null;
   if (caps) {
@@ -441,8 +440,22 @@ function setpointAllowed(unit) {
       lo = caps.min_cool; hi = caps.max_cool; }
     else if (unit.mode === "Automatic") { lo = caps.min_auto; hi = caps.max_auto; }
   }
-  if (lo === null || hi === null || unit.setpoint === null) return false;
-  return true;
+  if (lo === null || hi === null || unit.setpoint === null) return null;
+  return [lo, hi];
+}
+function setpointAllowed(unit) {
+  return setpointRange(unit) !== null;
+}
+function setpointOptions(unit, step) {
+  const range = setpointRange(unit);
+  if (!range) return "";
+  const values = [];
+  for (let v = range[0]; v <= range[1] + 1e-9; v += step) values.push(v);
+  if (!values.includes(unit.setpoint)) values.push(unit.setpoint);
+  values.sort((a, b) => a - b);
+  return values.map((v) =>
+    '<option value="' + v + '"' + (v === unit.setpoint ? " selected" : "") + ">" +
+    esc(fmtTemp(v)) + "</option>").join("");
 }
 function modeOptions(unit) {
   const caps = unit.caps;
@@ -483,6 +496,9 @@ function cardHtml(unit) {
     '<button data-action="setpoint" data-unit="' + esc(unit.id) + '" data-delta="' +
     (-step) + '" aria-label="Laske tavoitelämpötilaa"' +
     (canStep ? "" : " disabled") + ">&minus;</button>" +
+    '<select data-action="setpoint-select" data-unit="' + esc(unit.id) +
+    '" aria-label="Valitse tavoitelämpötila"' + (canStep ? "" : " disabled") + ">" +
+    setpointOptions(unit, step) + "</select>" +
     '<button data-action="setpoint" data-unit="' + esc(unit.id) + '" data-delta="' +
     step + '" aria-label="Nosta tavoitelämpötilaa"' +
     (canStep ? "" : " disabled") + ">+</button>" +
@@ -876,6 +892,10 @@ function onControl(e) {
   if (!el) return;
   const unitId = el.dataset.unit;
   const action = el.dataset.action;
+  if (action === "setpoint-select") {
+    sendCommand(unitId, "setpoint", Number(el.value));
+    return;
+  }
   if (el.tagName === "SELECT") {
     if (el.value === el.dataset.lastValue) return;
     el.dataset.lastValue = el.value;
