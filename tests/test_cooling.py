@@ -133,6 +133,40 @@ class CoolingTests(ServiceTestCase):
         self.assertEqual(self.brief(sent), [("unit-1", "setpoint", 21.0)])
         self.assertFalse(service.plan_view()["away"])
 
+    def test_night_mode_quiet_fan_applies_and_lifts(self):
+        service, clock = self.start()
+        store = SettingsStore(service.store.path)
+        store.set("room:home/unit-1", "night_enabled", True, "test")
+        # 12:00 UTC = 15:00 Helsinki: outside 22:00-07:00, nothing happens.
+        self.assertEqual(self.run_plan(service), [])
+        self.assertEqual(self._unit(service, "unit-1")["fan"], "Auto")
+        # 19:30 UTC = 22:30 Helsinki.
+        clock.advance(7.5 * 3600)
+        sent = self.run_plan(service)
+        self.assertIn(("unit-1", "fan", "One"), self.brief(sent))
+        self.assertEqual(self._unit(service, "unit-1")["fan"], "One")
+        # Other rooms did not opt in; no repeat command.
+        self.assertEqual(self._unit(service, "unit-2")["fan"], "Two")
+        self.assertNotIn("fan", [s["action"] for s in self.run_plan(service)])
+        # 04:30 UTC = 07:30 Helsinki: lifted, earlier setting back.
+        clock.advance(9 * 3600)
+        sent = self.run_plan(service)
+        self.assertIn(("unit-1", "fan", "Auto"), self.brief(sent))
+        self.assertEqual(self._unit(service, "unit-1")["fan"], "Auto")
+        self.assertNotIn("fan", [s["action"] for s in self.run_plan(service)])
+
+    def test_night_mode_keeps_fan_the_household_changed(self):
+        service, clock = self.start()
+        SettingsStore(service.store.path).set(
+            "room:home/unit-1", "night_enabled", True, "test")
+        clock.advance(7.5 * 3600)
+        self.run_plan(service)
+        service.request("unit-1", "fan", "Four", "Ville")
+        self.wait_for(lambda: self._unit(service, "unit-1")["fan"] == "Four")
+        clock.advance(9 * 3600)
+        self.assertNotIn("fan", [s["action"] for s in self.run_plan(service)])
+        self.assertEqual(self._unit(service, "unit-1")["fan"], "Four")
+
     def test_no_prices_means_no_commands(self):
         service, _ = self.start()
         self.assertEqual(self.run_plan(service), [])

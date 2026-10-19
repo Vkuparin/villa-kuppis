@@ -22,6 +22,12 @@ applies them to the pumps:
 * It acts on changes of the plan, not on every pass, so a manual setpoint
   stays until the plan moves to another target.
 
+* Night mode (card F6.2) is separate from the prices: in rooms with
+  ``night_enabled`` the fan is set to its quietest speed between
+  ``night_start`` and ``night_end`` (Helsinki time, may cross midnight) and
+  the earlier fan setting is put back afterwards, unless the household
+  changed it meanwhile.
+
 Every command goes through ``PumpService.request`` with the actor
 ``Suunnitelma``, so it is validated, confirmed and logged like any other.
 """
@@ -44,6 +50,22 @@ from .storage import PriceStore
 ACTOR = "Suunnitelma"
 SITE = "home"
 DEFAULT_INTERVAL = 60.0
+QUIET_FAN = "One"
+
+
+def in_night(values: dict, now: datetime) -> bool:
+    """True when the room's night mode is on and `now` is inside its hours."""
+    if not values["night_enabled"]:
+        return False
+    local = now.astimezone(HELSINKI)
+    minutes = local.hour * 60 + local.minute
+    start, end = (int(values[k][:2]) * 60 + int(values[k][3:5])
+                  for k in ("night_start", "night_end"))
+    if start == end:
+        return False
+    if start < end:
+        return start <= minutes < end
+    return minutes >= start or minutes < end
 
 
 @dataclass(frozen=True)
@@ -130,6 +152,9 @@ class CoolingAutomation:
                 "CREATE TABLE IF NOT EXISTS away_state ("
                 "id INTEGER PRIMARY KEY CHECK (id = 1), away INTEGER NOT NULL, "
                 "changed_utc TEXT, actor TEXT)")
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS night_state ("
+                "unit_id TEXT PRIMARY KEY, saved_fan TEXT)")
         finally:
             conn.close()
 
@@ -269,6 +294,9 @@ class CoolingAutomation:
         sent: list[dict] = []
         now_ts = int(now.timestamp())
         for state in units:
+            if fresh.get(state["id"]) and not state["in_error"]:
+                sent.extend(self._night(state, overrides, now))
+        for state in units:
             unit_id = state["id"]
             rows = plan.get(unit_id)
             if not rows:
@@ -288,6 +316,45 @@ class CoolingAutomation:
                 values["cool_max_c"] = values["away_max_c"]
             sent.extend(self._apply(state, current, values, now))
         return sent
+
+    def _night(self, state, overrides, now) -> list[dict]:
+        """Quiet fan during the night hours; restore it when they end."""
+        unit_id = state["id"]
+        active = in_night(_setting_values(overrides, unit_id), now)
+        conn = self._connect()
+        try:
+            row = conn.execute("SELECT saved_fan FROM night_state "
+                               "WHERE unit_id = ?", (unit_id,)).fetchone()
+        finally:
+            conn.close()
+        if active and row is None and state["fan"] != QUIET_FAN:
+            result = self._command(state, "fan", QUIET_FAN)
+            if result["status"] == 202:
+                self._set_night(unit_id, state["fan"])
+            return [result]
+        if not active and row is not None:
+            sent = []
+            # Restore only what we set; a fan the household changed stays.
+            if state["fan"] == QUIET_FAN and row[0] is not None:
+                sent.append(self._command(state, "fan", row[0]))
+                if sent[0]["status"] != 202:
+                    return sent
+            self._set_night(unit_id, None, clear=True)
+            return sent
+        return []
+
+    def _set_night(self, unit_id, fan, clear=False) -> None:
+        conn = self._connect()
+        try:
+            if clear:
+                conn.execute("DELETE FROM night_state WHERE unit_id = ?",
+                             (unit_id,))
+            else:
+                conn.execute("INSERT OR REPLACE INTO night_state "
+                             "(unit_id, saved_fan) VALUES (?, ?)",
+                             (unit_id, fan))
+        finally:
+            conn.close()
 
     def _command(self, state, action, value) -> dict:
         status, body = self._service.request(state["id"], action, value, ACTOR)
