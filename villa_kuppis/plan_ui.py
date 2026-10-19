@@ -1,0 +1,65 @@
+"""Finnish "today's cooling plan" section of the web app (card F4.1).
+
+Plain ASCII JS in raw strings, spliced into the page by
+``pump_app.render_page`` like the settings section.
+"""
+
+SECTION_HTML = r"""
+  <section class="plan" aria-label="Päivän suunnitelma">
+    <h2>Päivän suunnitelma</h2>
+    <p id="plan-note" class="detail"></p>
+    <div id="plan-body"></div>
+  </section>
+"""
+
+STYLE = r"""
+section.plan { background: #fff; border: 1px solid #d9dee3;
+               border-radius: .75rem; padding: 1rem 1.1rem;
+               margin-bottom: 1rem; }
+section.plan h2 { margin: 0 0 .6rem; font-size: 1.15rem; }
+section.plan h3 { margin: .8rem 0 .3rem; font-size: 1rem; color: #44505c; }
+section.plan ul { margin: 0; padding-left: 1.2rem; }
+.plan-off { color: #a11d1d; }
+"""
+
+SCRIPT = r"""
+(function () {
+  "use strict";
+  var $body = document.getElementById("plan-body");
+  var $note = document.getElementById("plan-note");
+  function hm(iso) {
+    return new Date(iso).toLocaleTimeString("fi-FI",
+      { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Helsinki" });
+  }
+  function render(data) {
+    $body.textContent = "";
+    if (!data.has_prices) {
+      $note.textContent = "Päivän sähkönhintoja ei ole vielä tallennettu.";
+      return;
+    }
+    $note.textContent = data.enabled
+      ? "Suunnitelma on käytössä: muutokset tehdään pumppuihin ja kirjataan tapahtumiin nimellä " + data.actor + "."
+      : "Suunnitelma on vain esitys: sitä ei toteuteta pumpuissa.";
+    data.units.forEach(function (u) {
+      var h = document.createElement("h3");
+      h.textContent = u.name + (u.active ? "" : " (ei jäähdytystilassa, ei ohjata)");
+      var ul = document.createElement("ul");
+      u.windows.forEach(function (w) {
+        var li = document.createElement("li");
+        li.textContent = hm(w.start) + "–" + hm(w.end) + " " +
+          (w.off ? "pois päältä" : String(w.target_c).replace(".", ",") + " °C");
+        if (w.off) li.className = "plan-off";
+        ul.appendChild(li);
+      });
+      $body.appendChild(h);
+      $body.appendChild(ul);
+    });
+  }
+  function load() {
+    fetch("/api/plan").then(function (r) { return r.json(); })
+      .then(render).catch(function () {});
+  }
+  load();
+  setInterval(load, 60000);
+})();
+"""

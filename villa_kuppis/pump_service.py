@@ -37,6 +37,8 @@ from zoneinfo import ZoneInfo
 from aiomelcloudhome.models.ata import ATAFanSpeed, ATAOperationMode
 
 from . import weather
+from .cooling import CoolingAutomation
+from .settings import SettingsStore
 from .pump_probe import (
     _default_client_factory,
     _operation_message,
@@ -978,7 +980,8 @@ class PumpService:
                  weather_fetcher=weather.fetch_hourly_temperature,
                  weather_interval: float = WEATHER_UPDATE_INTERVAL,
                  weather_backfill_hours: float = WEATHER_BACKFILL_HOURS,
-                 prices_db=None):
+                 prices_db=None,
+                 automation_interval: float | None = None):
         self._data_dir = Path(data_dir)
         self._now = now
         self._stale_after = stale_after
@@ -1002,6 +1005,9 @@ class PumpService:
         self._weather_backfill_hours = float(weather_backfill_hours)
         self._prices_db = (Path(prices_db) if prices_db is not None
                            else self._data_dir / PRICE_DB_FILENAME)
+        self.automation = CoolingAutomation(
+            self, SettingsStore(self.store.path), self._prices_db, now=now,
+            interval=automation_interval)
         self._weather_stop = threading.Event()
         self._weather_write_lock = threading.Lock()
         self._weather_thread: threading.Thread | None = None
@@ -1024,6 +1030,7 @@ class PumpService:
                 target=self._weather_loop, name="pump-weather", daemon=True)
             self._weather_thread.start()
         self.gateway.start()
+        self.automation.start()
 
     def close(self) -> None:
         if self._closed:
@@ -1034,6 +1041,7 @@ class PumpService:
         if self._weather_thread is not None:
             self._weather_thread.join(timeout=10.0)
             self._weather_thread = None
+        self.automation.stop()
         self.gateway.stop()
         self.store.close()
 
@@ -1069,6 +1077,10 @@ class PumpService:
 
     def events(self, limit: int = 100) -> list[dict]:
         return self.store.events(limit)
+
+    def plan_view(self) -> dict:
+        """Today's cooling plan (card F4.1)."""
+        return self.automation.day_plan()
 
     # -- history (card F3.3) ---------------------------------------------------
 
@@ -1198,7 +1210,8 @@ def make_live_service(data_dir, *, credentials=None, weather_sites=None,
                       stale_after=DEFAULT_STALE_AFTER,
                       readback_polls=DEFAULT_READBACK_POLLS,
                       readback_delay=DEFAULT_READBACK_DELAY,
-                      command_timeout=DEFAULT_COMMAND_TIMEOUT) -> PumpService:
+                      command_timeout=DEFAULT_COMMAND_TIMEOUT,
+                      automation_interval=None) -> PumpService:
     """Live service with explicit credentials, or development environment values.
 
     The unattended runner supplies credentials from Windows Credential Manager.
@@ -1235,4 +1248,5 @@ def make_live_service(data_dir, *, credentials=None, weather_sites=None,
         command_timeout=command_timeout,
         weather_sites=(weather.weather_sites_from_env(os.environ)
                        if weather_sites is None else weather_sites),
+        automation_interval=automation_interval,
     )

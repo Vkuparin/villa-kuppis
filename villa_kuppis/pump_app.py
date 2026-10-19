@@ -48,6 +48,9 @@ from urllib.parse import parse_qs, urlsplit
 from .pump_probe import FakeClient, _unit_payload
 from . import settings as app_settings
 from .pump_service import MAX_ACTOR_LENGTH, PumpService, make_live_service
+from .plan_ui import SCRIPT as _PLAN_SCRIPT
+from .plan_ui import SECTION_HTML as _PLAN_HTML
+from .plan_ui import STYLE as _PLAN_STYLE
 from .settings_ui import SCRIPT as _SETTINGS_SCRIPT
 from .settings_ui import SECTION_HTML as _SETTINGS_HTML
 from .settings_ui import STYLE as _SETTINGS_STYLE
@@ -58,6 +61,7 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_LOCAL_ACTOR = "Paikallinen käyttäjä"
 DEFAULT_PORT = 8377
 MAX_BODY_BYTES = 64 * 1024
+DEFAULT_PLAN_INTERVAL = 60.0
 
 DEMO_UNITS = (
     _unit_payload("demo-1", "Demo-yksikkö 1", mode="Cool", power="True",
@@ -72,13 +76,15 @@ DEMO_UNITS = (
 def make_demo_service(data_dir, *, poll_interval: float = 5.0,
                       stale_after: float = 60.0,
                       readback_polls: int = 2, readback_delay: float = 1.0,
-                      command_timeout: float = 10.0) -> PumpService:
+                      command_timeout: float = 10.0,
+                      automation_interval: float | None = None) -> PumpService:
     """Offline service: the real pipeline against the in-memory FakeClient."""
     client = FakeClient([dict(p) for p in DEMO_UNITS])
     return PumpService(
         data_dir, client=client, poll_interval=poll_interval,
         stale_after=stale_after, readback_polls=readback_polls,
         readback_delay=readback_delay, command_timeout=command_timeout,
+        automation_interval=automation_interval,
     )
 
 
@@ -254,6 +260,7 @@ td.result-pending { color: #0b3f9e; }
          padding: .6rem .9rem; border-radius: .5rem; }
 .alert.info { background: #eef4ff; border-color: #0b3f9e; color: #0b3f9e; }
 /*SETTINGS_STYLE*/
+/*PLAN_STYLE*/
 @media (max-width: 560px) {
   .row { flex-direction: column; align-items: stretch; gap: .35rem; }
   .row .label { order: 1; }
@@ -303,6 +310,7 @@ ohjaavat vain esittelyyksiköitä.</div>
       <a href="https://en.ilmatieteenlaitos.fi/open-data-licence">avoin data (CC BY 4.0)</a>.
       Sähkönhinta: Elering. Käyrät on harvennettu näytölle.</p>
   </section>
+<!--PLAN_SECTION-->
 <!--SETTINGS_SECTION-->
   <section class="events" aria-label="Tapahtumat">
     <h2>Tapahtumat</h2>
@@ -907,6 +915,7 @@ setInterval(loadHistory, 60000);
 setInterval(loadIdentity, 60000);
 </script>
 <script>/*SETTINGS_SCRIPT*/</script>
+<script>/*PLAN_SCRIPT*/</script>
 </body>
 </html>
 """
@@ -914,6 +923,9 @@ setInterval(loadIdentity, 60000);
 
 def render_page(demo: bool) -> str:
     page = (_PAGE.replace("/*SETTINGS_STYLE*/", _SETTINGS_STYLE)
+            .replace("/*PLAN_STYLE*/", _PLAN_STYLE)
+            .replace("<!--PLAN_SECTION-->", _PLAN_HTML)
+            .replace("/*PLAN_SCRIPT*/", _PLAN_SCRIPT)
             .replace("<!--SETTINGS_SECTION-->", _SETTINGS_HTML)
             .replace("/*SETTINGS_SCRIPT*/", _SETTINGS_SCRIPT))
     if not demo:
@@ -1098,6 +1110,8 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             self._json(200, payload)
         elif parts.path == "/api/settings":
             self._json(200, self.app.settings_payload())
+        elif parts.path == "/api/plan":
+            self._json(200, self.app.service.plan_view())
         elif parts.path == "/api/identity":
             self._json(200, {"actor": identity["actor"],
                              "display_name": identity["display_name"],
@@ -1121,7 +1135,7 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
         elif parts.path == "/api/settings":
             self._post_settings(identity)
         elif parts.path in ("/", "/api/view", "/api/events", "/api/history",
-                            "/api/identity"):
+                            "/api/identity", "/api/plan"):
             # Known paths with the wrong method: 405, mirroring how
             # do_GET answers /api/command.
             self._json(405, {"error": "method_not_allowed",
@@ -1286,6 +1300,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "enables trusted remote access and Tailscale user "
                         "identity, e.g. https://pump.tail1234.ts.net "
                         "(default: local access only)")
+    p.add_argument("--plan", action="store_true",
+                   help="apply the price-threshold cooling plan to the "
+                        "pumps (default: the plan is only shown)")
     mode = p.add_mutually_exclusive_group(required=True)
     mode.add_argument("--live", action="store_true",
                       help="real MELCloud Home (credentials from the "
@@ -1301,12 +1318,15 @@ def _cmd_serve(args, print_fn=print) -> int:
     if args.host not in ("127.0.0.1", "localhost"):
         print_fn("error: the pump app must listen on localhost", file=sys.stderr)
         return 1
+    interval = DEFAULT_PLAN_INTERVAL if args.plan else None
     if args.demo:
-        service = make_demo_service(args.data_dir)
+        service = make_demo_service(args.data_dir,
+                                    automation_interval=interval)
         mode = " (esittelytila: keksityt yksiköt)"
     else:
         try:
-            service = make_live_service(args.data_dir)
+            service = make_live_service(args.data_dir,
+                                        automation_interval=interval)
         except RuntimeError as err:
             print_fn(f"error: {err}", file=sys.stderr)
             return 1
