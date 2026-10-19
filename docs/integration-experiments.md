@@ -14,6 +14,8 @@ Validated on 19 October 2026 at `9f627d7`: 17 focused pump tests passed on Windo
 
 Owner-approved live check on 19 October 2026: sign-in and cloud state reading succeeded for the upstairs LN25. It reported Cool mode, power off and a 16–31 °C setpoint range. The write test returned exit code 3 without confirming the change or restoration. The owner then confirmed the original setpoint, mode and power in MELCloud Home. The console error detail was unavailable, so the cause remains unresolved. Investigate response handling and restoration verification offline; do not assume the unit must be switched on.
 
+Recovery repair at `d9ce704`: 22 focused pump tests passed on Windows Python 3.13, along with the offline demo, help, document parsing and whitespace checks. An offline HTTP contract test reproduces the client's parsing error after a successful HTTP response; this is a possible failure path, not a confirmed live cause. The probe now checks the original setpoint even if restoration's reply fails, and records sanitized operation/HTTP diagnostics. Sol 6.1 Medium reviewed the repair; Kynsi implemented it.
+
 ## D. Spot prices and fixed thresholds
 
 No hardware needed. Fetch tomorrow's 15-minute FI spot prices from Elering (no key), store them, and compute plans from fixed thresholds per room and per site, for heating and cooling. Test against saved price fixtures with the network mocked.
