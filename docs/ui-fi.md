@@ -45,6 +45,7 @@ Käyttöliittymän kieli on suomi. Tietokoneella käytetään selainta. Android-
 | Away from home | Poissa kotoa |
 | Night mode | Yötila |
 | Minimum off time | Vähimmäistaukoaika |
+| Cooling optimizer | Optimoitu jäähdytys |
 
 Laitteen ilmoittama tila ja pyydetty muutos näytetään erikseen, kunnes laite vahvistaa muutoksen. Kun pörssisähköohjaus muuttaa asetusta, tapahtumissa näkyy syy, esimerkiksi `Pörssisähköohjaus: halpa jakso`.
 

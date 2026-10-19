@@ -70,6 +70,8 @@ DEFINITIONS: tuple[Definition, ...] = (
                "Jäähdytys", "bool", True),
     Definition("min_off_minutes", "Vähimmäistaukoaika", "Jäähdytys", "number",
                30, "min", 0, 240),
+    Definition("cool_optimizer", "Optimoitu jäähdytys", "Jäähdytys", "bool",
+               True),
     Definition("away_max_c", "Enimmäislämpötila poissa kotoa", "Poissa kotoa",
                "number", 28.0, "°C", 15, 40),
     Definition("night_enabled", "Yötila käytössä", "Yötila", "bool", False),

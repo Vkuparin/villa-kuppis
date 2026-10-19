@@ -1074,6 +1074,8 @@ class PumpService:
         self._forecast_fetcher = forecast_fetcher
         self._room_rates_cache: tuple[datetime, dict] | None = None
         self._room_rates_lock = threading.Lock()
+        self._models_cache: tuple[datetime, tuple] | None = None
+        self._models_lock = threading.Lock()
         self._prices_db = (Path(prices_db) if prices_db is not None
                            else self._data_dir / PRICE_DB_FILENAME)
         self.automation = CoolingAutomation(
@@ -1256,21 +1258,43 @@ class PumpService:
             self._room_rates_cache = (now, payload)
             return payload
 
+    def learned_models(self, site: str = "home") -> tuple[dict, tuple, list]:
+        """Fitted room model per unit, (observed, forecast-ahead) outdoor and
+        the forecast rows; cached like the rates (cards F5.1 and F5.4)."""
+        now = self._now()
+        with self._models_lock:
+            cached = self._models_cache
+            if cached is not None and 0 <= (now - cached[0]).total_seconds() \
+                    < ROOM_RATES_CACHE_SECONDS:
+                return cached[1]
+            start = now - timedelta(days=learning.LEARN_DAYS)
+            observed = self.store.outdoor_rows(site, start,
+                                               now + timedelta(hours=1))
+            ahead = self.store.forecast_rows(
+                site, now - timedelta(hours=1),
+                now + timedelta(hours=FORECAST_HOURS))
+            outdoor = learning.Outdoor(observed)
+            # Predictions run on the forecast, falling back to observations.
+            future = learning.Outdoor(
+                [r for r in observed if r[0] < _to_epoch(now)]
+                + [r for r in ahead if r[0] >= _to_epoch(now)])
+            models = {
+                state["id"]: learning.fit(
+                    self.store.learning_readings(state["id"], start, now),
+                    outdoor)
+                for state in self.store.unit_states()}
+            result = (models, (outdoor, future), ahead)
+            self._models_cache = (now, result)
+            return result
+
     def _compute_room_rates(self, site: str, now: datetime) -> dict:
         start = now - timedelta(days=learning.LEARN_DAYS)
-        observed = self.store.outdoor_rows(site, start, now + timedelta(hours=1))
-        ahead = self.store.forecast_rows(
-            site, now - timedelta(hours=1), now + timedelta(hours=FORECAST_HOURS))
-        outdoor = learning.Outdoor(observed)
-        # The prediction runs on the forecast, falling back to observations.
-        future = learning.Outdoor(
-            [r for r in observed if r[0] < _to_epoch(now)]
-            + [r for r in ahead if r[0] >= _to_epoch(now)])
+        models, (outdoor, future), ahead = self.learned_models(site)
         now_ts = _to_epoch(now)
         units = []
         for state in self.store.unit_states():
             readings = self.store.learning_readings(state["id"], start, now)
-            model = learning.fit(readings, outdoor)
+            model = models.get(state["id"]) or learning.fit(readings, outdoor)
             _trained, check = learning.validate(readings, outdoor, now)
             room = state["room_temp"]
             out_now = future.at(now_ts)

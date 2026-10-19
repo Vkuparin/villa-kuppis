@@ -19,8 +19,18 @@ applies them to the pumps:
   ``away_max_c`` with no precooling; the expensive-price switch-off still
   applies, and a unit comes back when the room reaches the away maximum.
   Switching away off restores the normal plan on the next pass.
+* A unit brought back on because its room reached the maximum holds the
+  maximum until the expensive stretch ends, instead of being switched off
+  again on the next pass.
 * It acts on changes of the plan, not on every pass, so a manual setpoint
   stays until the plan moves to another target.
+
+* The optimizer (card F5.4, optimizer.py) replaces the fixed plan from the
+  current period to the end of the known prices (today and, once fetched,
+  tomorrow) for rooms with ``cool_optimizer`` on, once the room's cooling
+  rate is learned (card F5.1). It is not used in away mode. Its plan is
+  applied with the same rules as above, and it is planned again at each
+  new period from the room's current temperature.
 
 * Night mode (card F6.2) is separate from the prices: in rooms with
   ``night_enabled`` the fan is set to its quietest speed between
@@ -42,9 +52,10 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
+from . import optimizer
 from . import settings as app_settings
 from .planning import Period, plan_day
-from .prices import HELSINKI, INTERVAL_SECONDS
+from .prices import HELSINKI, INTERVAL_SECONDS, helsinki_day_bounds
 from .storage import PriceStore
 
 ACTOR = "Suunnitelma"
@@ -74,7 +85,7 @@ class CoolPeriod:
     price_c_kwh: Decimal
     target_c: float
     off: bool
-    reason: str                    # "off" | "precool" | "max" | "away"
+    reason: str                    # "off" | "precool" | "max" | "away" | "optimizer"
 
 
 def _setting_values(overrides, room: str) -> dict:
@@ -142,12 +153,18 @@ class CoolingAutomation:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._path = service.store.path
+        self._optimized: dict[str, tuple] = {}
         conn = self._connect()
         try:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS plan_state ("
                 "unit_id TEXT PRIMARY KEY, off_since_utc TEXT, "
                 "last_target REAL)")
+            try:
+                conn.execute("ALTER TABLE plan_state ADD COLUMN "
+                             "hold_on INTEGER NOT NULL DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass                       # column exists already
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS away_state ("
                 "id INTEGER PRIMARY KEY CHECK (id = 1), away INTEGER NOT NULL, "
@@ -194,26 +211,27 @@ class CoolingAutomation:
         conn.execute("PRAGMA busy_timeout = 5000")
         return conn
 
-    def _load(self, unit_id: str) -> tuple[str | None, float | None]:
+    def _load(self, unit_id: str) -> tuple[str | None, float | None, bool]:
         conn = self._connect()
         try:
             row = conn.execute(
-                "SELECT off_since_utc, last_target FROM plan_state "
+                "SELECT off_since_utc, last_target, hold_on FROM plan_state "
                 "WHERE unit_id = ?", (unit_id,)).fetchone()
         finally:
             conn.close()
-        return (row[0], row[1]) if row else (None, None)
+        return (row[0], row[1], bool(row[2])) if row else (None, None, False)
 
     def _save(self, unit_id: str, off_since: str | None,
-              last_target: float | None) -> None:
+              last_target: float | None, hold: bool = False) -> None:
         conn = self._connect()
         try:
             conn.execute(
-                "INSERT INTO plan_state (unit_id, off_since_utc, last_target) "
-                "VALUES (?, ?, ?) ON CONFLICT(unit_id) DO UPDATE SET "
-                "off_since_utc = excluded.off_since_utc, "
-                "last_target = excluded.last_target",
-                (unit_id, off_since, last_target))
+                "INSERT INTO plan_state (unit_id, off_since_utc, last_target, "
+                "hold_on) VALUES (?, ?, ?, ?) ON CONFLICT(unit_id) DO UPDATE "
+                "SET off_since_utc = excluded.off_since_utc, "
+                "last_target = excluded.last_target, "
+                "hold_on = excluded.hold_on",
+                (unit_id, off_since, last_target, int(hold)))
         finally:
             conn.close()
 
@@ -260,24 +278,95 @@ class CoolingAutomation:
         return [Period(r.ts_utc, r.price_c_kwh) for r in rows or []]
 
     def _plan(self, now: datetime):
+        """Units, the plan per unit (today, then tomorrow when stored) and
+        the optimizer's result per unit (None: fixed thresholds)."""
         units = self._service.store.unit_states()
-        periods = self._periods(now.astimezone(HELSINKI).date())
-        plan = build_plan(self._settings.overrides(),
-                          [u["id"] for u in units], periods, self.away())
-        return units, plan
+        today = now.astimezone(HELSINKI).date()
+        periods = self._periods(today)
+        if periods:
+            periods += self._periods(today + timedelta(days=1))
+        overrides = self._settings.overrides()
+        away = self.away()
+        plan = build_plan(overrides, [u["id"] for u in units], periods, away)
+        results: dict[str, optimizer.Plan | None] = {}
+        if plan and not away:
+            for state in units:
+                if state["id"] in plan:
+                    results[state["id"]] = self._optimize(
+                        state, plan, overrides, now)
+        return units, plan, results
+
+    def _optimize(self, state, plan, overrides, now) -> optimizer.Plan | None:
+        """Replace the plan from the current period on with the optimizer's
+        (card F5.4); planned once per period and cached."""
+        unit_id = state["id"]
+        values = _setting_values(overrides, unit_id)
+        if not values["cool_optimizer"] or state["room_temp"] is None:
+            return None
+        rows = plan[unit_id]
+        now_ts = int(now.timestamp())
+        i = next((k for k, r in enumerate(rows)
+                  if r.ts_utc <= now_ts < r.ts_utc + INTERVAL_SECONDS), None)
+        if i is None:
+            return None
+        off_since, _target, _hold = self._load(unit_id)
+        need = max(1, -(-int(values["min_off_minutes"]) * 60 // INTERVAL_SECONDS))
+        start_off = 0
+        if not state["power"] and off_since is not None:
+            try:
+                since = datetime.fromisoformat(off_since)
+                start_off = 1 + int((now - since).total_seconds()) // INTERVAL_SECONDS
+            except ValueError:
+                start_off = need
+        key = (rows[i].ts_utc, len(rows), rows[-1].ts_utc,
+               tuple(sorted(values.items())), min(start_off, need))
+        cached = self._optimized.get(unit_id)
+        if cached is not None and cached[0] == key:
+            result = cached[1]
+        else:
+            models, (_observed, future), _ahead = self._service.learned_models(SITE)
+            model = models.get(unit_id)
+            limits = optimizer.Limits(
+                float(values["cool_max_c"]), float(values["precool_c"]),
+                float(values["low_price_c_kwh"]), float(values["high_price_c_kwh"]),
+                bool(values["cool_off_when_expensive"]), need)
+            result = None if model is None else optimizer.optimize(
+                model, float(state["room_temp"]), start_off,
+                [(r.ts_utc, float(r.price_c_kwh)) for r in rows[i:]],
+                future, limits, [(r.off, r.target_c) for r in rows[i:]])
+            self._optimized[unit_id] = (key, result)
+        if result is not None and result.optimized:
+            rows[i:] = [CoolPeriod(r.ts_utc, rows[i + k].price_c_kwh, r.target_c,
+                                   r.off, "off" if r.off else "optimizer")
+                        for k, r in enumerate(result.steps)]
+        return result
 
     def day_plan(self) -> dict:
         """Today's plan per unit as merged windows, for the app."""
         now = self._now()
-        units, plan = self._plan(now)
-        shown = [{"id": u["id"], "name": u["name"],
-                  "active": u["mode"] == "Cool",
-                  "windows": merge_windows(plan[u["id"]])}
-                 for u in units if u["id"] in plan]
+        units, plan, results = self._plan(now)
+        _start, end = helsinki_day_bounds(now.astimezone(HELSINKI).date())
+        shown = []
+        for u in units:
+            if u["id"] not in plan:
+                continue
+            result = results.get(u["id"])
+            shown.append({
+                "id": u["id"], "name": u["name"],
+                "active": u["mode"] == "Cool",
+                "windows": merge_windows([r for r in plan[u["id"]]
+                                          if r.ts_utc < end]),
+                "optimizer": None if result is None else {
+                    "optimized": result.optimized,
+                    "cost_c": round(result.cost_c, 2),
+                    "fixed_cost_c": round(result.fixed_cost_c, 2),
+                    "over_max_c_h": round(result.over_max_c_h, 2),
+                    "fixed_over_max_c_h": round(result.fixed_over_max_c_h, 2)},
+            })
         return {"enabled": self.enabled, "actor": ACTOR,
                 "day": now.astimezone(HELSINKI).date().isoformat(),
                 "has_prices": bool(plan), "away": self.away(),
-                "units": shown}
+                "cool_kw": optimizer.COOL_KW, "units": shown}
 
     # -- apply --
 
@@ -288,7 +377,7 @@ class CoolingAutomation:
         and the HTTP-style status of the request.
         """
         now = self._now()
-        units, plan = self._plan(now)
+        units, plan, _results = self._plan(now)
         fresh = {u["id"]: u["fresh"] for u in self._service.view()["units"]}
         overrides = self._settings.overrides()
         sent: list[dict] = []
@@ -367,14 +456,14 @@ class CoolingAutomation:
 
     def _apply(self, state, current: CoolPeriod, values, now) -> list[dict]:
         unit_id = state["id"]
-        off_since, last_target = self._load(unit_id)
+        off_since, last_target, hold = self._load(unit_id)
         sent: list[dict] = []
         if state["power"] and off_since is not None:
             # Switched on again (by us or by the household).
             off_since = None
-            self._save(unit_id, None, last_target)
+            self._save(unit_id, None, last_target, hold)
 
-        if current.off:
+        if current.off and not (hold and state["power"]):
             if state["power"]:
                 result = self._command(state, "power", False)
                 sent.append(result)
@@ -382,13 +471,17 @@ class CoolingAutomation:
                     self._save(unit_id, now.isoformat(), None)
             elif off_since is not None:
                 # Off by us during an expensive period: back on only when the
-                # room has reached the maximum and the minimum off time is up.
+                # room has reached the maximum and the minimum off time is up;
+                # it then holds the maximum until the stretch ends.
                 room = state["room_temp"]
                 if (self._off_time_over(off_since, values, now)
                         and room is not None
                         and room >= float(values["cool_max_c"])):
-                    sent.append(self._power_on(state, last_target))
+                    sent.append(self._power_on(state, last_target, hold=True))
             return sent
+        if not current.off and hold:
+            hold = False
+            self._save(unit_id, off_since, last_target)
 
         if not state["power"]:
             if off_since is not None and self._off_time_over(off_since, values, now):
@@ -399,14 +492,14 @@ class CoolingAutomation:
             result = self._command(state, "setpoint", current.target_c)
             sent.append(result)
             if result["status"] == 202:
-                self._save(unit_id, None, current.target_c)
+                self._save(unit_id, None, current.target_c, hold)
         return sent
 
-    def _power_on(self, state, last_target) -> dict:
+    def _power_on(self, state, last_target, hold: bool = False) -> dict:
         result = self._command(state, "power", True)
         if result["status"] == 202:
             # The setpoint is set again on the next pass, once on.
-            self._save(state["id"], None, None)
+            self._save(state["id"], None, None, hold)
         return result
 
     @staticmethod

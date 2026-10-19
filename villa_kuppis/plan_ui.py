@@ -46,6 +46,16 @@ SCRIPT = r"""
       .then(function (r) { return r.json(); })
       .then(render).catch(function () {});
   });
+  function optimizerText(o) {
+    if (!o) return "Kiinteät hintarajat (optimointi pois tai huoneen jäähdytysnopeutta ei ole vielä opittu).";
+    if (!o.optimized) return "Optimoija käytössä: kiinteät hintarajat ovat nyt yhtä edulliset, joten niitä noudatetaan.";
+    var text = "Optimoitu opituilla nopeuksilla";
+    if (o.fixed_cost_c > 0) {
+      var pct = Math.round(100 * (o.fixed_cost_c - o.cost_c) / o.fixed_cost_c);
+      text += ": arvioitu säästö " + pct + " % kiinteisiin hintarajoihin verrattuna";
+    }
+    return text + ".";
+  }
   function render(data) {
     showAway(!!data.away);
     $body.textContent = "";
@@ -68,6 +78,12 @@ SCRIPT = r"""
         ul.appendChild(li);
       });
       $body.appendChild(h);
+      if (!data.away) {
+        var p = document.createElement("p");
+        p.className = "detail";
+        p.textContent = optimizerText(u.optimizer);
+        $body.appendChild(p);
+      }
       $body.appendChild(ul);
     });
   }

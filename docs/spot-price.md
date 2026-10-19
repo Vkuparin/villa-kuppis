@@ -74,6 +74,16 @@ The fit uses the last 28 days of stored readings in 15-minute steps and ordinary
 
 **Agreed error:** the model is trained on the days before the most recent complete day, then predicts that day from its first reading with the recorded controls and outdoor temperature. The day's mean absolute error must be at most 1.0 °C (the pumps report the room in 0.5 °C steps). The app shows the rates at the current conditions, the held-out result and a six-hour prediction with the unit off, using the FMI point forecast (`fmi::forecast::edited::weather::scandinavia::point::timevaluepair`, parameter `Temperature`).
 
+## Cooling optimizer
+
+Card F5.4, in `villa_kuppis/optimizer.py`; `cooling.py` applies it. The setting `Optimoitu jäähdytys` (on by default, per site or room) uses it once the room's cooling rate is learned; until then, in away mode or with the setting off, the fixed thresholds apply.
+
+From the current period to the end of the known prices (today, and tomorrow once fetched) it picks a setpoint between the precooling temperature and the maximum, or off, for each 15-minute period. Off is allowed only where the fixed rule allows it (price at or above the high price, `Sammuta kalliilla hinnalla` on) and lasts at least the minimum off time. The cost is the compressor's share of each period at a nominal 1 kW plus a small fan load while on, so the estimates are relative. A room above the maximum carries a large penalty, so the plan stays within it whenever the unit can hold it. The cold left in the room when the prices run out is valued at the horizon's median price.
+
+Dynamic programming on a 0.1 °C grid finds the plan, which is then simulated with the learned model and compared with the fixed-threshold plan simulated the same way; the cheaper one is used, so the optimizer never plans to cost more than the fixed thresholds. It replans at each new period from the room's measured temperature, and the same switch-off safeguards as the fixed thresholds apply. Tests run both on the recorded Elering days in `tests/fixtures`.
+
+A unit brought back on because its room reached the maximum now holds the maximum until the expensive stretch ends, instead of being switched off again on the next pass.
+
 ## Plan view
 
 Today's and tomorrow's prices with the planned target per period and per room, the estimated cost, and the reason for each change (threshold, optimizer, visit).
