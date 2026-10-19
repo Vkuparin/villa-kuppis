@@ -9,8 +9,9 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 import threading
 
-from .pump_app import PumpAppServer, make_demo_service
+from .pump_app import DEFAULT_PLAN_INTERVAL, PumpAppServer, make_demo_service
 from .pump_service import make_live_service
+from .service import SpotPriceService
 from .weather import parse_coord_spec
 from .windows_credentials import DEFAULT_TARGET, read_credentials
 
@@ -24,13 +25,15 @@ class Config:
     credential_target: str = DEFAULT_TARGET
     # Optional {"home": "lat,lon", "cottage": "lat,lon"} for FMI weather.
     weather: tuple = ()
+    # Apply the price-threshold cooling plan to the pumps (off: only shown).
+    plan: bool = False
 
     @classmethod
     def load(cls, path):
         raw = json.loads(Path(path).read_text(encoding="utf-8-sig"))
         if not isinstance(raw, dict) or set(raw) - {
                 "data_dir", "backup_dir", "public_origin", "port", "credential_target",
-                "weather"}:
+                "weather", "plan"}:
             raise ValueError("Invalid service configuration fields")
         weather = raw.get("weather", {})
         if not isinstance(weather, dict) or set(weather) - {"home", "cottage"}:
@@ -40,9 +43,12 @@ class Config:
                           for site, spec in sorted(weather.items()))
         except (AttributeError, ValueError):
             raise ValueError("Invalid weather coordinates") from None
+        if type(raw.get("plan", False)) is not bool:
+            raise ValueError("Invalid plan setting")
         config = cls(Path(raw["data_dir"]), Path(raw["backup_dir"]),
                      raw.get("public_origin"), raw.get("port", 8377),
-                     raw.get("credential_target", DEFAULT_TARGET), sites)
+                     raw.get("credential_target", DEFAULT_TARGET), sites,
+                     raw.get("plan", False))
         if not config.data_dir.is_absolute() or not config.backup_dir.is_absolute():
             raise ValueError("Service data and backup paths must be absolute")
         if config.data_dir.resolve() == config.backup_dir.resolve():
@@ -52,8 +58,24 @@ class Config:
         return config
 
 
+def price_loop(data_dir, stop, *, service_factory=SpotPriceService, poll_seconds=300):
+    """Fetch tomorrow's spot prices once a day (after 14:25 Helsinki) into prices.db."""
+    service = service_factory(data_dir)
+    try:
+        while not stop.is_set():
+            try:
+                outcome = service.schedule_once()
+                if outcome.status in ("ok", "error"):
+                    logging.info("Spot price fetch: %s", outcome.status)
+            except Exception as error:
+                logging.error("Spot price fetch failed: %s", type(error).__name__)
+            stop.wait(poll_seconds)
+    finally:
+        service.close()
+
+
 def run(config: Config, *, demo=False, stop_event=None, service_factory=None,
-        server_factory=PumpAppServer, backup_factory=None):
+        server_factory=PumpAppServer, backup_factory=None, price_factory=price_loop):
     """Own all runtime resources; injected factories keep tests offline."""
     if backup_factory is None:
         from .backup import BackupLoop
@@ -66,7 +88,8 @@ def run(config: Config, *, demo=False, stop_event=None, service_factory=None,
         else:
             credentials = read_credentials(config.credential_target)
             service_factory = lambda data: make_live_service(
-                data, credentials=credentials, weather_sites=dict(config.weather))
+                data, credentials=credentials, weather_sites=dict(config.weather),
+                automation_interval=DEFAULT_PLAN_INTERVAL if config.plan else None)
     service = service_factory(config.data_dir)
     server = backups = None
     try:
@@ -76,12 +99,16 @@ def run(config: Config, *, demo=False, stop_event=None, service_factory=None,
         service.start()
         backups = backup_factory(config.data_dir, config.backup_dir)
         backups.start()
+        if not demo:
+            threading.Thread(target=price_factory, args=(config.data_dir, stop),
+                             name="spot-prices", daemon=True).start()
         logging.info("Service started")
         while not stop.is_set():
             server.handle_request()
     except KeyboardInterrupt:
         pass
     finally:
+        stop.set()
         try:
             if server is not None:
                 server.server_close()

@@ -303,6 +303,33 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(live.call_args.kwargs["weather_sites"], {"home":(60.2,24.9)})
             read.assert_called_once()
 
+    def test_plan_setting_enables_automation_and_prices_load_only_live(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "service.json"
+            values = {"data_dir":str(Path(temp)/"data"),"backup_dir":str(Path(temp)/"backups")}
+            path.write_text(json.dumps(values))
+            self.assertFalse(Config.load(path).plan)
+            path.write_text(json.dumps(dict(values, plan="yes")))
+            with self.assertRaises(ValueError):
+                Config.load(path)
+            path.write_text(json.dumps(dict(values, plan=True)))
+            config = Config.load(path)
+            stop, prices = threading.Event(), mock.Mock()
+            server = mock.Mock()
+            server.handle_request.side_effect = stop.set
+            with mock.patch("villa_kuppis.runtime.read_credentials"), \
+                    mock.patch("villa_kuppis.runtime.make_live_service") as live:
+                run(config, stop_event=stop, server_factory=lambda *a, **k: server,
+                    backup_factory=lambda *a: mock.Mock(), price_factory=prices)
+            self.assertEqual(live.call_args.kwargs["automation_interval"], 60.0)
+            prices.assert_called_once()
+            demo_prices = mock.Mock()
+            run(Config(Path(temp)/"d2", Path(temp)/"b2"), demo=True, stop_event=threading.Event(),
+                service_factory=lambda _: mock.Mock(),
+                server_factory=lambda *a, **k: mock.Mock(handle_request=mock.Mock(side_effect=KeyboardInterrupt)),
+                backup_factory=lambda *a: mock.Mock(), price_factory=demo_prices)
+            demo_prices.assert_not_called()
+
     def test_runner_cleans_up_and_does_not_read_credentials_for_demo(self):
         service, server, backup = mock.Mock(), mock.Mock(), mock.Mock()
         stop = threading.Event()
