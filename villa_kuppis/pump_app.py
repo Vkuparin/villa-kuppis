@@ -551,6 +551,9 @@ function renderView(view) {
   }
   $updated.textContent = svc.last_ok ? "Päivitetty " + fmtWhen(svc.last_ok) : "";
   document.title = svc.state === "ok" ? "Pumput" : "Pumput — " + text;
+  // Rebuilding the cards would close a list the user is choosing from.
+  const active = document.activeElement;
+  if (active && active.tagName === "SELECT" && $cards.contains(active)) return;
   $cards.innerHTML = view.units.map(cardHtml).join("") ||
     '<p class="badge info">Ei yksiköitä tiedossa vielä.</p>';
 }
@@ -894,13 +897,17 @@ function onControl(e) {
   const action = el.dataset.action;
   if (action === "setpoint-select") {
     // A click only opens the list; send once the value has been chosen.
-    if (e.type === "change") sendCommand(unitId, "setpoint", Number(el.value));
+    if (e.type === "change") {
+      sendCommand(unitId, "setpoint", Number(el.value));
+      el.blur();
+    }
     return;
   }
   if (el.tagName === "SELECT") {
     if (el.value === el.dataset.lastValue) return;
     el.dataset.lastValue = el.value;
     sendCommand(unitId, action, el.value);
+    el.blur();
     return;
   }
   if (action === "setpoint") {
@@ -929,6 +936,9 @@ renderView = function (view) {
 
 $cards.addEventListener("click", onControl);
 $cards.addEventListener("change", onControl);
+$cards.addEventListener("focusout", () => {
+  setTimeout(() => { if (lastView) renderView(lastView); }, 0);
+});
 $histUnit.addEventListener("change", loadHistory);
 $histRange.addEventListener("change", loadHistory);
 $histSite.addEventListener("change", loadHistory);
