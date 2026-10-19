@@ -16,7 +16,7 @@ The live transport makes one HTTP attempt per control request, then verifies sta
 
 Offline validation at `62b43ea`: 29 focused pump tests, demo and help passed on Windows Python 3.13. Tests cover secure prompts, bounds, confirmations, ambiguous writes, installed-client HTTP behavior, restoration failure, interruption, control drift and sanitized diagnostics. Sol 6.1 Medium handled design, diagnosis and the final read-back repair; Kynsi implemented the initial probe and restoration repair. Document parsing and whitespace checks passed at the preceding checkpoint.
 
-The owner also approved an on/30-second/off test; preparation is in progress. Realtime updates, app-side change detection and the other two units remain untested.
+Power-test preparation at `7861cda`: 38 focused pump tests, offline demo/help, document parsing and whitespace checks passed. Sol 6.1 Medium added the separately approved on/30-second/off test, including off cleanup after interruption and detection of changes to other controls. The local live console is open; the result is pending. Realtime updates, app-side change detection and the other two units remain untested.
 
 ## D. Spot prices and fixed thresholds
 
