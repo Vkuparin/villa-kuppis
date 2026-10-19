@@ -6,7 +6,7 @@ Ideas the owner agreed to that have no release yet. Add a feature heading and th
 
 | ID | Task and Done when | Agent | Depends on | Status |
 | --- | --- | --- | --- | --- |
-| W1.1 | Let Kynsi coordinate and implement T2–T3, use Sol 6.1 Light for completed T2 batch reviews and Medium for T1, and allow Codex subscription agents from Hermes while preserving manual Claude coordination. Done when project, template and bridge checks pass. | Tier 1 | | In progress: codex:01a1517c-f9b4-7371-88e2-4aac2b793140, main, workflow 02df30a and approved repair 7a8987e reviewed; template 82fc5c3/d989896 and bridge 67753c9/008e2a5. Eighteen Node checks, four installer checks, actual Codex parser and nineteen template checks passed. Actual Kynsi-to-Codex Light re-review completed with no findings; all four instruction-file edits approved and applied. Final bridge status-race/managed-terminal followup F1.14 remains before closing setup. |
+| W1.1 | Let Kynsi coordinate and implement T2–T3, use Sol 6.1 Light for completed T2 batch reviews and Medium for T1, and allow Codex subscription agents from Hermes while preserving manual Claude coordination. Done when project, template and bridge checks pass. | Tier 1 | | Done: workflow 02df30a and approved repair 7a8987e; template 82fc5c3/d989896; bridge 67753c9/d01b459. Twenty-one Node bridge checks, four Python installer checks, actual Codex plugin parser, nineteen template checks, document and whitespace checks passed. Actual Kynsi-to-Codex subscription review and re-review completed; re-review had no findings. Plugin 0.4.1 installed, Hermes policy updated and Hermes-only Claude provider disabled. Manual Claude workflows and owner settings preserved. |
 
 ## L1. Beyond the first releases
 
