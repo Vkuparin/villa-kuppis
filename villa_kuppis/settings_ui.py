@@ -70,7 +70,10 @@ SCRIPT = r"""
   function controlFor(d, eff, id) {
     var v = eff.value, el;
     if (d.type === "bool") {
-      el = make("input", { type: "checkbox", id: id, checked: !!v });
+      el = make("button", { type: "button", id: id, className: "switch" });
+      el.setAttribute("role", "switch");
+      el.setAttribute("aria-checked", v ? "true" : "false");
+      el.appendChild(make("span", { className: "track" }));
     } else if (d.type === "choice") {
       el = make("select", { id: id });
       d.choices.forEach(function (c) {
@@ -89,7 +92,7 @@ SCRIPT = r"""
     return el;
   }
   function readControl(d, el) {
-    if (d.type === "bool") return el.checked;
+    if (d.type === "bool") return el.getAttribute("aria-checked") === "true";
     if (d.type === "number") return el.value === "" ? null : Number(el.value);
     return el.value;
   }
@@ -113,7 +116,10 @@ SCRIPT = r"""
       var src = make("span", { className: "set-src",
         textContent: SRC[eff[d.key].source] });
       // Saved when the control is released ("change"), not on every keystroke.
-      ctl.addEventListener("change", function () {
+      ctl.addEventListener(d.type === "bool" ? "click" : "change", function () {
+        if (d.type === "bool") {
+          ctl.setAttribute("aria-checked", readControl(d, ctl) ? "false" : "true");
+        }
         var v = readControl(d, ctl);
         if (v === null) {
           say("Anna arvo ennen tallennusta.", true);
