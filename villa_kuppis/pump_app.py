@@ -234,6 +234,10 @@ section.history h2 { margin: 0 0 .6rem; font-size: 1.15rem; }
                font-size: .85rem; color: #44505c; }
 .hist-legend .swatch { display: inline-block; width: 1.4rem; height: .28rem;
                        margin-right: .35rem; vertical-align: middle; }
+.hist-energy { margin-top: .75rem; font-size: .9rem; }
+.hist-energy table { max-width: 32rem; }
+.hist-energy th, .hist-energy td { text-align: right; padding: .15rem .5rem; }
+.hist-energy th:first-child, .hist-energy td:first-child { text-align: left; }
 .hist-empty { color: #55606b; padding: 1rem 0; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid #e3e8ec;
@@ -294,6 +298,7 @@ ohjaavat vain esittelyyksiköitä.</div>
     <div id="hist-chart" class="hist-chart" role="img"
          aria-label="Lämpötilojen ja sähkönhinnan kaavio"></div>
     <ul id="hist-legend" class="hist-legend"></ul>
+    <div id="hist-energy" class="hist-energy"></div>
     <p class="detail">Ulkolämpötila: Ilmatieteen laitoksen havaintoasema,
       <a href="https://en.ilmatieteenlaitos.fi/open-data-licence">avoin data (CC BY 4.0)</a>.
       Sähkönhinta: Elering. Käyrät on harvennettu näytölle.</p>
@@ -333,6 +338,7 @@ const $histSite = document.getElementById("hist-site");
 const $histChart = document.getElementById("hist-chart");
 const $histStatus = document.getElementById("hist-status");
 const $histLegend = document.getElementById("hist-legend");
+const $histEnergy = document.getElementById("hist-energy");
 
 const tempFmt = new Intl.NumberFormat("fi-FI",
   { minimumFractionDigits: 1, maximumFractionDigits: 1 });
@@ -544,6 +550,8 @@ const HIST_SERIES = [
     scale: "temp", dash: "7 5" },
   { key: "outdoor", label: "Ulkolämpötila", color: "#0b3f9e",
     scale: "temp", dash: "2 4" },
+  { key: "plan", label: "Suunnitelman tavoite", color: "#6a2c91",
+    scale: "temp", dash: "10 3 2 3" },
 ];
 const PRICE_SERIES = { key: "price", label: "Sähkön hinta (snt/kWh)",
                        color: "#8a5b00", scale: "price", dash: "1 4" };
@@ -627,6 +635,7 @@ function drawHistory(data) {
   if (!allTemp.length && !pricePts.length) {
     $histChart.innerHTML = '<p class="hist-empty">Ei historiaa tälle valinnalle.</p>';
     $histLegend.textContent = "";
+    $histEnergy.textContent = "";
     return;
   }
   const W = Math.max(320, $histChart.clientWidth || 900);
@@ -706,6 +715,21 @@ function drawHistory(data) {
       "stroke-dasharray": PRICE_SERIES.dash, "stroke-linejoin": "round" }));
   }
 
+  // Confirmed or failed commands: a tick along the bottom edge with a tooltip.
+  const marks = data.commands || [];
+  for (const c of marks) {
+    const t = new Date(c.ts).getTime();
+    if (!(t >= t0 && t <= t1)) continue;
+    const x = X(t);
+    const color = c.result === "failed" ? "#a11d1d" : "#44505c";
+    const tick = svgEl("line", { x1: x, x2: x, y1: H - m.bottom - 12,
+      y2: H - m.bottom, stroke: color, "stroke-width": 2 });
+    tick.appendChild(svgEl("title", {}, fmtTimeTick(t, "week") + " " +
+      c.actor + ": " + changeText(c.action, c.requested) + " (" +
+      (RESULT_TEXT[c.result] || c.result) + ")"));
+    svg.appendChild(tick);
+  }
+
   $histChart.appendChild(svg);
 
   const items = series.map((s) =>
@@ -714,7 +738,31 @@ function drawHistory(data) {
   if (hasPrice) items.push(
     '<li><span class="swatch" style="background:' + PRICE_SERIES.color +
     '"></span>' + esc(PRICE_SERIES.label) + "</li>");
+  if (marks.length) items.push(
+    '<li><span class="swatch" style="background:#44505c;height:.7rem;width:.2rem">' +
+    "</span>Komennot</li>");
   $histLegend.innerHTML = items.join("");
+  drawEnergy(data.energy || []);
+}
+
+const eurFmt = new Intl.NumberFormat("fi-FI",
+  { style: "currency", currency: "EUR" });
+const kwhFmt = new Intl.NumberFormat("fi-FI", { maximumFractionDigits: 1 });
+
+function drawEnergy(days) {
+  if (!days.length) {
+    $histEnergy.innerHTML = '<p class="detail">Energian kulutus ja kustannus: ei tiedossa.</p>';
+    return;
+  }
+  const shown = days.slice(-31);
+  $histEnergy.innerHTML = (days.length > shown.length
+    ? '<p class="detail">Viimeiset 31 päivää.</p>' : "") +
+    "<table><thead><tr><th>Päivä</th><th>kWh</th>" +
+    "<th>Kustannus</th></tr></thead><tbody>" + shown.map((d) =>
+    "<tr><td>" + esc(d.date) + "</td><td>" + kwhFmt.format(d.kwh) + "</td><td>" +
+    (d.cost_eur === null ? "ei tiedossa"
+      : eurFmt.format(d.cost_eur) + (d.cost_complete ? "" : " (osa tunneista)")) +
+    "</td></tr>").join("") + "</tbody></table>";
 }
 
 let histRequest = 0;
@@ -725,7 +773,7 @@ async function loadHistory() {
   const unit = $histUnit.value;
   const range = $histRange.value;
   const site = $histSite.value;
-  if (!unit) { $histChart.innerHTML = ""; $histLegend.textContent = ""; return; }
+  if (!unit) { $histChart.innerHTML = ""; $histLegend.textContent = ""; $histEnergy.textContent = ""; return; }
   histAbort = new AbortController();
   $histStatus.textContent = "Haetaan\u2026";
   try {

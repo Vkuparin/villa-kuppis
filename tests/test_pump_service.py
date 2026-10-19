@@ -899,6 +899,66 @@ class StoreHistoryTests(unittest.TestCase):
             self.store.outdoor_series("cottage", base,
                                       base + timedelta(hours=6), 288), [])
 
+    def test_plan_series_and_command_marks(self):
+        base = datetime(2026, 10, 19, 0, 0, tzinfo=timezone.utc)
+        self.store.plan_upsert("u1", [(base + timedelta(hours=h), 21.0 + h)
+                                      for h in range(3)])
+        self.store.plan_upsert("u1", [(base, 20.0)])  # refresh, not duplicate
+        rows = self.store.plan_series("u1", base, base + timedelta(hours=24),
+                                      288)
+        self.assertEqual([r[1] for r in rows], [20.0, 22.0, 23.0])
+        self.assertEqual(self.store.plan_series(
+            "u2", base, base + timedelta(hours=24), 288), [])
+        first = self.store.add_event((base + timedelta(hours=1)).isoformat(),
+                                     "u1", "X", "Ville", "setpoint", 22.0)
+        self.store.finish_event(first, "confirmed")
+        self.store.add_event((base + timedelta(hours=2)).isoformat(),
+                             "u1", "X", "Ville", "fan", "Auto")  # pending
+        failed = self.store.add_event(
+            (base + timedelta(hours=3)).isoformat(), "u1", "X", "Ville",
+            "power", True)
+        self.store.finish_event(failed, "failed", "boom")
+        marks = self.store.command_marks("u1", base, base + timedelta(hours=24))
+        self.assertEqual([(m["action"], m["result"]) for m in marks],
+                         [("setpoint", "confirmed"), ("power", "failed")])
+        self.assertEqual(self.store.command_marks(
+            "u2", base, base + timedelta(hours=24)), [])
+
+    def test_energy_daily_cost_and_gaps(self):
+        from decimal import Decimal
+        from villa_kuppis.prices import PriceInterval
+        from villa_kuppis.storage import PriceStore
+        base = datetime(2026, 10, 19, 0, 0, tzinfo=timezone.utc)
+        end = base + timedelta(days=2)
+        prices_path = Path(self.tmp) / "prices.db"
+        self.assertEqual(self.store.energy_daily("u1", prices_path, base, end),
+                         [])
+        # 10 EUR/MWh = 1 c/kWh for the first hour only.
+        pstore = PriceStore(prices_path)
+        try:
+            pstore.replace_day("2026-10-19", [
+                PriceInterval(int((base + timedelta(minutes=15 * i))
+                                  .timestamp()), Decimal("10"))
+                for i in range(4)], datetime(2026, 10, 19, 9, 0,
+                                             tzinfo=timezone.utc))
+        finally:
+            pstore.close()
+        self.store.energy_upsert("u1", [
+            (base, 2.0), (base + timedelta(hours=1), 1.0),  # 2nd has no price
+            (base + timedelta(days=1, hours=5), 3.0)])
+        days = self.store.energy_daily("u1", prices_path, base, end)
+        self.assertEqual([d["date"] for d in days],
+                         ["2026-10-19", "2026-10-20"])
+        self.assertEqual(days[0]["kwh"], 3.0)
+        self.assertAlmostEqual(days[0]["cost_eur"], 0.02)
+        self.assertFalse(days[0]["cost_complete"])
+        self.assertIsNone(days[1]["cost_eur"])
+        # Without any prices.db the energy still shows, cost unknown.
+        days = self.store.energy_daily("u1", Path(self.tmp) / "none.db",
+                                       base, end)
+        self.assertEqual(days[0]["kwh"], 3.0)
+        self.assertIsNone(days[0]["cost_eur"])
+
     def test_price_series_missing_db_is_none(self):
         base = datetime(2026, 10, 19, 0, 0, tzinfo=timezone.utc)
         self.assertIsNone(self.store.price_series(
@@ -961,6 +1021,9 @@ class HistoryServiceTests(ServiceTestCase):
             self.assertLessEqual(len(payload[key]), 288)
             self.assertTrue(payload[key][0][0].endswith("+00:00"))
         self.assertIsNone(payload["price"])  # no prices.db in this data dir
+        self.assertEqual(payload["plan"], [])
+        self.assertEqual(payload["commands"], [])
+        self.assertEqual(payload["energy"], [])
 
     def test_history_rejects_unknown_range(self):
         service, _clock = self._start(FakeClient(make_unit_payloads()))

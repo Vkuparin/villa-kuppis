@@ -32,6 +32,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Sequence
+from zoneinfo import ZoneInfo
 
 from aiomelcloudhome.models.ata import ATAFanSpeed, ATAOperationMode
 
@@ -60,6 +61,8 @@ ACTIONS = ("power", "setpoint", "mode", "fan")
 # unless one of the five fields changed since the last row, and /api/history is
 # downsampled to at most the per-range point budgets below (year stays ~1s).
 HISTORY_INTERVAL_SECONDS = 300
+COMMAND_MARK_LIMIT = 200
+HELSINKI = ZoneInfo("Europe/Helsinki")
 HISTORY_RANGES = {
     "day": (24 * 3600, 288),
     "week": (7 * 24 * 3600, 700),
@@ -291,6 +294,18 @@ CREATE TABLE IF NOT EXISTS outdoor_temperature (
     ts_utc INTEGER NOT NULL,
     temp_c REAL NOT NULL,
     PRIMARY KEY (site, ts_utc)
+);
+CREATE TABLE IF NOT EXISTS plan_target (
+    unit_id TEXT NOT NULL,
+    ts_utc INTEGER NOT NULL,
+    target_c REAL NOT NULL,
+    PRIMARY KEY (unit_id, ts_utc)
+);
+CREATE TABLE IF NOT EXISTS pump_energy (
+    unit_id TEXT NOT NULL,
+    ts_utc INTEGER NOT NULL,
+    kwh REAL NOT NULL,
+    PRIMARY KEY (unit_id, ts_utc)
 );
 """
 
@@ -541,6 +556,110 @@ class PumpStore:
         finally:
             conn.close()
         return [(ts, float(Decimal(raw) / Decimal(10))) for ts, raw in rows]
+
+    # -- plan targets, commands, energy and cost (card F3.3) ------------------
+
+    def plan_upsert(self, unit_id: str, values: Sequence[tuple]) -> int:
+        """Insert/refresh plan targets as (ts, target_c) pairs; return rows."""
+        rows = [(unit_id, _to_epoch(ts), float(t)) for ts, t in values]
+        if not rows:
+            return 0
+        with self._lock:
+            self._conn.executemany(
+                "INSERT INTO plan_target (unit_id, ts_utc, target_c) "
+                "VALUES (?, ?, ?) ON CONFLICT(unit_id, ts_utc) DO UPDATE SET "
+                "target_c = excluded.target_c", rows)
+            self._conn.commit()
+        return len(rows)
+
+    def plan_series(self, unit_id: str, start, end,
+                    max_points: int) -> list[tuple]:
+        """Downsampled (ts, target_c) plan rows, last sample per bucket."""
+        s, e = _to_epoch(start), _to_epoch(end)
+        b = self._bucket_seconds(s, e, max_points)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT ts_utc, target_c FROM ("
+                "  SELECT ts_utc, target_c, "
+                "         ROW_NUMBER() OVER (PARTITION BY CAST((ts_utc - ?) / ? AS INTEGER) "
+                "                            ORDER BY ts_utc DESC) AS rn "
+                "  FROM plan_target WHERE unit_id = ? AND ts_utc >= ? "
+                "    AND ts_utc < ?"
+                ") WHERE rn = 1 ORDER BY ts_utc", (s, b, unit_id, s, e)).fetchall()
+        return [tuple(r) for r in rows]
+
+    def command_marks(self, unit_id: str, start, end,
+                      limit: int = COMMAND_MARK_LIMIT) -> list[dict]:
+        """Commands of one unit in the range, oldest first (newest `limit`)."""
+        s, e = _iso(_to_epoch(start)), _iso(_to_epoch(end))
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT ts_utc, actor, action, requested, result FROM event "
+                "WHERE unit_id = ? AND ts_utc >= ? AND ts_utc < ? "
+                "AND result != 'pending' ORDER BY ts_utc DESC, id DESC LIMIT ?",
+                (unit_id, s, e, limit)).fetchall()
+        return [{"ts": r["ts_utc"], "actor": r["actor"],
+                 "action": r["action"], "requested": json.loads(r["requested"]),
+                 "result": r["result"]} for r in reversed(rows)]
+
+    def energy_upsert(self, unit_id: str, values: Sequence[tuple]) -> int:
+        """Insert/refresh energy as (hour_start, kwh) pairs; return rows."""
+        rows = [(unit_id, _to_epoch(ts), float(k)) for ts, k in values]
+        if not rows:
+            return 0
+        with self._lock:
+            self._conn.executemany(
+                "INSERT INTO pump_energy (unit_id, ts_utc, kwh) VALUES (?, ?, ?) "
+                "ON CONFLICT(unit_id, ts_utc) DO UPDATE SET kwh = excluded.kwh",
+                rows)
+            self._conn.commit()
+        return len(rows)
+
+    def energy_daily(self, unit_id: str, prices_db, start, end) -> list[dict]:
+        """Energy and cost per Helsinki day; [] when no energy is stored.
+
+        Each energy row covers the hour starting at its timestamp and is
+        priced with the mean of the 15-minute spot prices in that hour.
+        cost_eur is None when no hour of the day has a price; cost_complete
+        is False when some hours lack one (cost then covers priced hours).
+        """
+        s, e = _to_epoch(start), _to_epoch(end)
+        with self._lock:
+            energy = self._conn.execute(
+                "SELECT ts_utc, kwh FROM pump_energy WHERE unit_id = ? "
+                "AND ts_utc >= ? AND ts_utc < ? ORDER BY ts_utc",
+                (unit_id, s, e)).fetchall()
+        if not energy:
+            return []
+        prices: dict[int, float] = {}
+        path = Path(prices_db)
+        if path.exists():
+            conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro",
+                                   uri=True)
+            try:
+                for ts, raw in conn.execute(
+                        "SELECT ts_utc, price_raw_eur_mwh FROM price_interval "
+                        "WHERE ts_utc >= ? AND ts_utc < ?", (s, e + 3600)):
+                    prices[ts] = float(Decimal(raw) / Decimal(10))
+            finally:
+                conn.close()
+        days: dict[str, dict] = {}
+        for ts, kwh in energy:
+            day = datetime.fromtimestamp(ts, tz=HELSINKI).date().isoformat()
+            d = days.setdefault(day, {"date": day, "kwh": 0.0,
+                                      "cost_eur": None, "cost_complete": True})
+            d["kwh"] += kwh
+            hour = [v for t, v in prices.items() if ts <= t < ts + 3600]
+            if hour:
+                d["cost_eur"] = (d["cost_eur"] or 0.0) + (
+                    kwh * (sum(hour) / len(hour)) / 100)
+            else:
+                d["cost_complete"] = False
+        for d in days.values():
+            d["kwh"] = round(d["kwh"], 3)
+            if d["cost_eur"] is not None:
+                d["cost_eur"] = round(d["cost_eur"], 4)
+        return list(days.values())
 
     def close(self) -> None:
         with self._lock:
@@ -971,6 +1090,9 @@ class PumpService:
         outdoor = self.store.outdoor_series(site, start, end, max_points)
         price = self.store.price_series(self._prices_db, start, end,
                                         max_points)
+        plan = self.store.plan_series(unit, start, end, max_points)
+        commands = self.store.command_marks(unit, start, end)
+        energy = self.store.energy_daily(unit, self._prices_db, start, end)
         return {
             "unit": unit,
             "range": range_name,
@@ -983,6 +1105,9 @@ class PumpService:
             "outdoor": [[_iso(ts), v] for ts, v in outdoor],
             "price": None if price is None
                      else [[_iso(ts), v] for ts, v in price],
+            "plan": [[_iso(ts), v] for ts, v in plan],
+            "commands": commands,
+            "energy": energy,
         }
 
     # -- outdoor temperature (card F3.3) ---------------------------------------
