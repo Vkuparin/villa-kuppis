@@ -16,7 +16,9 @@ The live transport makes one HTTP attempt per control request, then verifies sta
 
 Offline validation at `62b43ea`: 29 focused pump tests, demo and help passed on Windows Python 3.13. Tests cover secure prompts, bounds, confirmations, ambiguous writes, installed-client HTTP behavior, restoration failure, interruption, control drift and sanitized diagnostics. Sol 6.1 Medium handled design, diagnosis and the final read-back repair; Kynsi implemented the initial probe and restoration repair. Document parsing and whitespace checks passed at the preceding checkpoint.
 
-Power-test preparation at `7861cda`: 38 focused pump tests, offline demo/help, document parsing and whitespace checks passed. Sol 6.1 Medium added the separately approved on/30-second/off test, including off cleanup after interruption and detection of changes to other controls. The local live console is open; the result is pending. Realtime updates, app-side change detection and the other two units remain untested.
+Owner-approved power test at `7861cda`: on and off were confirmed by independent cloud read-back and by the owner's visual check. The measured hold was 30.009 seconds from cloud-on confirmation; the owner observed a shorter physical on-time. Physical operating duration was not measured, so this does not validate 30 seconds of physical operation. Both writes returned HTTP 500, the other reported controls stayed unchanged, and the unit ended off. The cloud may report the requested state before the physical unit responds; the delay remains unmeasured.
+
+Sol 6.1 Medium added the power test, including off cleanup after interruption and detection of changes to other controls. All 38 focused pump tests passed after the timing wording was clarified at `bae62fa`; offline demo/help, document parsing and whitespace checks also passed. Realtime updates, app-side change detection and the other two units remain untested.
 
 ## D. Spot prices and fixed thresholds
 
