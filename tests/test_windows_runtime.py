@@ -17,6 +17,7 @@ from villa_kuppis.runtime import Config, run
 from villa_kuppis.pump_service import make_live_service
 from villa_kuppis.windows_setup import (
     NS, public_origin, serve_matches_or_empty, task_xml, task_matches, write_new_or_identical,
+    require_free_port,
 )
 
 
@@ -72,6 +73,13 @@ class CredentialsTests(unittest.TestCase):
 
 
 class SetupTests(unittest.TestCase):
+    def test_setup_refuses_to_publish_an_occupied_local_port(self):
+        socket = mock.MagicMock()
+        socket.__enter__.return_value.connect_ex.return_value = 0
+        with mock.patch("villa_kuppis.windows_setup.socket.socket", return_value=socket):
+            with self.assertRaisesRegex(ValueError, "already in use"):
+                require_free_port()
+
     @unittest.skipUnless(os.name == "nt", "Windows Task Scheduler schema check")
     def test_native_scheduler_accepts_task_definition_without_registration(self):
         with tempfile.TemporaryDirectory(prefix="vk-task-schema-") as temp:
@@ -181,7 +189,7 @@ class SetupTests(unittest.TestCase):
                 mock.patch.dict("os.environ", {"LOCALAPPDATA":temp}), \
                 mock.patch.dict(main.__globals__, {
                     "command":command, "write_new_or_identical":mock.Mock(),
-                    "write_credentials":mock.Mock()}), \
+                    "write_credentials":mock.Mock(), "require_free_port":mock.Mock()}), \
                 mock.patch("runpy.run_path", return_value={"gui_getpass":
                     lambda **kwargs: lambda _:"synthetic"}), \
                 mock.patch("builtins.print"):

@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT))
 from villa_kuppis.windows_credentials import Credentials, write_credentials
 from villa_kuppis.windows_setup import (
     TASK_NAME, TASK_DESCRIPTION, public_origin, serve_matches_or_empty,
-    task_xml, task_matches, write_new_or_identical,
+    task_xml, task_matches, write_new_or_identical, require_free_port,
 )
 
 
@@ -76,6 +76,7 @@ def main(argv=None):
     if args.action == "plan":
         print("Plan only: no files, credentials, tasks or network settings changed.")
         return 0
+    require_free_port()
     # Enrollment runs unelevated as the same user who will own the boot task.
     prompt = runpy.run_path(str(ROOT / "scripts/start-pump-app.py"))["gui_getpass"](
         title="Villa Kuppis - save MELCloud credentials",
@@ -96,6 +97,7 @@ def main(argv=None):
     # The dialog can remain open while another app changes Serve configuration.
     state = serve_matches_or_empty(json.loads(command(
         [ts, "serve", "status", "--json"]).stdout or "{}"), origin, 8377)
+    require_free_port()
     command([ts, "set", "--unattended=true"])
     if state == "empty":
         serve_result = subprocess.run([ts, "serve", "--bg", "--https=443", "http://127.0.0.1:8377"])

@@ -4,11 +4,20 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import subprocess
+import socket
 import xml.etree.ElementTree as ET
 
 TASK_NAME = "VillaKuppis"
 TASK_DESCRIPTION = "Villa Kuppis localhost pump app (managed setup v1)"
 NS = "http://schemas.microsoft.com/windows/2004/02/mit/task"
+
+
+def require_free_port(port=8377):
+    """Do not publish a port already occupied by another local process."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.settimeout(0.5)
+        if probe.connect_ex(("127.0.0.1", port)) == 0:
+            raise ValueError("Port 8377 is already in use; stop the temporary app before installation")
 
 
 def task_xml(python, root, config, user):
