@@ -29,7 +29,7 @@ No release is published yet. After publication, record the actual release link a
 - 2026-10-18: Pumps are used mainly for summer cooling; both sites are on spot-price contracts.
 - 2026-10-18: Home ships first, because the pumps are available now. Cooling defaults: maximum 25 °C, precooling 21 °C, switching off allowed with a minimum off time; separate home-away button; quiet night fan in chosen rooms. Every setting is changeable in the app.
 - 2026-10-18: No season mode: automations act on measured room temperatures; pump automation is cooling-only and never changes a mode. Cottage automations fit Google's limits: one per room, every 30 minutes, at most 12 time windows a day.
-- 2026-10-18: Still in the design phase; live tests start when implementation begins, with the owner's go-ahead.
+- 2026-10-19: Design phase finished; implementation starts with the offline spot-price experiment. Live account and device tests still need the owner's go-ahead.
 
 ## Decisions still needed
 

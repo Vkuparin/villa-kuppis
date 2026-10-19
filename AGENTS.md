@@ -4,7 +4,7 @@ Project: Villa Kuppis.
 
 Purpose: A personal Finnish-language home automation app that brings the home and cottage devices into one app.
 
-Stack: Design phase. Python service on the home Windows PC with SQLite (aiomelcloudhome for the pumps); no Home Assistant or VM unless last resort. Finnish web app for desktop; native Kotlin Android app (Google Home APIs, web app in a WebView) for the cottage devices in Google Home over Matter. Tailscale between phones and PC. Update this line when the runtime, framework or key libraries change.
+Stack: Implementation started. Python 3.13 with SQLite for the PC service; tzdata supplies Europe/Helsinki time on Windows. Planned: aiomelcloudhome for the pumps, Finnish web app for desktop, native Kotlin Android app (Google Home APIs, web app in a WebView) for the cottage devices in Google Home over Matter, and Tailscale between phones and PC. No Home Assistant or VM unless last resort. Update this line when the runtime, framework or key libraries change.
 
 Codex, Hermes and Claude Code (through `CLAUDE.md`) all read this file. This is a hobby project: move quickly, keep process small, and ask the owner only about real product choices.
 
@@ -18,8 +18,9 @@ Codex, Hermes and Claude Code (through `CLAUDE.md`) all read this file. This is 
 
 | Purpose | Command |
 | --- | --- |
-| Run in development mode with isolated data | Not implemented; use synthetic devices and an isolated temporary data directory |
-| Tests | Not applicable to the documentation-only scaffold; define before implementation |
+| Create the project environment | py -3.13 -m venv .venv; .venv\Scripts\python -m pip install -r requirements.txt |
+| Run the spot-price experiment | .venv\Scripts\python -m villa_kuppis --help (development commands require an explicit temporary data directory) |
+| Spot-price tests (mocked network, temporary SQLite) | .venv\Scripts\python -m unittest discover -s tests -v |
 | Type, build and format checks | node scripts/check-docs.mjs (requires shared dev-dashboard); git diff --check |
 
 Define a command here before first relying on it. Add rows when the project needs them.
