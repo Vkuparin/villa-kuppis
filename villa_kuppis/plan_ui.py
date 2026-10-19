@@ -14,13 +14,13 @@ SECTION_HTML = r"""
 """
 
 STYLE = r"""
-section.plan { background: #fff; border: 1px solid #d9dee3;
+section.plan { background: var(--surface); border: 1px solid var(--line);
                border-radius: .75rem; padding: 1rem 1.1rem;
                margin-bottom: 1rem; }
 section.plan h2 { margin: 0 0 .6rem; font-size: 1.15rem; }
-section.plan h3 { margin: .8rem 0 .3rem; font-size: 1rem; color: #44505c; }
+section.plan h3 { margin: .8rem 0 .3rem; font-size: 1rem; color: var(--text2); }
 section.plan ul { margin: 0; padding-left: 1.2rem; }
-.plan-off { color: #a11d1d; }
+.plan-off { color: var(--err); }
 """
 
 SCRIPT = r"""

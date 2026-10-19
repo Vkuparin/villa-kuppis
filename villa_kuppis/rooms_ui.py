@@ -14,14 +14,14 @@ SECTION_HTML = r"""
 """
 
 STYLE = r"""
-section.rooms { background: #fff; border: 1px solid #d9dee3;
+section.rooms { background: var(--surface); border: 1px solid var(--line);
                 border-radius: .75rem; padding: 1rem 1.1rem;
                 margin-bottom: 1rem; }
 section.rooms h2 { margin: 0 0 .6rem; font-size: 1.15rem; }
-section.rooms h3 { margin: .8rem 0 .3rem; font-size: 1rem; color: #44505c; }
+section.rooms h3 { margin: .8rem 0 .3rem; font-size: 1rem; color: var(--text2); }
 section.rooms ul { margin: 0; padding-left: 1.2rem; }
-.rooms-ok { color: #1d6b2f; }
-.rooms-bad { color: #a11d1d; }
+.rooms-ok { color: var(--ok); }
+.rooms-bad { color: var(--err); }
 """
 
 SCRIPT = r"""

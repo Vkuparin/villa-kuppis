@@ -18,25 +18,43 @@ SECTION_HTML = r"""
       asetus ohittaa oletuksen. Muutos tulee voimaan seuraavassa
       suunnitelmassa.</p>
     <div id="set-body"></div>
+    <h3>Käyttöliittymä</h3>
+    <p class="detail">Näkymä tallentuu tähän laitteeseen ja selaimeen.</p>
+    <div class="set-row">
+      <label for="ui-dark">Tumma teema</label>
+      <button type="button" class="switch" role="switch" aria-checked="false"
+              id="ui-dark"><span class="track"></span></button>
+    </div>
+    <div class="set-row">
+      <label for="ui-accent">Aksenttiväri</label>
+      <select id="ui-accent" aria-label="Aksenttiväri">
+        <option value="blue">Sininen</option>
+        <option value="green">Vihreä</option>
+        <option value="purple">Purppura</option>
+        <option value="pink">Pinkki</option>
+        <option value="orange">Oranssi</option>
+      </select>
+    </div>
   </section>
 """
 
 STYLE = r"""
-section.settings { background: #fff; border: 1px solid #d9dee3;
+section.settings { background: var(--surface); border: 1px solid var(--line);
                    border-radius: .75rem; padding: 1rem 1.1rem;
                    margin-bottom: 1rem; }
 section.settings h2 { margin: 0 0 .6rem; font-size: 1.15rem; }
-section.settings h3 { margin: 1rem 0 .3rem; font-size: 1rem; color: #44505c; }
+section.settings h3 { margin: 1rem 0 .3rem; font-size: 1rem; color: var(--text2); }
 .set-row { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .8rem;
-           padding: .35rem 0; border-bottom: 1px solid #e3e8ec; }
+           padding: .35rem 0; border-bottom: 1px solid var(--line2); }
 .set-row label { flex: 1 1 14rem; }
 .set-row input[type=number], .set-row input[type=time] {
   min-height: 44px; width: 7.5rem; font-size: 1rem; padding: 0 .5rem;
-  border: 1px solid #9aa4ae; border-radius: .5rem; }
+  border: 1px solid var(--ctl); border-radius: .5rem;
+  background: var(--surface); color: var(--text); }
 .set-row input[type=checkbox] { width: 1.6rem; height: 1.6rem; }
-.set-src { font-size: .85rem; color: #55606b; flex: 0 0 9rem; }
-#set-status { font-size: .85rem; color: #55606b; }
-#set-status.err { color: #a11d1d; }
+.set-src { font-size: .85rem; color: var(--text3); flex: 0 0 9rem; }
+#set-status { font-size: .85rem; color: var(--text3); }
+#set-status.err { color: var(--err); }
 """
 
 SCRIPT = r"""
@@ -171,5 +189,27 @@ SCRIPT = r"""
   }
   $scope.addEventListener("change", render);
   load(false);
+
+  // Look and feel: per browser, applied at once (the page head applies it at load).
+  var root = document.documentElement;
+  var $dark = document.getElementById("ui-dark");
+  var $accent = document.getElementById("ui-accent");
+  function remember(key, value) {
+    try { localStorage.setItem(key, value); } catch (e) {}
+  }
+  $dark.setAttribute("aria-checked",
+    root.getAttribute("data-theme") === "dark" ? "true" : "false");
+  $accent.value = root.getAttribute("data-accent") || "blue";
+  $dark.addEventListener("click", function () {
+    var dark = $dark.getAttribute("aria-checked") !== "true";
+    $dark.setAttribute("aria-checked", dark ? "true" : "false");
+    root.setAttribute("data-theme", dark ? "dark" : "light");
+    remember("vk-theme", dark ? "dark" : "light");
+  });
+  $accent.addEventListener("change", function () {
+    if ($accent.value === "blue") root.removeAttribute("data-accent");
+    else root.setAttribute("data-accent", $accent.value);
+    remember("vk-accent", $accent.value === "blue" ? "" : $accent.value);
+  });
 })();
 """
