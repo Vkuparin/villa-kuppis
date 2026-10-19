@@ -1,5 +1,6 @@
 """Offline Windows setup, credential and unattended lifecycle checks."""
 import ctypes
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,7 @@ import xml.etree.ElementTree as ET
 
 from villa_kuppis import windows_credentials as vault
 from villa_kuppis.runtime import Config, run
+from villa_kuppis.pump_service import make_live_service
 from villa_kuppis.windows_setup import (
     NS, public_origin, serve_matches_or_empty, task_xml, task_matches, write_new_or_identical,
 )
@@ -190,6 +192,31 @@ class SetupTests(unittest.TestCase):
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_explicit_credentials_and_weather_ignore_development_environment(self):
+        captured = {}
+        def service(data, **kwargs):
+            captured.update(kwargs)
+            return mock.Mock()
+        client = mock.Mock()
+        client.__aexit__ = mock.AsyncMock()
+        close = mock.AsyncMock()
+        with mock.patch.dict("os.environ", {
+                "VILLA_KUPPIS_MELCLOUD_USERNAME":"wrong@example.invalid",
+                "VILLA_KUPPIS_MELCLOUD_PASSWORD":"wrong-password",
+                "VILLA_KUPPIS_WEATHER_HOME":"60,25"}, clear=True), \
+                mock.patch("villa_kuppis.pump_service.PumpService", side_effect=service), \
+                mock.patch("villa_kuppis.pump_service._default_client_factory",
+                           return_value=(client,close)) as factory:
+            make_live_service("unused", credentials=vault.Credentials(
+                "stored@example.invalid","stored-password"), weather_sites={})
+            self.assertEqual(captured["weather_sites"], {})
+            async def create_and_close():
+                _, teardown = captured["client_factory"]()
+                await teardown()
+            asyncio.run(create_and_close())
+            factory.assert_called_once_with("stored@example.invalid","stored-password")
+            close.assert_awaited_once()
+
     def test_config_requires_absolute_separate_paths_and_no_secret_fields(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "service.json"
