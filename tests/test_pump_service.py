@@ -1025,6 +1025,21 @@ class HistoryServiceTests(ServiceTestCase):
         self.assertEqual(payload["commands"], [])
         self.assertEqual(payload["energy"], [])
 
+    def test_history_window_can_move_ahead_to_forecast_with_a_cap(self):
+        service, clock = self._start(FakeClient(make_unit_payloads()))
+        now = clock()
+        service.store.forecast_upsert("home", [
+            (now + timedelta(hours=h), 3.0 + h) for h in (1, 6, 30)])
+        ahead = service.history("unit-1", "day", end=now + timedelta(hours=36))
+        self.assertEqual([v for _, v in ahead["forecast"]], [33.0])  # only +30 h
+        near = service.history("unit-1", "day", end=now + timedelta(hours=12))
+        self.assertEqual([v for _, v in near["forecast"]], [4.0, 9.0])
+        self.assertGreater(ahead["end"], ahead["now"])
+        capped = service.history("unit-1", "day", end=now + timedelta(days=30))
+        self.assertEqual(capped["end"], capped["max_end"])
+        default = service.history("unit-1", "day")
+        self.assertEqual(default["end"], default["now"])
+
     def test_history_rejects_unknown_range(self):
         service, _clock = self._start(FakeClient(make_unit_payloads()))
         with self.assertRaises(ValueError):

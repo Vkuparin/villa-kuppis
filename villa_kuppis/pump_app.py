@@ -43,6 +43,7 @@ import argparse
 import json
 import re
 import sys
+from datetime import datetime
 from email.header import decode_header
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
@@ -376,6 +377,11 @@ ohjaavat vain esittelyyksiköitä.</div>
           <option value="cottage">Mökki</option>
         </select>
       </label>
+      <span class="hist-nav" role="group" aria-label="Siirry ajassa">
+        <button type="button" id="hist-prev" aria-label="Aiemmin">&larr;</button>
+        <button type="button" id="hist-now">Nyt</button>
+        <button type="button" id="hist-next" aria-label="Myöhemmin">&rarr;</button>
+      </span>
       <span id="hist-status" role="status"></span>
     </div>
     <div id="hist-chart" class="hist-chart" role="img"
@@ -420,6 +426,14 @@ const $alerts = document.getElementById("alerts");
 const $histUnit = document.getElementById("hist-unit");
 const $histRange = document.getElementById("hist-range");
 const $histSite = document.getElementById("hist-site");
+const $histPrev = document.getElementById("hist-prev");
+const $histNext = document.getElementById("hist-next");
+const $histNow = document.getElementById("hist-now");
+// End of the shown window in ms; null follows the present. The server lets
+// it run up to 48 h ahead (stored prices and the weather forecast).
+let histEnd = null;
+let histNowMs = Date.now(), histMaxEnd = Date.now();
+const RANGE_MS = { day: 864e5, week: 6048e5, month: 2592e6, year: 31536e6 };
 const $histChart = document.getElementById("hist-chart");
 const $histStatus = document.getElementById("hist-status");
 const $histLegend = document.getElementById("hist-legend");
@@ -659,6 +673,8 @@ const HIST_SERIES = [
     scale: "temp", dash: "2 4" },
   { key: "plan", label: "Suunnitelman tavoite", color: "var(--purple)",
     scale: "temp", dash: "10 3 2 3" },
+  { key: "forecast", label: "Sääennuste", color: "var(--info)",
+    scale: "temp", dash: "8 3" },
 ];
 const PRICE_SERIES = { key: "price", label: "Sähkön hinta (snt/kWh)",
                        color: "var(--warn)", scale: "price", dash: "1 4" };
@@ -804,6 +820,17 @@ function drawHistory(data) {
     width: W - m.left - m.right, height: H - m.top - m.bottom,
     fill: "none", stroke: "var(--line3)" }));
 
+  const tNow = data.now ? new Date(data.now).getTime() : null;
+  if (tNow !== null && tNow > t0 && tNow < t1) {
+    svg.insertBefore(svgEl("rect", { x: X(tNow), y: m.top,
+      width: W - m.right - X(tNow), height: H - m.top - m.bottom,
+      fill: "var(--surface2)", opacity: 0.55 }), svg.children[0]);
+    svg.appendChild(svgEl("line", { x1: X(tNow), x2: X(tNow), y1: m.top,
+      y2: H - m.bottom, stroke: "var(--text3)", "stroke-width": 1 }));
+    svg.appendChild(svgEl("text", { x: X(tNow) + 4, y: m.top + 11,
+      "font-size": 11, fill: "var(--text3)" }, "nyt"));
+  }
+
   const expected = (t1 - t0) / maxPts;
   const gapFor = (sampleMs) => Math.max(3 * sampleMs, 2 * expected);
 
@@ -886,12 +913,18 @@ async function loadHistory() {
   try {
     const url = "/api/history?unit=" + encodeURIComponent(unit) +
       "&range=" + encodeURIComponent(range) +
-      "&site=" + encodeURIComponent(site);
+      "&site=" + encodeURIComponent(site) +
+      (histEnd === null ? "" : "&end=" + encodeURIComponent(new Date(histEnd).toISOString()));
     const data = await fetch(url, { signal: histAbort.signal }).then((r) => {
       if (!r.ok) throw new Error("http " + r.status);
       return r.json();
     });
     if (request !== histRequest) return;
+    histNowMs = new Date(data.now).getTime();
+    histMaxEnd = new Date(data.max_end).getTime();
+    const shownEnd = new Date(data.end).getTime();
+    $histNext.disabled = shownEnd >= histMaxEnd - 1000;
+    $histNow.disabled = histEnd === null;
     drawHistory(data);
     $histStatus.textContent = "";
   } catch (err) {
@@ -1012,7 +1045,17 @@ $cards.addEventListener("focusout", () => {
   setTimeout(() => { if (lastView) renderView(lastView); }, 0);
 });
 $histUnit.addEventListener("change", loadHistory);
-$histRange.addEventListener("change", loadHistory);
+$histRange.addEventListener("change", () => { histEnd = null; loadHistory(); });
+function shiftHistory(dir) {
+  const span = RANGE_MS[$histRange.value] || RANGE_MS.day;
+  const cur = histEnd === null ? histNowMs : histEnd;
+  histEnd = Math.min(cur + dir * span / 2, histMaxEnd);
+  if (histEnd >= histNowMs - 1000 && histEnd <= histNowMs + 1000) histEnd = null;
+  loadHistory();
+}
+$histPrev.addEventListener("click", () => shiftHistory(-1));
+$histNext.addEventListener("click", () => shiftHistory(1));
+$histNow.addEventListener("click", () => { histEnd = null; loadHistory(); });
 $histSite.addEventListener("change", loadHistory);
 let histResizeTimer = null;
 window.addEventListener("resize", () => {
@@ -1213,12 +1256,22 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             unit = qs.get("unit", [None])[0]
             range_name = qs.get("range", ["day"])[0] or "day"
             site = qs.get("site", [None])[0]
+            end = None
+            if qs.get("end", [""])[0]:
+                try:
+                    end = datetime.fromisoformat(qs["end"][0].replace("Z", "+00:00"))
+                    if end.tzinfo is None:
+                        raise ValueError("end needs a time zone")
+                except ValueError:
+                    self._json(400, {"error": "bad_query",
+                                     "detail": "end must be an ISO time with a zone"})
+                    return
             if not unit or not isinstance(unit, str):
                 self._json(400, {"error": "bad_query",
                                  "detail": "unit is required"})
                 return
             try:
-                payload = self.app.service.history(unit, range_name, site)
+                payload = self.app.service.history(unit, range_name, site, end)
             except ValueError as err:
                 self._json(400, {"error": "bad_query", "detail": str(err)})
                 return

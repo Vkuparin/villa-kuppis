@@ -65,6 +65,8 @@ ACTIONS = ("power", "setpoint", "mode", "fan")
 HISTORY_INTERVAL_SECONDS = 300
 COMMAND_MARK_LIMIT = 200
 HELSINKI = ZoneInfo("Europe/Helsinki")
+# How far past now the history window may reach (the FMI forecast is 48 h).
+HISTORY_AHEAD = 48 * 3600
 HISTORY_RANGES = {
     "day": (24 * 3600, 288),
     "week": (7 * 24 * 3600, 700),
@@ -1163,18 +1165,24 @@ class PumpService:
     # -- history (card F3.3) ---------------------------------------------------
 
     def history(self, unit: str, range_name: str,
-                site: str | None = None) -> dict:
+                site: str | None = None, end=None) -> dict:
         """One history payload: downsampled room/setpoint/outdoor/price.
 
         range_name is one of day | week | month | year; site selects the
-        outdoor-temperature site (default "home").
+        outdoor-temperature site (default "home"). end moves the window
+        (default now) and is capped at HISTORY_AHEAD seconds past now, so
+        stored prices and the weather forecast can be browsed too.
         """
         if range_name not in HISTORY_RANGES:
             raise ValueError(
                 "range must be one of: " + ", ".join(sorted(HISTORY_RANGES)))
         span_seconds, max_points = HISTORY_RANGES[range_name]
         site = site or "home"
-        end = self._now()
+        now = self._now()
+        if end is None:
+            end = now
+        else:
+            end = min(end, now + timedelta(seconds=HISTORY_AHEAD))
         start = end - timedelta(seconds=span_seconds)
         unit_rows = self.store.pump_history(unit, start, end, max_points)
         outdoor = self.store.outdoor_series(site, start, end, max_points)
@@ -1183,7 +1191,12 @@ class PumpService:
         plan = self.store.plan_series(unit, start, end, max_points)
         commands = self.store.command_marks(unit, start, end)
         energy = self.store.energy_daily(unit, self._prices_db, start, end)
+        forecast = self.store.forecast_rows(
+            site, max(start, now - timedelta(hours=1)), end)
         return {
+            "now": _iso(_to_epoch(now)),
+            "max_end": _iso(_to_epoch(now + timedelta(seconds=HISTORY_AHEAD))),
+            "forecast": [[_iso(ts), v] for ts, v in forecast],
             "unit": unit,
             "range": range_name,
             "start": _iso(_to_epoch(start)),
