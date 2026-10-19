@@ -690,7 +690,6 @@ async def test_setpoint_live(client, *, input_fn, sleep_fn, print_fn=print,
     """Select a unit, confirm identity, probe one degree, restore, report."""
 
     def _ask(prompt):
-        print_fn(prompt)
         return input_fn(prompt)
 
     context = await asyncio.wait_for(client.get_context(), timeout=deadline)
