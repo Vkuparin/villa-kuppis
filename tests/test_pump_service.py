@@ -441,6 +441,43 @@ class RequestTests(ServiceTestCase):
         self.assertEqual(client.control_calls[0][1]["set_temperature"], 24.0)
         self.assertEqual(self._unit(service, "unit-1")["setpoint"], 24.0)
 
+    def test_submit_rejection_reason_not_recheck(self):
+        # Re-verification 002: the response must follow the reason
+        # submit() decided under the reservation lock, not a later
+        # has_pending() guess that the slot may have cleared in the
+        # meantime. The busy arm reproduces that interleaving directly:
+        # a "pending" refusal that survives the slot clearing must read
+        # as 409, never as a shutdown.
+        client = FakeClient(make_unit_payloads())
+        service, _ = self._start(client)
+        self.wait_for(lambda: len(service.view()["units"]) >= 1)
+        gw = service.gateway
+        real_submit = gw.submit
+
+        def busy_submit(*args, **kwargs):
+            return "pending"
+        gw.submit = busy_submit
+        try:
+            status, body = service.request("unit-1", "setpoint", 24.0, "Ville")
+        finally:
+            gw.submit = real_submit
+        self.assertEqual(status, 409)
+        self.assertEqual(body["error"], "pending")
+        self.assertEqual(service.events()[0]["result"], "failed")
+        self.assertIn("another change", service.events()[0]["detail"])
+
+        def stopped_submit(*args, **kwargs):
+            return "stopped"
+        gw.submit = stopped_submit
+        try:
+            status, body = service.request("unit-1", "setpoint", 25.0, "Ville")
+        finally:
+            gw.submit = real_submit
+        self.assertEqual(status, 503)
+        self.assertEqual(body["error"], "not_running")
+        failed = [e for e in service.events() if e["result"] == "failed"]
+        self.assertEqual(len(failed), 2)
+
     def test_actor_truncated_and_default(self):
         client = FakeClient(make_unit_payloads())
         service, _ = self._start(client)

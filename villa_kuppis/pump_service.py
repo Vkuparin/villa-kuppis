@@ -522,13 +522,22 @@ class PumpGateway:
 
     # -- commands --
 
-    def submit(self, event_id: int, unit_id: str, action: str, value, actor: str) -> bool:
-        """Reserve the pending slot and queue the command. False if busy or stopped."""
+    def submit(self, event_id: int, unit_id: str, action: str, value,
+               actor: str) -> str | None:
+        """Reserve the pending slot and queue the command.
+
+        Returns None when the command is queued, or the reason it was
+        refused — "pending" (the unit already has a command in flight) or
+        "stopped" (the gateway is not running). The reason is decided
+        under the same lock as the reservation, so it stays accurate even
+        if the slot clears right afterwards; callers must act on the
+        reason instead of re-guessing with has_pending().
+        """
         if not self._started or self._loop is None or self._loop.is_closed():
-            return False
+            return "stopped"
         with self._lock:
             if unit_id in self._pending:
-                return False
+                return "pending"
             self._pending[unit_id] = {
                 "action": action,
                 "requested": value,
@@ -548,8 +557,8 @@ class PumpGateway:
         except RuntimeError:
             with self._lock:
                 self._pending.pop(unit_id, None)
-            return False
-        return True
+            return "stopped"
+        return None
 
     async def _worker(self) -> None:
         while True:
@@ -756,10 +765,14 @@ class PumpService:
             return 400, {"error": code, "detail": detail}
         event_id = self.store.add_event(
             self._now().isoformat(), unit_id, state["name"], actor, action, value)
-        if not self.gateway.submit(event_id, unit_id, action, value, actor):
-            if self.gateway.has_pending(unit_id):
+        reason = self.gateway.submit(event_id, unit_id, action, value, actor)
+        if reason is not None:
+            if reason == "pending":
                 # Lost the reservation race to a concurrent command: the
-                # service is fine, this unit is simply busy.
+                # service is fine, this unit is simply busy. The reason
+                # comes from submit() itself, decided under the
+                # reservation lock, so a slot that clears afterwards
+                # cannot turn the answer into a fake shutdown.
                 self.store.finish_event(
                     event_id, "failed",
                     "another change for this unit was still being confirmed")
