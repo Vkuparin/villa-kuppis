@@ -1,6 +1,6 @@
 # First integration experiments
 
-Experiment specifications, not results. Keep private records (credentials, account and device IDs) in ignored `scratch/`; publish only generic device labels and capability facts. Each live test needs the owner's go-ahead.
+Experiment specifications and recorded checks. Keep private records (credentials, account and device IDs) in ignored `scratch/`; publish only generic device labels and capability facts. Each live test needs the owner's go-ahead.
 
 Order: C and D first, when implementation begins; A and B when the cottage devices are installed.
 
@@ -17,6 +17,8 @@ The Python experiment lives in `villa_kuppis/`; [README](../README.md#developmen
 The [Elering API specification](https://dashboard.elering.ee/v3/api-docs) defines `start` and `end` as date-time query strings. Returned interval timestamps are Unix seconds. The experiment stores raw €/MWh prices, converts them to c/kWh for planning, and rejects incomplete days before replacing saved prices.
 
 This step computes temperature targets. Cooling shutoff, measured-temperature checks, minimum off time and device commands remain in [F4.1](tasks/0.2.0.md#f6-pump-automation).
+
+Validated on 19 October 2026 at `29cd774`: 102 tests passed in the Windows Python 3.13 project environment. The offline demo ran in a fresh temporary data directory, and help, document parsing and whitespace checks passed. Tests cover both DST days, failed fetches and database writes preserving saved prices, room overrides, strict thresholds, daily scheduling across restarts, and CLI validation before network access. Network boundaries were mocked; the client has not had a live Elering integration test.
 
 ## A. Cottage through the Home APIs
 
