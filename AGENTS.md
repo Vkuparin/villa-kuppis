@@ -24,6 +24,8 @@ Codex, Hermes and Claude Code (through `CLAUDE.md`) all read this file. This is 
 | Python tests (mocked network, temporary data) | .venv\Scripts\python -m unittest discover -s tests -v |
 | Pump probe help and offline demo | .venv\Scripts\python -m villa_kuppis.pump_probe --help; .venv\Scripts\python -m villa_kuppis.pump_probe demo |
 | Pump probe tests (mocked network and devices) | .venv\Scripts\python -m unittest discover -s tests -p "test_pump*.py" -v |
+| Live pump probe (owner approval; local interactive terminal) | .venv\Scripts\python -m villa_kuppis.pump_probe --live read; .venv\Scripts\python -m villa_kuppis.pump_probe --live test-setpoint |
+| One-off live price fetch (owner approval; new temporary data directory) | .venv\Scripts\python -m villa_kuppis --data-dir DATA_DIR refresh --date YYYY-MM-DD |
 | Development tool verification (new terminal after installation) | py -3.13 --version; java -version; adb version; sdkmanager --sdk_root="$env:ANDROID_HOME" --list_installed; tailscale version |
 | Type, build and format checks | node scripts/check-docs.mjs (requires shared dev-dashboard); git diff --check |
 
