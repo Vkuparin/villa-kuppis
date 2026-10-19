@@ -222,6 +222,10 @@ class FakeClient:
       context_error_after  with context_error set, get_context succeeds for
                      the first N calls and raises context_error from call
                      N+1 on (N = this value; None = raise from the first)
+
+    Control writes apply the reported fields the same way the cloud does:
+    power, set_temperature, operation_mode and set_fan_speed are reflected
+    in the next get_context (after any scripted put_stale lag).
     """
 
     def __init__(self, payloads, *, put_errors=(), put_stale=(), mutates=(),
@@ -276,13 +280,21 @@ class FakeClient:
         ))
         error = self._put_errors[index] if index < len(self._put_errors) else None
         stale = self._put_stale[index] if index < len(self._put_stale) else 0
-        if (set_temperature is not None or power is not None) and unit_id in self._units:
+        if (set_temperature is not None or power is not None
+                or operation_mode is not None or set_fan_speed is not None
+                ) and unit_id in self._units:
             before = [dict(p) for p in self._units.values()]
             settings = {s["name"]: s["value"] for s in self._units[unit_id]["settings"]}
             if set_temperature is not None:
                 settings["SetTemperature"] = f"{set_temperature:.1f}"
             if power is not None:
                 settings["Power"] = str(power)
+            if operation_mode is not None:
+                settings["OperationMode"] = getattr(operation_mode, "value",
+                                                    str(operation_mode))
+            if set_fan_speed is not None:
+                settings["SetFanSpeed"] = getattr(set_fan_speed, "value",
+                                                  str(set_fan_speed))
             self._units[unit_id]["settings"] = [
                 {"name": n, "value": v} for n, v in settings.items()
             ]
