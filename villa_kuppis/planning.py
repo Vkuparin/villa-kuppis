@@ -145,6 +145,8 @@ def normalize_settings(settings: object) -> tuple[Decimal, list[Rule],
                 if "base_temperature_c" in room else None)
         rules = (_validate_rules(room["rules"], f"settings.rooms.{name}.rules")
                  if "rules" in room else None)
+        _check_not_mixed(rules if rules is not None else site_rules,
+                         f"room {name} effective rules")
         rooms[name] = (base, rules)
     return site_base, site_rules, rooms
 
@@ -156,7 +158,6 @@ def plan_day(periods: Sequence[Period], settings: object) -> dict[str, list[Room
     for name, (base_override, rules_override) in rooms.items():
         base = base_override if base_override is not None else site_base
         rules = rules_override if rules_override is not None else site_rules
-        _check_not_mixed(rules, f"room {name} effective rules")
         heat = [r for r in rules if r[0] == "heat"]
         cool = [r for r in rules if r[0] == "cool"]
         plans: list[RoomPlan] = []

@@ -58,6 +58,44 @@ class TestHelp(unittest.TestCase):
 
 
 class TestDataDir(unittest.TestCase):
+    COMMANDS = (
+        ["import-fixture", str(FIXTURES / "elering-2026-10-20.json")],
+        ["demo"],
+        ["refresh", "--date", "2026-10-20"],
+        ["schedule"],
+    )
+
+    def test_data_dir_as_file_fails_cleanly(self):
+        for command in self.COMMANDS:
+            with self.subTest(command=command), \
+                 tempfile.TemporaryDirectory() as tmp:
+                data_dir = Path(tmp) / "data"
+                data_dir.write_text("synthetic", encoding="utf-8")
+                with mock.patch("villa_kuppis.prices.default_transport") \
+                        as transport:
+                    code, out, err = run_main(
+                        ["--data-dir", str(data_dir), *command])
+                assert code == 1, err
+                assert err.startswith("error: ")
+                assert "Traceback" not in err
+                transport.assert_not_called()
+
+    def test_sqlite_open_failure_fails_cleanly(self):
+        for command in self.COMMANDS:
+            with self.subTest(command=command), \
+                 tempfile.TemporaryDirectory() as tmp:
+                with mock.patch("villa_kuppis.storage.sqlite3.connect",
+                                side_effect=sqlite3.OperationalError(
+                                    "cannot open synthetic database")), \
+                     mock.patch("villa_kuppis.prices.default_transport") \
+                        as transport:
+                    code, out, err = run_main(
+                        ["--data-dir", tmp, *command])
+                assert code == 1, err
+                assert "error: cannot open synthetic database" in err
+                assert "Traceback" not in err
+                transport.assert_not_called()
+
     def test_missing_data_dir_rejected(self):
         code, _, err = run_main(["demo"])
         assert code == 2
@@ -127,6 +165,32 @@ class TestImportFixtureCli(unittest.TestCase):
 
 
 class TestRefreshCli(unittest.TestCase):
+    def test_mixed_room_rules_fail_before_http_and_storage(self):
+        settings_obj = {
+            "site": {"base_temperature_c": 19,
+                     "rules": [{"kind": "heat", "threshold_c_kwh": 8,
+                                "target_c": 21}]},
+            "rooms": {"pump": {"rules": [
+                {"kind": "heat", "threshold_c_kwh": 2, "target_c": 20},
+                {"kind": "cool", "threshold_c_kwh": 5, "target_c": 17},
+            ]}},
+        }
+        for command, expected_code in (("refresh", 1), ("schedule", 2)):
+            with self.subTest(command=command), \
+                 tempfile.TemporaryDirectory() as tmp:
+                settings = Path(tmp) / "settings.json"
+                settings.write_text(json.dumps(settings_obj), encoding="utf-8")
+                data_dir = Path(tmp) / "data"
+                with mock.patch("villa_kuppis.prices.default_transport") \
+                        as transport:
+                    code, out, err = run_main([
+                        "--data-dir", str(data_dir), command,
+                        "--settings", str(settings)])
+                assert code == expected_code, err
+                assert "pump" in err and "mix" in err
+                transport.assert_not_called()
+                assert not data_dir.exists()
+
     def test_refresh_with_injected_default_transport(self):
         tomorrow = date(2026, 10, 20)
         transport = mock.MagicMock(return_value=elering_payload(tomorrow))

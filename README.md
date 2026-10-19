@@ -22,7 +22,7 @@ node scripts/coordinate.mjs status
 
 ## Development
 
-Release goals and product decisions live in [docs/roadmap.md](docs/roadmap.md). Implementation cards live in [docs/tasks/](docs/tasks/README.md). Add product-specific setup and build commands here as code lands.
+Release goals and product decisions live in [docs/roadmap.md](docs/roadmap.md). Implementation cards live in [docs/tasks/](docs/tasks/README.md).
 
 The first implementation is a command-line spot-price experiment. It stores complete Finnish price days in SQLite and computes temperature targets from fixed thresholds. The offline demo uses synthetic prices and room settings:
 

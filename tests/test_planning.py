@@ -98,7 +98,7 @@ class TestOverlap(unittest.TestCase):
                      rooms={"room": {},
                             "pump": {"rules": [heat(2, 20), cool(5, 17)]}})
         try:
-            plan_day([Period(0, Decimal("4.0"))], s)
+            normalize_settings(s)
         except ValueError as exc:
             assert "pump" in str(exc)
         else:

@@ -270,14 +270,18 @@ def main(argv: list[str] | None = None) -> int:
         print("error: --data-dir is required (no default production path)",
               file=sys.stderr)
         return 2
-    if args.command == "import-fixture":
-        return _cmd_import_fixture(args)
-    if args.command == "demo":
-        return _cmd_demo(args)
-    if args.command == "refresh":
-        return _cmd_refresh(args)
-    if args.command == "schedule":
-        return _cmd_schedule(args)
+    try:
+        if args.command == "import-fixture":
+            return _cmd_import_fixture(args)
+        if args.command == "demo":
+            return _cmd_demo(args)
+        if args.command == "refresh":
+            return _cmd_refresh(args)
+        if args.command == "schedule":
+            return _cmd_schedule(args)
+    except (OSError, sqlite3.Error) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     build_parser().print_help()  # pragma: no cover (parser enforces)
     return 2  # pragma: no cover
 
