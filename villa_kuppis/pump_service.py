@@ -446,6 +446,11 @@ class PumpStore:
             for r in rows
         ]
 
+    def set_away(self, away: bool, actor: str) -> dict:
+        """Home-away button (card F6.1)."""
+        self.automation.set_away(away, actor)
+        return self.plan_view()
+
     # -- history (card F3.3) --------------------------------------------------
 
     def record_history(self, states: list[dict]) -> int:
@@ -1081,6 +1086,11 @@ class PumpService:
     def plan_view(self) -> dict:
         """Today's cooling plan (card F4.1)."""
         return self.automation.day_plan()
+
+    def set_away(self, away: bool, actor: str) -> dict:
+        """Home-away button (card F6.1)."""
+        self.automation.set_away(away, actor)
+        return self.plan_view()
 
     # -- history (card F3.3) ---------------------------------------------------
 

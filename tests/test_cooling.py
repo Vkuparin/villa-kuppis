@@ -117,6 +117,22 @@ class CoolingTests(ServiceTestCase):
         self.assertEqual(len(rows), 96)
         self.assertEqual({v for _, v in rows}, {25.0})
 
+    def test_away_button_cools_only_above_away_maximum_and_restores(self):
+        service, _ = self.start()
+        self.set_prices(30)                       # cheap: normally precools
+        self.run_plan(service)
+        self.assertEqual(self._unit(service, "unit-1")["setpoint"], 21.0)
+        service.set_away(True, "Ville")
+        self.assertTrue(service.plan_view()["away"])
+        sent = self.run_plan(service)
+        self.assertEqual(self.brief(sent), [("unit-1", "setpoint", 28.0)])
+        self.assertEqual(self._unit(service, "unit-1")["setpoint"], 28.0)
+        self.assertEqual(self.run_plan(service), [])
+        service.set_away(False, "Ville")
+        sent = self.run_plan(service)
+        self.assertEqual(self.brief(sent), [("unit-1", "setpoint", 21.0)])
+        self.assertFalse(service.plan_view()["away"])
+
     def test_no_prices_means_no_commands(self):
         service, _ = self.start()
         self.assertEqual(self.run_plan(service), [])

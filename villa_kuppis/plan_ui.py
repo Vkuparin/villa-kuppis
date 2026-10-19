@@ -7,6 +7,7 @@ Plain ASCII JS in raw strings, spliced into the page by
 SECTION_HTML = r"""
   <section class="plan" aria-label="Päivän suunnitelma">
     <h2>Päivän suunnitelma</h2>
+    <p><button type="button" id="away-btn">Poissa kotoa</button></p>
     <p id="plan-note" class="detail"></p>
     <div id="plan-body"></div>
   </section>
@@ -31,15 +32,30 @@ SCRIPT = r"""
     return new Date(iso).toLocaleTimeString("fi-FI",
       { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Helsinki" });
   }
+  var $away = document.getElementById("away-btn");
+  var away = false;
+  function showAway(on) {
+    away = on;
+    $away.textContent = on ? "Palaan kotiin (lopeta poissa-tila)" : "Poissa kotoa";
+    $away.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+  $away.addEventListener("click", function () {
+    fetch("/api/away", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ away: !away }) })
+      .then(function (r) { return r.json(); })
+      .then(render).catch(function () {});
+  });
   function render(data) {
+    showAway(!!data.away);
     $body.textContent = "";
     if (!data.has_prices) {
       $note.textContent = "Päivän sähkönhintoja ei ole vielä tallennettu.";
       return;
     }
-    $note.textContent = data.enabled
+    $note.textContent = (data.away ? "Poissa-tila: jäähdytys vasta enimmäislämpötilan (poissa) yli, ei esijäähdytystä. " : "") + (data.enabled
       ? "Suunnitelma on käytössä: muutokset tehdään pumppuihin ja kirjataan tapahtumiin nimellä " + data.actor + "."
-      : "Suunnitelma on vain esitys: sitä ei toteuteta pumpuissa.";
+      : "Suunnitelma on vain esitys: sitä ei toteuteta pumpuissa.");
     data.units.forEach(function (u) {
       var h = document.createElement("h3");
       h.textContent = u.name + (u.active ? "" : " (ei jäähdytystilassa, ei ohjata)");

@@ -15,6 +15,10 @@ applies them to the pumps:
   before ``min_off_minutes`` have passed (compressor protection), when the
   price is no longer high or the room has reached the maximum. A unit the
   household switched off is left alone.
+* Away mode (card F6.1, ``set_away``): every cooling unit targets its
+  ``away_max_c`` with no precooling; the expensive-price switch-off still
+  applies, and a unit comes back when the room reaches the away maximum.
+  Switching away off restores the normal plan on the next pass.
 * It acts on changes of the plan, not on every pass, so a manual setpoint
   stays until the plan moves to another target.
 
@@ -48,7 +52,7 @@ class CoolPeriod:
     price_c_kwh: Decimal
     target_c: float
     off: bool
-    reason: str                    # "off" | "precool" | "max"
+    reason: str                    # "off" | "precool" | "max" | "away"
 
 
 def _setting_values(overrides, room: str) -> dict:
@@ -56,7 +60,7 @@ def _setting_values(overrides, room: str) -> dict:
     return {k: v["value"] for k, v in resolved.items()}
 
 
-def build_plan(overrides, unit_ids, periods) -> dict[str, list[CoolPeriod]]:
+def build_plan(overrides, unit_ids, periods, away: bool = False) -> dict[str, list[CoolPeriod]]:
     """Cooling plan per unit; units whose room is set to heating are left out."""
     if not periods:
         return {}
@@ -71,10 +75,15 @@ def build_plan(overrides, unit_ids, periods) -> dict[str, list[CoolPeriod]]:
         rows = []
         for room_plan in plan[unit_id]:
             off = off_allowed and room_plan.price_c_kwh >= high
-            reason = ("off" if off else
-                      "precool" if room_plan.reason == "threshold" else "max")
+            if away:
+                target, reason = float(values["away_max_c"]), "away"
+            else:
+                target = float(room_plan.temperature_c)
+                reason = "precool" if room_plan.reason == "threshold" else "max"
+            if off:
+                reason = "off"
             rows.append(CoolPeriod(room_plan.ts_utc, room_plan.price_c_kwh,
-                                   float(room_plan.temperature_c), off, reason))
+                                   target, off, reason))
         out[unit_id] = rows
     return out
 
@@ -117,6 +126,10 @@ class CoolingAutomation:
                 "CREATE TABLE IF NOT EXISTS plan_state ("
                 "unit_id TEXT PRIMARY KEY, off_since_utc TEXT, "
                 "last_target REAL)")
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS away_state ("
+                "id INTEGER PRIMARY KEY CHECK (id = 1), away INTEGER NOT NULL, "
+                "changed_utc TEXT, actor TEXT)")
         finally:
             conn.close()
 
@@ -179,6 +192,36 @@ class CoolingAutomation:
         finally:
             conn.close()
 
+    # -- away mode (card F6.1) --
+
+    def away(self) -> bool:
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT away FROM away_state WHERE id = 1").fetchone()
+        finally:
+            conn.close()
+        return bool(row[0]) if row else False
+
+    def set_away(self, away: bool, actor: str = ACTOR) -> bool:
+        """Turn away mode on or off and apply it at once when automation runs."""
+        conn = self._connect()
+        try:
+            conn.execute(
+                "INSERT INTO away_state (id, away, changed_utc, actor) "
+                "VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+                "away = excluded.away, changed_utc = excluded.changed_utc, "
+                "actor = excluded.actor",
+                (int(away), self._now().isoformat(), actor))
+        finally:
+            conn.close()
+        if self.enabled:
+            try:
+                self.run_once()
+            except Exception:
+                logging.exception("Cooling plan pass after away change failed")
+        return bool(away)
+
     # -- plan --
 
     def _periods(self, day: date) -> list[Period]:
@@ -195,7 +238,7 @@ class CoolingAutomation:
         units = self._service.store.unit_states()
         periods = self._periods(now.astimezone(HELSINKI).date())
         plan = build_plan(self._settings.overrides(),
-                          [u["id"] for u in units], periods)
+                          [u["id"] for u in units], periods, self.away())
         return units, plan
 
     def day_plan(self) -> dict:
@@ -208,7 +251,8 @@ class CoolingAutomation:
                  for u in units if u["id"] in plan]
         return {"enabled": self.enabled, "actor": ACTOR,
                 "day": now.astimezone(HELSINKI).date().isoformat(),
-                "has_prices": bool(plan), "units": shown}
+                "has_prices": bool(plan), "away": self.away(),
+                "units": shown}
 
     # -- apply --
 
@@ -240,6 +284,8 @@ class CoolingAutomation:
             if current is None:
                 continue
             values = _setting_values(overrides, unit_id)
+            if current.reason in ("away", "off") and self.away():
+                values["cool_max_c"] = values["away_max_c"]
             sent.extend(self._apply(state, current, values, now))
         return sent
 

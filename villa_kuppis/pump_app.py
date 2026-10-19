@@ -10,6 +10,7 @@ fully offline) plus a small JSON API on top of PumpService:
 * GET  /api/identity  the trusted actor of this connection (card F3.2)
 * GET  /api/settings  setting definitions, overrides and effective values
 * POST /api/settings  {"scope", "key", "value" | "reset"} (card F3.5)
+* GET/POST /api/away  home-away button, {"away": bool} (card F6.1)
 * POST /api/command   {"unit", "action", "value"} -> the service
 
 The page shows the cloud-reported state and the requested change
@@ -1112,6 +1113,8 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             self._json(200, self.app.settings_payload())
         elif parts.path == "/api/plan":
             self._json(200, self.app.service.plan_view())
+        elif parts.path == "/api/away":
+            self._json(200, {"away": self.app.service.automation.away()})
         elif parts.path == "/api/identity":
             self._json(200, {"actor": identity["actor"],
                              "display_name": identity["display_name"],
@@ -1134,6 +1137,16 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             self._post_command(identity)
         elif parts.path == "/api/settings":
             self._post_settings(identity)
+        elif parts.path == "/api/away":
+            body = self._read_json_object()
+            if body is None:
+                return
+            if not isinstance(body.get("away"), bool):
+                self._json(400, {"error": "bad_body",
+                                 "detail": "away must be true or false"})
+                return
+            self._json(200, self.app.service.set_away(body["away"],
+                                                      identity["actor"]))
         elif parts.path in ("/", "/api/view", "/api/events", "/api/history",
                             "/api/identity", "/api/plan"):
             # Known paths with the wrong method: 405, mirroring how
