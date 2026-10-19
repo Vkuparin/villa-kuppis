@@ -1,12 +1,16 @@
 # First integration experiments
 
-Experiment specifications and recorded checks. Keep private records (credentials, account and device IDs) in ignored `scratch/`; publish only generic device labels and capability facts. Each live test needs the owner's go-ahead.
+Experiment specifications and recorded checks. Keep private reference material in ignored `scratch/`; publish only generic device labels and capability facts. The pump probe reads credentials through masked local prompts and does not save them. Each live test needs the owner's go-ahead.
 
 Order: C and D first, when implementation begins; A and B when the cottage devices are installed.
 
 ## C. Mitsubishi through MELCloud Home
 
 Follow [the Mitsubishi experiment](mitsubishi.md#first-experiment). Runs on the home PC.
+
+The supervised probe is prepared with `aiomelcloudhome` 0.3.1. Its offline demo changes a synthetic unit from 23 °C to 24 °C and restores 23 °C. The live test awaits owner approval, a local sign-in and confirmation of the upstairs LN25 in the MELCloud Home app. No account or device has been accessed.
+
+Validated on 19 October 2026 at `9f627d7`: 17 focused pump tests passed on Windows Python 3.13, with network, credentials and devices replaced by fakes. The offline demo and help passed. Tests cover secure-prompt failure, bounds and confirmation checks, failed writes and read-back, restoration failure, interruption, other controls changing, and sanitized errors. Sol 6.1 Medium reviewed the design and implementation; Kynsi implemented the probe and one repair pass.
 
 ## D. Spot prices and fixed thresholds
 
