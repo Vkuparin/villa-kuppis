@@ -24,7 +24,7 @@ Kynsi may call paid Codex agents as needed while coordinating an approved projec
 
 Work sequentially unless the owner requests parallel paid work. Give a Codex agent the root, goal, owned files, constraints and focused checks. It is a worker: it must not take the lease, edit cards, commit, push or delegate back to Hermes. Review requests are read-only. Kynsi integrates the reviewed result and publishes under the project's rules.
 
-## Completed Tier 2 batches
+## Completed Tier 2 batches (Kynsi-led coordination)
 
 A batch is one coherent change under a settled interface. Finish implementation and focused checks, then send the diff, check results and acceptance conditions to Light once. Do not pay for a reviewer to watch local progress or poll an idle agent.
 
