@@ -46,13 +46,16 @@ section.settings h2 { margin: 0 0 .6rem; font-size: 1.15rem; }
 section.settings h3 { margin: 1rem 0 .3rem; font-size: 1rem; color: var(--text2); }
 .set-row { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .8rem;
            padding: .35rem 0; border-bottom: 1px solid var(--line2); }
+.set-row { max-width: 40rem; }
 .set-row label { flex: 1 1 14rem; }
+.set-src:empty { display: none; }
 .set-row input[type=number], .set-row input[type=time] {
   min-height: 44px; width: 7.5rem; font-size: 1rem; padding: 0 .5rem;
   border: 1px solid var(--ctl); border-radius: .5rem;
   background: var(--surface); color: var(--text); }
+.set-row input[type=time] { width: 9.5rem; }
 .set-row input[type=checkbox] { width: 1.6rem; height: 1.6rem; }
-.set-src { font-size: .85rem; color: var(--text3); flex: 0 0 9rem; }
+.set-src { font-size: .85rem; color: var(--text3); flex: 0 0 auto; }
 #set-status { font-size: .85rem; color: var(--text3); }
 #set-status.err { color: var(--err); }
 """
