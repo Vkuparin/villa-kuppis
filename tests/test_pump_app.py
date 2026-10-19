@@ -282,7 +282,7 @@ assert.equal($histStatus.textContent, '');
         server, _ = self._start_app(FakeClient(make_unit_payloads()))
         _, _, raw = http("GET", self._url(server, "/"))
         page = raw.decode("utf-8")
-        self.assertIn("'<td title=\"' + esc(fmtClock(ev.ts)) + '\">'", page)
+        self.assertIn("'<td data-label=\"Milloin\" title=\"' + esc(fmtClock(ev.ts)) + '\">'", page)
 
     def test_demo_flag(self):
         server, _ = self._start_app(FakeClient(make_unit_payloads()), demo=True)
