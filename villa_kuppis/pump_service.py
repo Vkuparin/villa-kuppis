@@ -308,6 +308,10 @@ class PumpStore:
             self._conn.executescript(_SCHEMA)
             self._conn.commit()
 
+    @property
+    def path(self) -> Path:
+        return self._path
+
     def upsert_units(self, states: list[dict]) -> None:
         with self._lock:
             for s in states:

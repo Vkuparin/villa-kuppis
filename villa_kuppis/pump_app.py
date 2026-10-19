@@ -8,6 +8,8 @@ fully offline) plus a small JSON API on top of PumpService:
 * GET  /api/events    the event log (newest first)
 * GET  /api/history   downsampled time series (card F3.3)
 * GET  /api/identity  the trusted actor of this connection (card F3.2)
+* GET  /api/settings  setting definitions, overrides and effective values
+* POST /api/settings  {"scope", "key", "value" | "reset"} (card F3.5)
 * POST /api/command   {"unit", "action", "value"} -> the service
 
 The page shows the cloud-reported state and the requested change
@@ -44,7 +46,11 @@ from typing import cast
 from urllib.parse import parse_qs, urlsplit
 
 from .pump_probe import FakeClient, _unit_payload
+from . import settings as app_settings
 from .pump_service import MAX_ACTOR_LENGTH, PumpService, make_live_service
+from .settings_ui import SCRIPT as _SETTINGS_SCRIPT
+from .settings_ui import SECTION_HTML as _SETTINGS_HTML
+from .settings_ui import STYLE as _SETTINGS_STYLE
 
 DEFAULT_HOST = "127.0.0.1"
 # The actor used for every request that arrives without a trusted remote
@@ -243,6 +249,7 @@ td.result-pending { color: #0b3f9e; }
 .alert { background: #fdecec; border: 1px solid #a11d1d; color: #7a1414;
          padding: .6rem .9rem; border-radius: .5rem; }
 .alert.info { background: #eef4ff; border-color: #0b3f9e; color: #0b3f9e; }
+/*SETTINGS_STYLE*/
 @media (max-width: 560px) {
   .row { flex-direction: column; align-items: stretch; gap: .35rem; }
   .row .label { order: 1; }
@@ -291,6 +298,7 @@ ohjaavat vain esittelyyksiköitä.</div>
       <a href="https://en.ilmatieteenlaitos.fi/open-data-licence">avoin data (CC BY 4.0)</a>.
       Sähkönhinta: Elering. Käyrät on harvennettu näytölle.</p>
   </section>
+<!--SETTINGS_SECTION-->
   <section class="events" aria-label="Tapahtumat">
     <h2>Tapahtumat</h2>
     <table>
@@ -850,15 +858,19 @@ setInterval(refresh, POLL_MS);
 setInterval(loadHistory, 60000);
 setInterval(loadIdentity, 60000);
 </script>
+<script>/*SETTINGS_SCRIPT*/</script>
 </body>
 </html>
 """
 
 
 def render_page(demo: bool) -> str:
+    page = (_PAGE.replace("/*SETTINGS_STYLE*/", _SETTINGS_STYLE)
+            .replace("<!--SETTINGS_SECTION-->", _SETTINGS_HTML)
+            .replace("/*SETTINGS_SCRIPT*/", _SETTINGS_SCRIPT))
     if not demo:
-        return _PAGE
-    return _PAGE.replace('<body data-demo="0">', '<body data-demo="1">')
+        return page
+    return page.replace('<body data-demo="0">', '<body data-demo="1">')
 
 
 # --- HTTP layer -----------------------------------------------------------------
@@ -1036,6 +1048,8 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
                 self._json(400, {"error": "bad_query", "detail": str(err)})
                 return
             self._json(200, payload)
+        elif parts.path == "/api/settings":
+            self._json(200, self.app.settings_payload())
         elif parts.path == "/api/identity":
             self._json(200, {"actor": identity["actor"],
                              "display_name": identity["display_name"],
@@ -1056,6 +1070,8 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
         parts = urlsplit(self.path)
         if parts.path == "/api/command":
             self._post_command(identity)
+        elif parts.path == "/api/settings":
+            self._post_settings(identity)
         elif parts.path in ("/", "/api/view", "/api/events", "/api/history",
                             "/api/identity"):
             # Known paths with the wrong method: 405, mirroring how
@@ -1068,10 +1084,11 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
         else:
             self._send(404, b"not found", "text/plain; charset=utf-8")
 
-    def _post_command(self, identity) -> None:
+    def _read_json_object(self) -> dict | None:
+        """Parse the JSON object body, or answer the error and return None."""
         if self.headers.get_content_type() != "application/json":
             self._json(415, {"error": "bad_body", "detail": "JSON body required"})
-            return
+            return None
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
@@ -1079,16 +1096,44 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
         if length <= 0 or length > MAX_BODY_BYTES:
             self._json(400, {"error": "bad_body",
                              "detail": "the request body is missing or too large"})
-            return
+            return None
         try:
             body = json.loads(self.rfile.read(length).decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
             self._json(400, {"error": "bad_body",
                              "detail": "the request body is not valid JSON"})
-            return
+            return None
         if not isinstance(body, dict):
             self._json(400, {"error": "bad_body",
                              "detail": "the request body must be a JSON object"})
+            return None
+        return body
+
+    def _post_settings(self, identity) -> None:
+        body = self._read_json_object()
+        if body is None:
+            return
+        scope, key = body.get("scope"), body.get("key")
+        if not isinstance(scope, str) or not isinstance(key, str):
+            self._json(400, {"error": "bad_body",
+                             "detail": "scope and key must be strings"})
+            return
+        if body.get("reset") is True:
+            status, payload = self.app.change_setting(scope, key, None, True,
+                                                      identity["actor"])
+        elif "value" in body:
+            status, payload = self.app.change_setting(scope, key,
+                                                      body["value"], False,
+                                                      identity["actor"])
+        else:
+            self._json(400, {"error": "bad_body",
+                             "detail": "value or reset is required"})
+            return
+        self._json(status, payload)
+
+    def _post_command(self, identity) -> None:
+        body = self._read_json_object()
+        if body is None:
             return
         unit = body.get("unit")
         action = body.get("action")
@@ -1130,7 +1175,41 @@ class PumpAppServer(ThreadingHTTPServer):
         self.public_authority = authority
         self.local_actor = actor
         self.page_html = render_page(demo)
+        self.settings = app_settings.SettingsStore(service.store.path)
         super().__init__((host, port), _PumpAppHandler)
+
+    def _scopes(self) -> list[dict]:
+        """Every scope the settings can apply to: sites, then home rooms."""
+        scopes = [{"id": f"site:{site}", "site": site,
+                   "label": app_settings.SITE_LABELS[site]}
+                  for site in app_settings.SITES]
+        for unit in self.service.view()["units"]:
+            scopes.append({"id": f"room:home/{unit['id']}", "site": "home",
+                           "label": f"Koti · {unit['name']}"})
+        return scopes
+
+    def settings_payload(self) -> dict:
+        overrides = self.settings.overrides()
+        scopes = self._scopes()
+        effective = {}
+        for s in scopes:
+            site, room = app_settings.parse_scope(s["id"])
+            effective[s["id"]] = app_settings.resolve(overrides, site, room)
+        return {"definitions": [d.public() for d in app_settings.DEFINITIONS],
+                "scopes": scopes, "overrides": overrides,
+                "effective": effective, "audit": self.settings.audit()}
+
+    def change_setting(self, scope, key, value, reset, actor):
+        if scope not in {s["id"] for s in self._scopes()}:
+            return 404, {"error": "not_found", "detail": "tuntematon kohde"}
+        try:
+            if reset:
+                self.settings.reset(scope, key)
+            else:
+                self.settings.set(scope, key, value, actor)
+        except ValueError as err:
+            return 400, {"error": "bad_value", "detail": str(err)}
+        return 200, {"ok": True}
 
     @property
     def url(self) -> str:
