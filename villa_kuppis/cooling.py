@@ -275,7 +275,10 @@ class CoolingAutomation:
             rows = store.stored_day(day.isoformat())
         finally:
             store.close()
-        return [Period(r.ts_utc, r.price_c_kwh) for r in rows or []]
+        # The thresholds are compared with the price as shown, VAT included.
+        factor = Decimal(str(app_settings.vat_factor(
+            self._settings.overrides(), "home")))
+        return [Period(r.ts_utc, r.price_c_kwh * factor) for r in rows or []]
 
     def _plan(self, now: datetime):
         """Units, the plan per unit (today, then tomorrow when stored) and

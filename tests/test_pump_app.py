@@ -238,6 +238,7 @@ const $histUnit = {value: 'first'}, $histRange = {value: 'day'};
 const $histSite = {value: 'home'}, $histStatus = {};
 const $histNext = {}, $histNow = {};
 let histEnd = null, histNowMs = 0, histMaxEnd = 0;
+const PRICE_SERIES = {};
 const $histChart = {}, $histLegend = {}, requests = [], drawn = [];
 const drawHistory = data => drawn.push(data.unit);
 const fetch = url => new Promise(resolve => requests.push({url, resolve}));

@@ -62,6 +62,10 @@ DEFINITIONS: tuple[Definition, ...] = (
                "c/kWh", -50, 500),
     Definition("high_price_c_kwh", "Kallis hinta", "Pörssihinta", "number",
                15.0, "c/kWh", -50, 500),
+    Definition("vat_enabled", "Lisää ALV sähkönhintaan", "Pörssihinta", "bool",
+               False),
+    Definition("vat_percent", "ALV-prosentti", "Pörssihinta", "number", 25.5,
+               "%", 0, 100),
     Definition("cool_max_c", "Enimmäislämpötila", "Jäähdytys", "number", 25.0,
                "°C", 15, 35),
     Definition("precool_c", "Esijäähdytyslämpötila", "Jäähdytys", "number",
@@ -201,6 +205,12 @@ def plan_settings(overrides: Mapping[str, Mapping[str, object]], site: str,
     return {"site": site_entry,
             "rooms": {room: entry(_values(resolve(overrides, site, room)))
                       for room in rooms}}
+
+
+def vat_factor(overrides: Mapping[str, Mapping[str, object]], site: str) -> float:
+    """Price multiplier for the site: 1 + VAT when VAT is switched on."""
+    values = _values(resolve(overrides, site))
+    return 1 + float(values["vat_percent"]) / 100 if values["vat_enabled"] else 1.0
 
 
 class SettingsStore:

@@ -90,6 +90,14 @@ class CoolingTests(ServiceTestCase):
         # The household's off unit-2 was never switched on by the plan.
         self.assertFalse(self._unit(service, "unit-2")["power"])
 
+    def test_vat_setting_raises_the_price_the_thresholds_see(self):
+        service, _ = self.start()
+        self.set_prices(130)                      # 13 c/kWh: normal without VAT
+        SettingsStore(f"{self.tmp}/pumps.db").set(
+            "site:home", "vat_enabled", True, "Ville")   # 16.3 c/kWh: above 15
+        sent = self.run_plan(service)
+        self.assertEqual(self.brief(sent), [("unit-1", "power", False)])
+
     def test_room_override_can_disable_switching_off(self):
         service, _ = self.start()
         SettingsStore(service.store.path).set(

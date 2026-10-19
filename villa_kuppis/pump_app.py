@@ -684,7 +684,7 @@ const HIST_SERIES = [
   { key: "forecast", label: "Sääennuste", color: "var(--info)",
     scale: "temp", dash: "8 3" },
 ];
-const PRICE_SERIES = { key: "price", label: "Sähkön hinta (snt/kWh)",
+const PRICE_SERIES = { key: "price", label: "Sähkön hinta (snt/kWh)", vat: null,
                        color: "var(--warn)", scale: "price", dash: "1 4" };
 
 function svgEl(tag, attrs, text) {
@@ -907,7 +907,8 @@ function drawHistory(data) {
     if (hasPrice) {
       const hit = nearest(pricePts, t, Math.max(900000, expected) * 1.5);
       if (hit) rows.push('<div><i style="background:' + PRICE_SERIES.color + '"></i>' +
-        "Sähkön hinta: " + esc(priceFmt.format(hit[1])) + " snt/kWh</div>");
+        "Sähkön hinta: " + esc(priceFmt.format(hit[1])) + " snt/kWh" +
+        (PRICE_SERIES.vat == null ? "" : " (sis. ALV)") + "</div>");
     }
     const stamp = new Intl.DateTimeFormat("fi-FI", { timeZone: "Europe/Helsinki",
       weekday: "short", day: "numeric", month: "numeric", hour: "2-digit",
@@ -980,6 +981,9 @@ async function loadHistory() {
       return r.json();
     });
     if (request !== histRequest) return;
+    PRICE_SERIES.vat = data.vat_percent;
+    PRICE_SERIES.label = data.vat_percent == null ? "Sähkön hinta (snt/kWh)"
+      : "Sähkön hinta (snt/kWh, ALV " + String(data.vat_percent).replace(".", ",") + " % sis.)";
     histNowMs = new Date(data.now).getTime();
     histMaxEnd = new Date(data.max_end).getTime();
     const shownEnd = new Date(data.end).getTime();

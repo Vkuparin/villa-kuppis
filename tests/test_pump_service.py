@@ -1069,6 +1069,13 @@ class HistoryServiceTests(ServiceTestCase):
         self.assertLessEqual(len(price), 288)
         for _ts, v in price:
             self.assertAlmostEqual(v, 0.05)
+        self.assertIsNone(payload["vat_percent"])
+        from villa_kuppis.settings import SettingsStore
+        SettingsStore(service.store.path).set("site:home", "vat_enabled", True, "Ville")
+        with_vat = service.history("unit-1", "day")
+        self.assertEqual(with_vat["vat_percent"], 25.5)
+        for _ts, v in with_vat["price"]:
+            self.assertAlmostEqual(v, 0.05 * 1.255)
 
     def test_weather_thread_backfills_and_updates(self):
         class _Series:

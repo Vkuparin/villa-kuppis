@@ -38,7 +38,7 @@ from aiomelcloudhome.models.ata import ATAFanSpeed, ATAOperationMode
 
 from . import learning, weather
 from .cooling import CoolingAutomation
-from .settings import SettingsStore
+from .settings import SettingsStore, vat_factor
 from .pump_probe import (
     _default_client_factory,
     _operation_message,
@@ -603,7 +603,7 @@ class PumpStore:
                 for r in rows]
 
     def price_series(self, prices_db, start, end,
-                     max_points: int) -> list[tuple] | None:
+                     max_points: int, factor: float = 1.0) -> list[tuple] | None:
         """Downsampled (ts, c/kWh) prices from prices.db (opened read-only).
 
         Returns None when prices.db does not exist (the API reports price
@@ -626,7 +626,7 @@ class PumpStore:
                 ") WHERE rn = 1 ORDER BY ts_utc", (s, b, s, e)).fetchall()
         finally:
             conn.close()
-        return [(ts, float(Decimal(raw) / Decimal(10))) for ts, raw in rows]
+        return [(ts, float(Decimal(raw) / Decimal(10)) * factor) for ts, raw in rows]
 
     # -- plan targets, commands, energy and cost (card F3.3) ------------------
 
@@ -686,7 +686,8 @@ class PumpStore:
             self._conn.commit()
         return len(rows)
 
-    def energy_daily(self, unit_id: str, prices_db, start, end) -> list[dict]:
+    def energy_daily(self, unit_id: str, prices_db, start, end,
+                     factor: float = 1.0) -> list[dict]:
         """Energy and cost per Helsinki day; [] when no energy is stored.
 
         Each energy row covers the hour starting at its timestamp and is
@@ -711,7 +712,7 @@ class PumpStore:
                 for ts, raw in conn.execute(
                         "SELECT ts_utc, price_raw_eur_mwh FROM price_interval "
                         "WHERE ts_utc >= ? AND ts_utc < ?", (s, e + 3600)):
-                    prices[ts] = float(Decimal(raw) / Decimal(10))
+                    prices[ts] = float(Decimal(raw) / Decimal(10)) * factor
             finally:
                 conn.close()
         days: dict[str, dict] = {}
@@ -1186,15 +1187,18 @@ class PumpService:
         start = end - timedelta(seconds=span_seconds)
         unit_rows = self.store.pump_history(unit, start, end, max_points)
         outdoor = self.store.outdoor_series(site, start, end, max_points)
+        factor = vat_factor(SettingsStore(self.store.path).overrides(), site)
         price = self.store.price_series(self._prices_db, start, end,
-                                        max_points)
+                                        max_points, factor)
         plan = self.store.plan_series(unit, start, end, max_points)
         commands = self.store.command_marks(unit, start, end)
-        energy = self.store.energy_daily(unit, self._prices_db, start, end)
+        energy = self.store.energy_daily(unit, self._prices_db, start, end,
+                                         factor)
         forecast = self.store.forecast_rows(
             site, max(start, now - timedelta(hours=1)), end)
         return {
             "now": _iso(_to_epoch(now)),
+            "vat_percent": round((factor - 1) * 100, 2) if factor != 1 else None,
             "max_end": _iso(_to_epoch(now + timedelta(seconds=HISTORY_AHEAD))),
             "forecast": [[_iso(ts), v] for ts, v in forecast],
             "unit": unit,
