@@ -1,4 +1,4 @@
-# Python 3.13. The experiment itself is stdlib-only (urllib, sqlite3,
-# decimal, zoneinfo, unittest); tzdata is required so zoneinfo can resolve
-# Europe/Helsinki on Windows, where the OS ships no IANA zone database.
+# Python 3.13. tzdata supplies Europe/Helsinki time on Windows.
 tzdata>=2024.1
+# Pinned for the MELCloud Home integration experiment.
+aiomelcloudhome==0.3.1

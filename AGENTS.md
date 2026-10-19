@@ -4,7 +4,7 @@ Project: Villa Kuppis.
 
 Purpose: A personal Finnish-language home automation app that brings the home and cottage devices into one app.
 
-Stack: Implementation started. Python 3.13 with SQLite for the PC service; tzdata supplies Europe/Helsinki time on Windows. Planned: aiomelcloudhome for the pumps, Finnish web app for desktop, native Kotlin Android app (Google Home APIs, web app in a WebView) for the cottage devices in Google Home over Matter, and Tailscale between phones and PC. No Home Assistant or VM unless last resort. Update this line when the runtime, framework or key libraries change.
+Stack: Implementation started. Python 3.13 with SQLite for the PC service; tzdata supplies Europe/Helsinki time on Windows. The pump experiment uses aiomelcloudhome 0.3.1. Planned: Finnish web app for desktop, native Kotlin Android app (Google Home APIs, web app in a WebView) for the cottage devices in Google Home over Matter, and Tailscale between phones and PC. No Home Assistant or VM unless last resort. Update this line when the runtime, framework or key libraries change.
 
 Codex, Hermes and Claude Code (through `CLAUDE.md`) all read this file. This is a hobby project: move quickly, keep process small, and ask the owner only about real product choices.
 
@@ -22,6 +22,8 @@ Codex, Hermes and Claude Code (through `CLAUDE.md`) all read this file. This is 
 | Run the spot-price experiment | .venv\Scripts\python -m villa_kuppis --help (development commands require an explicit temporary data directory) |
 | Offline demo | $devData = Join-Path ([IO.Path]::GetTempPath()) ("villa-kuppis-dev-" + [guid]::NewGuid()); .venv\Scripts\python -m villa_kuppis --data-dir "$devData" demo |
 | Spot-price tests (mocked network, temporary SQLite) | .venv\Scripts\python -m unittest discover -s tests -v |
+| Pump probe help and offline demo | .venv\Scripts\python -m villa_kuppis.pump_probe --help; .venv\Scripts\python -m villa_kuppis.pump_probe demo |
+| Pump probe tests (mocked network and devices) | .venv\Scripts\python -m unittest discover -s tests -p "test_pump*.py" -v |
 | Development tool verification (new terminal after installation) | py -3.13 --version; java -version; adb version; sdkmanager --sdk_root="$env:ANDROID_HOME" --list_installed; tailscale version |
 | Type, build and format checks | node scripts/check-docs.mjs (requires shared dev-dashboard); git diff --check |
 
