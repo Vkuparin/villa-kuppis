@@ -838,9 +838,9 @@ async def _supervised_power(client, *, unit, sleep_fn, print_fn, deadline, max_p
         if not await _verify(True):
             raise _ProbeError("power on was not confirmed; skipping the 30-second hold")
         print_fn("  power on confirmed by read-back")
-        print_fn("Holding power on for 30 seconds ...")
+        print_fn("Waiting 30 seconds after cloud power-on read-back ...")
         await sleep_fn(30.0)
-        print_fn("  30-second hold complete")
+        print_fn("  30-second hold complete (timed from cloud read-back)")
         off_confirmed = await _turn_off()
         if not off_confirmed:
             raise _ProbeError("power off was not confirmed by read-back")
@@ -935,7 +935,7 @@ async def test_power_live(client, *, input_fn, sleep_fn, print_fn=print,
     print_fn(f"  mode:         {_fmt_enum(unit.operation_mode)} (cloud reported)")
     print_fn(f"  setpoint:     {_fmt_temp(unit.set_temperature)} (cloud reported)")
     print_fn("  power:        off (cloud reported)")
-    print_fn("The test will turn this unit on, hold for 30 seconds after confirmation, then turn it off.")
+    print_fn("After the cloud reports power on, the test waits 30 seconds, then requests power off.")
     print_fn("Type POWER to turn it on now; anything else aborts without writing.")
     if input_fn("Confirm: ").strip() != "POWER":
         print_fn("Not confirmed; no change was made.")
