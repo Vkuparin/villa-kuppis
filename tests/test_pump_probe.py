@@ -44,7 +44,7 @@ def _run_live(argv, fake=None, *, inputs=None, getpass_results=("owner", "s3cret
                           context_error_after=context_error_after,
                           close_error=close_error)
     out = []
-    calls = {"getpass": 0, "factory": 0, "input": 0}
+    calls = {"getpass": 0, "factory": 0, "input": 0, "sleeps": []}
     input_queue = list(inputs or [])
     sleeps = list(sleep_side_effects)
 
@@ -70,6 +70,7 @@ def _run_live(argv, fake=None, *, inputs=None, getpass_results=("owner", "s3cret
         return fake, fake.close
 
     async def sleep_fn(delay):
+        calls["sleeps"].append(delay)
         if sleeps:
             effect = sleeps.pop(0)
             if isinstance(effect, BaseException):
@@ -106,7 +107,7 @@ class CliShape(unittest.TestCase):
             cwd=REPO_ROOT, capture_output=True, text=True,
         )
         self.assertEqual(proc.returncode, 0)
-        for token in ("demo", "read", "test-setpoint", "--live"):
+        for token in ("demo", "read", "test-setpoint", "test-power", "--live"):
             self.assertIn(token, proc.stdout)
 
     def test_default_command_is_offline_demo(self):
@@ -125,7 +126,7 @@ class CliShape(unittest.TestCase):
 
 class LiveGating(unittest.TestCase):
     def test_gating_refusals(self):
-        for command in ("read", "test-setpoint"):
+        for command in ("read", "test-setpoint", "test-power"):
             with self.subTest(command=command):
                 rc, out, fake, calls = _run_live([command])
                 self.assertNotEqual(rc, 0)
@@ -441,6 +442,153 @@ class SupervisedFlows(unittest.TestCase):
         self.assertNotIn("Traceback", out)
         self.assertEqual(len(fake.control_calls), 2)
         self.assertEqual(_set_temperature_of(fake.control_calls[1]), 23.0)
+
+
+class PowerFlows(unittest.TestCase):
+    def _run(self, *, fake=None, **kwargs):
+        if fake is None:
+            fake = FakeClient([_up_payload(power="False")])
+        return _run_live(["--live", "test-power"], fake=fake,
+                         inputs=["1", "yes", "POWER"], **kwargs)
+
+    def _assert_only_power(self, fake):
+        for unit_id, kwargs in fake.control_calls:
+            self.assertEqual(unit_id, UP_ID)
+            non_null = {key: value for key, value in kwargs.items() if value is not None}
+            self.assertEqual(list(non_null), ["power"])
+
+    def test_on_hold_off_and_only_power_written(self):
+        fake = FakeClient([_up_payload(power="False")])
+
+        def during_hold(delay):
+            self.assertEqual(delay, 30.0)
+            self.assertEqual([call[1]["power"] for call in fake.control_calls], [True])
+            self.assertEqual(fake.closed, 0)
+
+        rc, out, fake, calls = self._run(fake=fake, sleep_side_effects=[during_hold])
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls["sleeps"], [30.0])
+        self.assertEqual([call[1]["power"] for call in fake.control_calls], [True, False])
+        self._assert_only_power(fake)
+        self.assertIn("power on confirmed by read-back", out)
+        self.assertIn("30-second hold complete", out)
+        self.assertIn("power off confirmed by read-back", out)
+        self.assertIn("Power probe complete.", out)
+        self.assertEqual(fake.closed, 1)
+
+    def test_http500_applied_both_writes_warns_and_succeeds(self):
+        error = DiagnosticsSanitization()._chained_http_error(500, "PRIVATE")
+        fake = FakeClient([_up_payload(power="False")], put_errors=[error, error])
+        rc, out, fake, calls = self._run(fake=fake)
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls["sleeps"], [30.0])
+        self.assertEqual(len(fake.control_calls), 2)
+        self.assertIn("power on write failed: HTTP 500", out)
+        self.assertIn("power off write failed: HTTP 500", out)
+        self.assertIn("power on confirmed by read-back", out)
+        self.assertIn("power off confirmed by read-back", out)
+        self.assertIn("WARNING: Server write responses failed.", out)
+        self.assertNotIn("Power probe complete.", out)
+        self.assertNotIn("PRIVATE", out)
+        self._assert_only_power(fake)
+
+    def test_cancel_during_hold_confirms_off_before_close(self):
+        fake = FakeClient([_up_payload(power="False")])
+
+        def cancelled_hold(delay):
+            self.assertEqual(delay, 30.0)
+            self.assertEqual(fake.closed, 0)
+            raise asyncio.CancelledError()
+
+        rc, out, fake, _calls = self._run(fake=fake, sleep_side_effects=[cancelled_hold])
+        self.assertEqual(rc, 1)
+        self.assertEqual([call[1]["power"] for call in fake.control_calls], [True, False])
+        self.assertIn("Cleaning up: ensuring the unit is off", out)
+        self.assertIn("power off confirmed by read-back", out)
+        self.assertIn("Interrupted", out)
+        self.assertNotIn("30-second hold complete", out)
+        self.assertEqual(fake.closed, 1)
+        self.assertIs(pump_probe.collect_units(asyncio.run(fake.get_context()))[0].power, False)
+
+    def test_unconfirmed_on_skips_hold_and_still_turns_off(self):
+        fake = FakeClient([_up_payload(power="False")], put_stale=[99, 0])
+        rc, out, fake, calls = self._run(fake=fake)
+        self.assertEqual(rc, 1)
+        self.assertNotIn(30.0, calls["sleeps"])
+        self.assertEqual([call[1]["power"] for call in fake.control_calls], [True, False])
+        self.assertIn("power on was not confirmed", out)
+        self.assertIn("power off confirmed by read-back", out)
+        self.assertNotIn("30-second hold complete", out)
+
+    def test_second_interrupt_during_off_cleanup_is_unconfirmed(self):
+        async def cancel_cleanup(_delay):
+            current = asyncio.current_task()
+            current.cancel()
+            await asyncio.sleep(3600)
+
+        fake = FakeClient([_up_payload(power="False")], put_stale=[0, 1])
+        rc, out, fake, _calls = self._run(
+            fake=fake, sleep_side_effects=[asyncio.CancelledError(), cancel_cleanup],
+        )
+        self.assertEqual(rc, pump_probe.EXIT_RESTORE_UNCONFIRMED)
+        self.assertEqual([call[1]["power"] for call in fake.control_calls], [True, False])
+        self.assertIn("POWER OFF UNCONFIRMED", out)
+        self.assertNotIn("Power probe complete.", out)
+        self.assertEqual(fake.closed, 1)
+
+    def test_unconfirmed_off_is_exit_three(self):
+        def ignore_off(payload):
+            for setting in payload["settings"]:
+                if setting["name"] == "Power":
+                    setting["value"] = "True"
+
+        fake = FakeClient([_up_payload(power="False")],
+                          mutates=[None, ignore_off, ignore_off])
+        rc, out, fake, _calls = self._run(fake=fake)
+        self.assertEqual(rc, pump_probe.EXIT_RESTORE_UNCONFIRMED)
+        self.assertIn("POWER OFF UNCONFIRMED", out)
+        self.assertIn("MELCloud Home app", out)
+        self.assertNotIn("Power probe complete.", out)
+        self._assert_only_power(fake)
+
+    def test_control_drift_including_setpoint_fails_after_off(self):
+        def change_temperature(payload):
+            for setting in payload["settings"]:
+                if setting["name"] == "SetTemperature":
+                    setting["value"] = "24"
+
+        fake = FakeClient([_up_payload(power="False")], mutates=[change_temperature])
+        rc, out, fake, _calls = self._run(fake=fake)
+        self.assertEqual(rc, 1)
+        self.assertIn("set_temperature changed", out)
+        self.assertIn("FAILED", out)
+        self.assertIn("power off confirmed by read-back", out)
+        self._assert_only_power(fake)
+
+    def test_refuse_on_unknown_error_and_missing_confirmation(self):
+        unknown = _up_payload(power="False")
+        unknown["settings"] = [s for s in unknown["settings"] if s["name"] != "Power"]
+        cases = [(_up_payload(power="True"), ["1", "yes", "POWER"]),
+                 (unknown, ["1", "yes", "POWER"]),
+                 (_up_payload(power="False", error="True"), ["1", "yes", "POWER"]),
+                 (_up_payload(power="False"), ["1", "no"]),
+                 (_up_payload(power="False"), ["1", "yes", "TEST"])]
+        for payload, inputs in cases:
+            with self.subTest(inputs=inputs, power=payload["settings"]):
+                fake = FakeClient([payload])
+                rc, _out, fake, _calls = _run_live(
+                    ["--live", "test-power"], fake=fake, inputs=inputs,
+                )
+                self.assertEqual(rc, 1)
+                self.assertEqual(fake.control_calls, [])
+
+    def test_power_command_tty_gating_precedes_credentials(self):
+        rc, out, fake, calls = _run_live(["--live", "test-power"], isatty=False)
+        self.assertEqual(rc, 1)
+        self.assertIn("interactive terminal", out)
+        self.assertEqual(calls["getpass"], 0)
+        self.assertEqual(calls["factory"], 0)
+        self.assertEqual(fake.control_calls, [])
 
 
 class Sanitization(unittest.TestCase):

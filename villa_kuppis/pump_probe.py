@@ -276,10 +276,13 @@ class FakeClient:
         ))
         error = self._put_errors[index] if index < len(self._put_errors) else None
         stale = self._put_stale[index] if index < len(self._put_stale) else 0
-        if set_temperature is not None and unit_id in self._units:
+        if (set_temperature is not None or power is not None) and unit_id in self._units:
             before = [dict(p) for p in self._units.values()]
             settings = {s["name"]: s["value"] for s in self._units[unit_id]["settings"]}
-            settings["SetTemperature"] = f"{set_temperature:.1f}"
+            if set_temperature is not None:
+                settings["SetTemperature"] = f"{set_temperature:.1f}"
+            if power is not None:
+                settings["Power"] = str(power)
             self._units[unit_id]["settings"] = [
                 {"name": n, "value": v} for n, v in settings.items()
             ]
@@ -772,6 +775,177 @@ async def test_setpoint_live(client, *, input_fn, sleep_fn, print_fn=print,
     )
 
 
+async def _supervised_power(client, *, unit, sleep_fn, print_fn, deadline, max_polls, poll_delay):
+    """Confirm on, hold 30 seconds, then confirm off, including on failure."""
+    other_fields = ("set_temperature",) + tuple(f for f in _CONTROL_FIELDS if f != "power")
+    baseline = {field: getattr(unit, field) for field in other_fields}
+    observed_diffs = {}
+    attempted_on = False
+    off_confirmed = False
+    write_response_failed = False
+    interrupted = False
+    result = EXIT_ERROR
+
+    def _uncancel():
+        current = asyncio.current_task()
+        if current is not None and hasattr(current, "uncancel") and current.cancelling():
+            current.uncancel()
+
+    async def _write(power):
+        nonlocal write_response_failed
+        phase = "power on write" if power else "power off write"
+        try:
+            await asyncio.wait_for(
+                client.control_ata_unit(unit.id, power=power), timeout=deadline
+            )
+        except Exception as err:
+            write_response_failed = True
+            print_fn(_operation_message(phase, err))
+            print_fn("  The write may have applied; checking cloud read-back before continuing.")
+
+    async def _verify(power):
+        phase = "power on read-back" if power else "power off read-back"
+        for attempt in range(1, max_polls + 1):
+            try:
+                context = await asyncio.wait_for(client.get_context(), timeout=deadline)
+                observed = find_unit_by_id(context, unit.id)
+                if observed is not None:
+                    for field in other_fields:
+                        value = getattr(observed, field)
+                        if value != baseline[field] and field not in observed_diffs:
+                            observed_diffs[field] = (baseline[field], value)
+                    if observed.power is power:
+                        return True
+            except Exception as err:
+                print_fn(f"  {_operation_message(phase, err)}")
+            if attempt < max_polls:
+                print_fn(f"  {phase} {attempt}: not confirmed; waiting {poll_delay:.0f}s")
+                await sleep_fn(poll_delay)
+        return False
+
+    async def _turn_off():
+        print_fn("Turning power off ...")
+        await _write(False)
+        confirmed = await _verify(False)
+        if confirmed:
+            print_fn("  power off confirmed by read-back")
+        return confirmed
+
+    try:
+        print_fn("Turning power on ...")
+        attempted_on = True
+        await _write(True)
+        if not await _verify(True):
+            raise _ProbeError("power on was not confirmed; skipping the 30-second hold")
+        print_fn("  power on confirmed by read-back")
+        print_fn("Holding power on for 30 seconds ...")
+        await sleep_fn(30.0)
+        print_fn("  30-second hold complete")
+        off_confirmed = await _turn_off()
+        if not off_confirmed:
+            raise _ProbeError("power off was not confirmed by read-back")
+        result = EXIT_OK
+    except asyncio.CancelledError:
+        interrupted = True
+        _uncancel()
+    except _ProbeError as err:
+        print_fn(f"Power probe failed: {err}")
+    except BaseException as err:
+        print_fn(_operation_message("power test", err))
+    finally:
+        if attempted_on and not off_confirmed:
+            print_fn("Cleaning up: ensuring the unit is off ...")
+            task = asyncio.ensure_future(_turn_off())
+            try:
+                try:
+                    off_confirmed = await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    _uncancel()
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+            except Exception:
+                off_confirmed = False
+            if not off_confirmed:
+                print_fn("!" * 62)
+                print_fn("!! POWER OFF UNCONFIRMED")
+                print_fn(f'Open the MELCloud Home app and turn "{unit.name or "(unnamed)"}" off.')
+                print_fn("The probe could not confirm that the unit is off.")
+                print_fn("!" * 62)
+                result = EXIT_RESTORE_UNCONFIRMED
+    for field, (before, after) in observed_diffs.items():
+        print_fn(f"  note: {field} changed from {_fmt_value(before)} to {_fmt_value(after)} "
+                 "during the power test (not written back; check the MELCloud Home app)")
+    if observed_diffs:
+        print_fn("Another control changed during the power test; the probe result is FAILED.")
+        if result != EXIT_RESTORE_UNCONFIRMED:
+            result = EXIT_ERROR
+    if interrupted:
+        print_fn("Interrupted before the power probe completed.")
+    if result == EXIT_OK:
+        print_fn("  no other controls changed")
+        if write_response_failed:
+            print_fn("WARNING: Server write responses failed. Power on and off were confirmed "
+                     "by cloud read-back; the power probe completed with this warning.")
+        else:
+            print_fn("Power probe complete.")
+    return result
+
+
+async def test_power_live(client, *, input_fn, sleep_fn, print_fn=print,
+                          deadline=DEFAULT_DEADLINE, max_polls=MAX_POLLS,
+                          poll_delay=POLL_DELAY):
+    """Supervise one originally-off unit through an on/30-second/off test."""
+    context = await asyncio.wait_for(client.get_context(), timeout=deadline)
+    units = collect_units(context)
+    if not units:
+        print_fn("No air-to-air units are listed in MELCloud Home.")
+        return EXIT_ERROR
+    for alias, unit in enumerate(units, start=1):
+        print_fn(f"[{alias}] {unit.name or '(unnamed)'} - mode: {_fmt_enum(unit.operation_mode)}, "
+                 f"power: {_fmt_flag(unit.power)}")
+    while True:
+        raw = input_fn("Unit number: ")
+        try:
+            number = int(raw.strip())
+        except (TypeError, ValueError):
+            number = 0
+        if 1 <= number <= len(units):
+            selected = units[number - 1]
+            break
+        print_fn("Enter a number from the list above.")
+    name = selected.name or "(unnamed)"
+    if input_fn(f'Is "{name}" the upstairs LN25 unit you want to test? [yes/no] ').strip().lower() != "yes":
+        print_fn("Identity not confirmed; nothing was changed.")
+        return EXIT_ERROR
+    fresh = await asyncio.wait_for(client.get_context(), timeout=deadline)
+    unit = find_unit_by_id(fresh, selected.id)
+    if unit is None:
+        print_fn("The selected unit is no longer listed; aborting without changes.")
+        return EXIT_ERROR
+    if unit.is_in_error is True:
+        print_fn("The unit reports an error; refusing to test it.")
+        return EXIT_ERROR
+    if unit.power is not False:
+        print_fn("The unit must report power off before this test; nothing was changed.")
+        return EXIT_ERROR
+    print_fn(f"Unit: {name}")
+    print_fn(f"  mode:         {_fmt_enum(unit.operation_mode)} (cloud reported)")
+    print_fn(f"  setpoint:     {_fmt_temp(unit.set_temperature)} (cloud reported)")
+    print_fn("  power:        off (cloud reported)")
+    print_fn("The test will turn this unit on, hold for 30 seconds after confirmation, then turn it off.")
+    print_fn("Type POWER to turn it on now; anything else aborts without writing.")
+    if input_fn("Confirm: ").strip() != "POWER":
+        print_fn("Not confirmed; no change was made.")
+        return EXIT_ERROR
+    return await _supervised_power(
+        client, unit=unit, sleep_fn=sleep_fn, print_fn=print_fn,
+        deadline=deadline, max_polls=max_polls, poll_delay=poll_delay,
+    )
+
+
 async def _demo(print_fn=print):
     print_fn("Offline demo: in-memory fake unit. No network, no prompts, no real waits.")
     fake = _demo_client()
@@ -799,9 +973,9 @@ def _build_parser():
                     "interactive terminal.",
     )
     parser.add_argument("--live", action="store_true",
-                        help="talk to the real MELCloud Home cloud (read, test-setpoint only)")
+                        help="talk to the real MELCloud Home cloud (read, test-setpoint, test-power)")
     parser.add_argument("command", nargs="?", default="demo",
-                        choices=("demo", "read", "test-setpoint"),
+                        choices=("demo", "read", "test-setpoint", "test-power"),
                         help="default: demo (offline)")
     return parser
 
@@ -814,6 +988,10 @@ async def _live_run(command, client_factory, credentials, input_fn, sleep_fn, pr
         async with client:
             if command == "read":
                 outcome = await read_live(client, print_fn=print_fn)
+            elif command == "test-power":
+                outcome = await test_power_live(
+                    client, input_fn=input_fn, sleep_fn=sleep_fn, print_fn=print_fn
+                )
             else:
                 outcome = await test_setpoint_live(
                     client, input_fn=input_fn, sleep_fn=sleep_fn, print_fn=print_fn
@@ -851,7 +1029,7 @@ def main(argv=None, *, client_factory=None, getpass_fn=None, input_fn=None,
 
     if command == "demo" and args.live:
         parser.error("demo is fully offline; --live is not allowed with it")
-    if command in ("read", "test-setpoint") and not args.live:
+    if command in ("read", "test-setpoint", "test-power") and not args.live:
         print_fn(f"'{command}' talks to the real MELCloud Home cloud; re-run with --live.")
         return EXIT_ERROR
 

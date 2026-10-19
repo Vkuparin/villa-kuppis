@@ -62,6 +62,7 @@ After live approval, use a local interactive terminal:
 ```powershell
 .venv\Scripts\python -m villa_kuppis.pump_probe --live read
 .venv\Scripts\python -m villa_kuppis.pump_probe --live test-setpoint
+.venv\Scripts\python -m villa_kuppis.pump_probe --live test-power
 ```
 
 The write test includes a read and unit selection, so the separate read command is optional. Keep MELCloud Home open to identify the upstairs unit and compare the cloud-reported state. The client does not expose a model/MAC field that can identify it automatically. Unit names appear only in the local terminal; credentials, tokens and device IDs are not written to a report.
@@ -75,3 +76,5 @@ Restoration runs after an attempted write even if the request times out. Cleanup
 If the probe prints `RESTORATION UNCONFIRMED`, check the app and restore the displayed original value. A forced process or PC shutdown can prevent cleanup; this first test is supervised. Realtime updates and app-side changes are follow-up checks after REST read/change/restore succeeds.
 
 The pinned `aiomelcloudhome` 0.3.1 source sends `null` for unspecified control fields. The offline payload test verifies that setpoint is the only non-null requested change; the live check must establish the server's behavior. Source: [client and models](https://github.com/erwindouna/aiomelcloudhome).
+
+The separately approved `test-power` starts only when the selected unit reports power off. It requests power on, confirms it by read-back, waits 30 seconds, then requests and confirms power off. Only power is changed; the other controls are checked for drift. Keep the console open until off is confirmed. On interruption or an unconfirmed on-state, cleanup attempts to turn the unit off. If it prints `POWER OFF UNCONFIRMED`, turn the unit off in MELCloud Home and check its state.
