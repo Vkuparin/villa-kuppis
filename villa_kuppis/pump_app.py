@@ -6,6 +6,7 @@ fully offline) plus a small JSON API on top of PumpService:
 * GET  /              the Finnish app
 * GET  /api/view      unit states, pending slots and service status
 * GET  /api/events    the event log (newest first)
+* GET  /api/history   downsampled time series (card F3.3)
 * POST /api/command   {"unit", "action", "value", "user"} -> the service
 
 The page shows the cloud-reported state and the requested change
@@ -113,6 +114,23 @@ button:focus-visible, select:focus-visible, a:focus-visible {
 section.events { background: #fff; border: 1px solid #d9dee3;
                  border-radius: .75rem; padding: 1rem 1.1rem; }
 section.events h2 { margin: 0 0 .6rem; font-size: 1.15rem; }
+section.history { background: #fff; border: 1px solid #d9dee3;
+                  border-radius: .75rem; padding: 1rem 1.1rem;
+                  margin-bottom: 1rem; }
+section.history h2 { margin: 0 0 .6rem; font-size: 1.15rem; }
+.hist-controls { display: flex; flex-wrap: wrap; gap: .6rem 1.25rem;
+                 align-items: end; margin-bottom: .75rem; }
+.hist-controls label { display: flex; flex-direction: column; gap: .2rem;
+                       font-size: .85rem; color: #44505c; }
+#hist-status { font-size: .85rem; color: #55606b; }
+.hist-chart { width: 100%; }
+.hist-chart svg { display: block; width: 100%; height: auto; }
+.hist-legend { list-style: none; display: flex; flex-wrap: wrap;
+               gap: .4rem 1.1rem; padding: .4rem 0 0; margin: 0;
+               font-size: .85rem; color: #44505c; }
+.hist-legend .swatch { display: inline-block; width: 1.4rem; height: .28rem;
+                       margin-right: .35rem; vertical-align: middle; }
+.hist-empty { color: #55606b; padding: 1rem 0; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid #e3e8ec;
          vertical-align: top; }
@@ -145,6 +163,35 @@ td.result-pending { color: #0b3f9e; }
 ohjaavat vain esittelyyksiköitä.</div>
 <main>
   <section id="cards" aria-label="Pumppulaitteet"></section>
+  <section class="history" aria-label="Historia ja kaaviot">
+    <h2>Historia</h2>
+    <div class="hist-controls">
+      <label>Huone
+        <select id="hist-unit" aria-label="Huone"></select>
+      </label>
+      <label>Ajanjakso
+        <select id="hist-range" aria-label="Ajanjakson kesto">
+          <option value="day" selected>Päivä</option>
+          <option value="week">Viikko</option>
+          <option value="month">Kuukausi</option>
+          <option value="year">Vuosi</option>
+        </select>
+      </label>
+      <label>Ulkolämpötila
+        <select id="hist-site" aria-label="Ulkolämpötilan lähde">
+          <option value="home" selected>Koti</option>
+          <option value="cottage">Mökki</option>
+        </select>
+      </label>
+      <span id="hist-status" role="status"></span>
+    </div>
+    <div id="hist-chart" class="hist-chart" role="img"
+         aria-label="Lämpötilojen ja sähkönhinnan kaavio"></div>
+    <ul id="hist-legend" class="hist-legend"></ul>
+    <p class="detail">Ulkolämpötila: Ilmatieteen laitoksen havaintoasema,
+      <a href="https://en.ilmatieteenlaitos.fi/open-data-licence">avoin data (CC BY 4.0)</a>.
+      Sähkönhinta: Elering. Käyrät on harvennettu näytölle.</p>
+  </section>
   <section class="events" aria-label="Tapahtumat">
     <h2>Tapahtumat</h2>
     <table>
@@ -173,6 +220,12 @@ const $status = document.getElementById("service-status");
 const $updated = document.getElementById("last-updated");
 const $rows = document.getElementById("event-rows");
 const $alerts = document.getElementById("alerts");
+const $histUnit = document.getElementById("hist-unit");
+const $histRange = document.getElementById("hist-range");
+const $histSite = document.getElementById("hist-site");
+const $histChart = document.getElementById("hist-chart");
+const $histStatus = document.getElementById("hist-status");
+const $histLegend = document.getElementById("hist-legend");
 
 const tempFmt = new Intl.NumberFormat("fi-FI",
   { minimumFractionDigits: 1, maximumFractionDigits: 1 });
@@ -375,6 +428,225 @@ function renderEvents(events) {
   )).join("");
 }
 
+// --- history graphs (card F3.3): time series, gaps kept as gaps ---
+const RANGE_MAX_POINTS = { day: 288, week: 700, month: 900, year: 1000 };
+const HIST_SERIES = [
+  { key: "room_temp", label: "Huonelämpötila", color: "#0b6b2a",
+    scale: "temp", dash: "" },
+  { key: "setpoint", label: "Tavoitelämpötila", color: "#a11d1d",
+    scale: "temp", dash: "7 5" },
+  { key: "outdoor", label: "Ulkolämpötila", color: "#0b3f9e",
+    scale: "temp", dash: "2 4" },
+];
+const PRICE_SERIES = { key: "price", label: "Sähkön hinta (snt/kWh)",
+                       color: "#8a5b00", scale: "price", dash: "1 4" };
+
+function svgEl(tag, attrs, text) {
+  const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const k in attrs) el.setAttribute(k, attrs[k]);
+  if (text !== undefined) el.textContent = text;
+  return el;
+}
+
+function medianDelta(points) {
+  if (points.length < 3) return Infinity;
+  const d = [];
+  for (let i = 1; i < points.length; i++) d.push(points[i][0] - points[i - 1][0]);
+  d.sort((a, b) => a - b);
+  return d[Math.floor(d.length / 2)];
+}
+
+// Build an SVG path, breaking into new subpaths wherever the time jump
+// exceeds gapMs so real data gaps stay visible instead of being bridged.
+function seriesPath(points, gapMs, X, Y) {
+  const segs = [];
+  let cur = [], prevT = null;
+  const flush = () => { if (cur.length) { segs.push(cur); cur = []; } };
+  for (const p of points) {
+    const [t, v] = p;
+    if (v === null || v === undefined) { flush(); prevT = t; continue; }
+    if (prevT !== null && (t - prevT) > gapMs) flush();
+    cur.push([X(t), Y(v)]);
+    prevT = t;
+  }
+  flush();
+  let d = "";
+  for (const seg of segs) {
+    d += "M" + seg[0][0].toFixed(1) + " " + seg[0][1].toFixed(1);
+    for (let i = 1; i < seg.length; i++)
+      d += "L" + seg[i][0].toFixed(1) + " " + seg[i][1].toFixed(1);
+  }
+  return d;
+}
+
+function niceTicks(min, max, count) {
+  if (!isFinite(min) || !isFinite(max)) return [];
+  if (min === max) return [min];
+  const span = max - min;
+  const step0 = span / Math.max(1, count);
+  const mag = Math.pow(10, Math.floor(Math.log10(step0)));
+  const norm = step0 / mag;
+  let step;
+  if (norm < 1.5) step = 1; else if (norm < 3) step = 2;
+  else if (norm < 7) step = 5; else step = 10;
+  step *= mag;
+  const ticks = [];
+  for (let v = Math.ceil(min / step) * step; v <= max + step * 1e-6; v += step)
+    ticks.push(Math.round(v * 1e6) / 1e6);
+  return ticks;
+}
+
+function fmtTimeTick(ms, range) {
+  const d = new Date(ms);
+  const opts = { timeZone: "Europe/Helsinki" };
+  if (range === "year") Object.assign(opts, { month: "short", year: "numeric" });
+  else if (range === "month") Object.assign(opts, { day: "numeric", month: "short" });
+  else if (range === "week")
+    Object.assign(opts, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  else Object.assign(opts, { hour: "2-digit", minute: "2-digit" });
+  return new Intl.DateTimeFormat("fi-FI", opts).format(d);
+}
+
+function drawHistory(data) {
+  $histChart.textContent = "";
+  const series = HIST_SERIES
+    .map((s) => Object.assign({}, s, {
+      pts: (data[s.key] || []).map(([iso, v]) => [new Date(iso).getTime(), v])
+    }))
+    .filter((s) => s.pts.length > 0);
+  const pricePts = (data.price || [])
+    .map(([iso, v]) => [new Date(iso).getTime(), v]);
+  const allTemp = series.flatMap((s) => s.pts);
+  if (!allTemp.length && !pricePts.length) {
+    $histChart.innerHTML = '<p class="hist-empty">Ei historiaa tälle valinnalle.</p>';
+    $histLegend.textContent = "";
+    return;
+  }
+  const W = Math.max(320, $histChart.clientWidth || 900);
+  const H = 300;
+  const m = { top: 14, right: 52, bottom: 34, left: 46 };
+  const t0 = new Date(data.start).getTime();
+  const t1 = new Date(data.end).getTime();
+  const maxPts = RANGE_MAX_POINTS[data.range] || 288;
+
+  let tMin = Infinity, tMax = -Infinity;
+  for (const p of allTemp)
+    if (p[1] != null) { tMin = Math.min(tMin, p[1]); tMax = Math.max(tMax, p[1]); }
+  if (!isFinite(tMin)) { tMin = 0; tMax = 1; }
+  const tPad = (tMax - tMin) * 0.08 || 0.5;
+  tMin -= tPad; tMax += tPad;
+  const hasPrice = pricePts.length > 0;
+  let pMin = Infinity, pMax = -Infinity;
+  if (hasPrice) for (const p of pricePts) { pMin = Math.min(pMin, p[1]); pMax = Math.max(pMax, p[1]); }
+  if (hasPrice) { const pp = (pMax - pMin) * 0.12 || 0.25; pMin -= pp; pMax += pp; }
+
+  const X = (t) => m.left + ((t1 === t0) ? 0.5 : (t - t0) / (t1 - t0))
+    * (W - m.left - m.right);
+  const YT = (v) => m.top + (1 - (v - tMin) / (tMax - tMin))
+    * (H - m.top - m.bottom);
+  const YP = (v) => m.top + (1 - (v - pMin) / (pMax - pMin))
+    * (H - m.top - m.bottom);
+
+  const svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H,
+    "xmlns": "http://www.w3.org/2000/svg", role: "img",
+    "aria-label": "Lämpötilojen ja sähkönhinnan kaavio" });
+
+  const tTicks = niceTicks(tMin, tMax, 5);
+  for (const v of tTicks) {
+    const y = YT(v);
+    svg.appendChild(svgEl("line", { x1: m.left, x2: W - m.right, y1: y, y2: y,
+      stroke: "#e3e8ec", "stroke-width": 1 }));
+    svg.appendChild(svgEl("text", { x: m.left - 6, y: y + 4, "text-anchor": "end",
+      "font-size": 11, fill: "#44505c" }, tempFmt.format(v) + "\u00b0"));
+  }
+  if (hasPrice) {
+    for (const v of niceTicks(pMin, pMax, 5)) {
+      const y = YP(v);
+      svg.appendChild(svgEl("text", { x: W - m.right + 6, y: y + 4,
+        "text-anchor": "start", "font-size": 11, fill: "#8a5b00" },
+        tempFmt.format(v) + "s"));
+    }
+  }
+  const nTime = Math.max(2, Math.min(8, Math.floor((W - m.left - m.right) / 90)));
+  for (let i = 0; i <= nTime; i++) {
+    const t = t0 + (i / nTime) * (t1 - t0);
+    const x = X(t);
+    svg.appendChild(svgEl("line", { x1: x, x2: x, y1: m.top, y2: H - m.bottom,
+      stroke: "#eef1f4", "stroke-width": 1 }));
+    svg.appendChild(svgEl("text", { x: x, y: H - m.bottom + 16,
+      "text-anchor": "middle", "font-size": 11, fill: "#44505c" },
+      fmtTimeTick(t, data.range)));
+  }
+  svg.appendChild(svgEl("rect", { x: m.left, y: m.top,
+    width: W - m.left - m.right, height: H - m.top - m.bottom,
+    fill: "none", stroke: "#c7cfd6" }));
+
+  const expected = (t1 - t0) / maxPts;
+  const gapFor = (sampleMs) => Math.max(3 * sampleMs, 2 * expected);
+
+  for (const s of series) {
+    const d = seriesPath(s.pts, gapFor(s.key === "outdoor" ? 3600000 : 300000), X, YT);
+    if (!d) continue;
+    const attrs = { d: d, fill: "none", stroke: s.color, "stroke-width": 2,
+      "stroke-linejoin": "round", "stroke-linecap": "round" };
+    if (s.dash) attrs["stroke-dasharray"] = s.dash;
+    svg.appendChild(svgEl("path", attrs));
+  }
+  if (hasPrice) {
+    const d = seriesPath(pricePts, gapFor(900000), X, YP);
+    if (d) svg.appendChild(svgEl("path", {
+      d: d, fill: "none", stroke: PRICE_SERIES.color, "stroke-width": 1.5,
+      "stroke-dasharray": PRICE_SERIES.dash, "stroke-linejoin": "round" }));
+  }
+
+  $histChart.appendChild(svg);
+
+  const items = series.map((s) =>
+    '<li><span class="swatch" style="background:' + s.color + '"></span>' +
+    esc(s.label) + "</li>");
+  if (hasPrice) items.push(
+    '<li><span class="swatch" style="background:' + PRICE_SERIES.color +
+    '"></span>' + esc(PRICE_SERIES.label) + "</li>");
+  $histLegend.innerHTML = items.join("");
+}
+
+let histRequest = 0;
+let histAbort = null;
+async function loadHistory() {
+  const request = ++histRequest;
+  if (histAbort) histAbort.abort();
+  const unit = $histUnit.value;
+  const range = $histRange.value;
+  const site = $histSite.value;
+  if (!unit) { $histChart.innerHTML = ""; $histLegend.textContent = ""; return; }
+  histAbort = new AbortController();
+  $histStatus.textContent = "Haetaan\u2026";
+  try {
+    const url = "/api/history?unit=" + encodeURIComponent(unit) +
+      "&range=" + encodeURIComponent(range) +
+      "&site=" + encodeURIComponent(site);
+    const data = await fetch(url, { signal: histAbort.signal }).then((r) => {
+      if (!r.ok) throw new Error("http " + r.status);
+      return r.json();
+    });
+    if (request !== histRequest) return;
+    drawHistory(data);
+    $histStatus.textContent = "";
+  } catch (err) {
+    if (request === histRequest && err.name !== "AbortError")
+      $histStatus.textContent = "Historian haku ep\u00e4onnistui.";
+  } finally {
+    if (request === histRequest) histAbort = null;
+  }
+}
+
+function populateUnits(units) {
+  const current = $histUnit.value;
+  $histUnit.innerHTML = units.map((u) =>
+    '<option value="' + esc(u.id) + '">' + esc(u.name) + "</option>").join("");
+  if (current && units.some((u) => u.id === current)) $histUnit.value = current;
+}
+
 async function refresh() {
   try {
     const [view, events] = await Promise.all([
@@ -435,13 +707,31 @@ function onControl(e) {
 }
 
 let lastView = null;
+let histAutoLoaded = false;
 const _renderView = renderView;
-renderView = function (view) { lastView = view; _renderView(view); };
+renderView = function (view) {
+  lastView = view;
+  _renderView(view);
+  populateUnits(view.units || []);
+  if (!histAutoLoaded && view.units && view.units.length) {
+    histAutoLoaded = true;
+    loadHistory();
+  }
+};
 
 $cards.addEventListener("click", onControl);
 $cards.addEventListener("change", onControl);
+$histUnit.addEventListener("change", loadHistory);
+$histRange.addEventListener("change", loadHistory);
+$histSite.addEventListener("change", loadHistory);
+let histResizeTimer = null;
+window.addEventListener("resize", () => {
+  if (histResizeTimer) clearTimeout(histResizeTimer);
+  histResizeTimer = setTimeout(loadHistory, 200);
+});
 refresh();
 setInterval(refresh, POLL_MS);
+setInterval(loadHistory, 60000);
 </script>
 </body>
 </html>
@@ -482,7 +772,22 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             "application/json; charset=utf-8",
         )
 
+    def _local_request(self) -> bool:
+        host = self.headers.get("Host", "")
+        allowed = {f"127.0.0.1:{self.app.server_port}",
+                   f"localhost:{self.app.server_port}"}
+        if host.lower() not in allowed:
+            self._json(403, {"error": "forbidden", "detail": "local host required"})
+            return False
+        origin = self.headers.get("Origin")
+        if origin is not None and origin.lower() != "http://" + host.lower():
+            self._json(403, {"error": "forbidden", "detail": "same origin required"})
+            return False
+        return True
+
     def do_GET(self) -> None:
+        if not self._local_request():
+            return
         parts = urlsplit(self.path)
         if parts.path == "/":
             self._send(200, self.app.page_html.encode("utf-8"),
@@ -498,6 +803,21 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
                 except ValueError:
                     pass
             self._json(200, self.app.service.events(limit))
+        elif parts.path == "/api/history":
+            qs = parse_qs(parts.query)
+            unit = qs.get("unit", [None])[0]
+            range_name = qs.get("range", ["day"])[0] or "day"
+            site = qs.get("site", [None])[0]
+            if not unit or not isinstance(unit, str):
+                self._json(400, {"error": "bad_query",
+                                 "detail": "unit is required"})
+                return
+            try:
+                payload = self.app.service.history(unit, range_name, site)
+            except ValueError as err:
+                self._json(400, {"error": "bad_query", "detail": str(err)})
+                return
+            self._json(200, payload)
         elif parts.path == "/api/command":
             self._json(405, {"error": "method_not_allowed",
                              "detail": "use POST for this path"})
@@ -508,10 +828,12 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             self._send(404, b"not found", "text/plain; charset=utf-8")
 
     def do_POST(self) -> None:
+        if not self._local_request():
+            return
         parts = urlsplit(self.path)
         if parts.path == "/api/command":
             self._post_command()
-        elif parts.path in ("/", "/api/view", "/api/events"):
+        elif parts.path in ("/", "/api/view", "/api/events", "/api/history"):
             # Known paths with the wrong method: 405, mirroring how
             # do_GET answers /api/command.
             self._json(405, {"error": "method_not_allowed",
@@ -523,6 +845,9 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             self._send(404, b"not found", "text/plain; charset=utf-8")
 
     def _post_command(self) -> None:
+        if self.headers.get_content_type() != "application/json":
+            self._json(415, {"error": "bad_body", "detail": "JSON body required"})
+            return
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
@@ -564,6 +889,8 @@ class PumpAppServer(ThreadingHTTPServer):
 
     def __init__(self, service: PumpService, host: str = DEFAULT_HOST,
                  port: int = 0, demo: bool = False):
+        if host not in ("127.0.0.1", "localhost"):
+            raise ValueError("the pump app must listen on localhost")
         self.service = service
         self.demo = demo
         self.page_html = render_page(demo)
@@ -603,6 +930,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _cmd_serve(args, print_fn=print) -> int:
+    if args.host not in ("127.0.0.1", "localhost"):
+        print_fn("error: the pump app must listen on localhost", file=sys.stderr)
+        return 1
     if args.demo:
         service = make_demo_service(args.data_dir)
         mode = " (esittelytila: keksityt yksiköt)"
@@ -613,17 +943,19 @@ def _cmd_serve(args, print_fn=print) -> int:
             print_fn(f"error: {err}", file=sys.stderr)
             return 1
         mode = " (live: MELCloud Home)"
-    service.start()
-    server = PumpAppServer(service, host=args.host, port=args.port,
-                           demo=args.demo)
-    print_fn(f"Pumppusovellus käynnissä: {server.url}{mode} "
-             "(Ctrl+C pysäyttää)")
+    server = None
     try:
+        server = PumpAppServer(service, host=args.host, port=args.port,
+                               demo=args.demo)
+        service.start()
+        print_fn(f"Pumppusovellus käynnissä: {server.url}{mode} "
+                 "(Ctrl+C pysäyttää)")
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:
         print_fn("Pysäytetty.")
     finally:
-        server.server_close()
+        if server is not None:
+            server.server_close()
         service.close()
     return 0
 

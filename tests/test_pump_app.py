@@ -12,6 +12,9 @@ import asyncio
 import io
 import json
 import os
+import runpy
+import sqlite3
+import subprocess
 import tempfile
 import threading
 import time
@@ -170,6 +173,33 @@ class AppTestCase(unittest.TestCase):
 
 
 class PageTests(AppTestCase):
+    def test_history_selection_ignores_late_previous_response(self):
+        from villa_kuppis.pump_app import render_page
+        page = render_page(True)
+        source = page[page.index("let histRequest ="):page.index("function populateUnits(")]
+        script = """
+import assert from 'node:assert/strict';
+const $histUnit = {value: 'first'}, $histRange = {value: 'day'};
+const $histSite = {value: 'home'}, $histStatus = {};
+const $histChart = {}, $histLegend = {}, requests = [], drawn = [];
+const drawHistory = data => drawn.push(data.unit);
+const fetch = url => new Promise(resolve => requests.push({url, resolve}));
+""" + source + """
+const first = loadHistory();
+$histUnit.value = 'second';
+const second = loadHistory();
+requests[1].resolve({ok: true, json: async () => ({unit: 'second'})});
+await second;
+requests[0].resolve({ok: true, json: async () => ({unit: 'first'})});
+await first;
+assert.deepEqual(drawn, ['second']);
+assert.equal($histStatus.textContent, '');
+"""
+        result = subprocess.run(["node", "--input-type=module", "-"],
+                                input=script, text=True, capture_output=True,
+                                encoding="utf-8", timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_serves_finnish_page(self):
         server, _ = self._start_app(FakeClient(make_unit_payloads()))
         status, ctype, raw = http("GET", self._url(server, "/"))
@@ -240,7 +270,135 @@ class ViewApiTests(AppTestCase):
         self.assertEqual(events, [])
 
 
+class HistoryApiTests(AppTestCase):
+    """The /api/history endpoint (card F3.3) over HTTP."""
+
+    NOW = datetime(2026, 10, 19, 12, 0, 0, tzinfo=timezone.utc)
+    PRICE_SCHEMA = """
+    CREATE TABLE IF NOT EXISTS price_interval (
+        ts_utc INTEGER PRIMARY KEY,
+        day TEXT NOT NULL,
+        price_raw_eur_mwh TEXT NOT NULL,
+        retrieved_at_utc TEXT NOT NULL
+    );
+    """
+
+    def _start_with_history(self, seed_prices=False):
+        server, _ = self._start_app(FakeClient(make_unit_payloads()))
+        service = self._services[-1]
+        start = self.NOW - timedelta(seconds=24 * 3600)
+        states = []
+        for i in range(288):
+            ts = start + timedelta(seconds=i * 300)
+            states.append({
+                "id": "unit-1", "power": True, "mode": "Cool",
+                "setpoint": 23.0, "fan": "Auto",
+                "room_temp": 20.0 + (i % 10) * 0.5,
+                "updated_at": ts.isoformat(),
+            })
+        service.store.record_history(states)
+        service.store.outdoor_upsert(
+            "home",
+            [(start + timedelta(hours=h), 5.0 + (h % 12) * 0.5)
+             for h in range(24)])
+        if seed_prices:
+            db = service._prices_db
+            conn = sqlite3.connect(db)
+            try:
+                conn.executescript(self.PRICE_SCHEMA)
+                conn.executemany(
+                    "INSERT INTO price_interval (ts_utc, day, "
+                    "price_raw_eur_mwh, retrieved_at_utc) "
+                    "VALUES (?, ?, ?, ?)",
+                    [(int((start + timedelta(seconds=i * 900)).timestamp()),
+                      "2026-10-18", str(100 + (i % 5) * 10),
+                      self.NOW.isoformat())
+                     for i in range(96)])
+                conn.commit()
+            finally:
+                conn.close()
+        return server
+
+    def test_day_shape_and_series(self):
+        server = self._start_with_history()
+        status, body = http_json("GET",
+                                 self._url(server, "/api/history?"
+                                 "unit=unit-1&range=day&site=home"))
+        self.assertEqual(status, 200)
+        self.assertEqual(body["unit"], "unit-1")
+        self.assertEqual(body["range"], "day")
+        self.assertEqual(body["start"],
+                         (self.NOW - timedelta(hours=24)).isoformat())
+        self.assertEqual(body["end"], self.NOW.isoformat())
+        self.assertEqual(len(body["room_temp"]), 288)
+        self.assertEqual(len(body["setpoint"]), 288)
+        self.assertEqual(len(body["outdoor"]), 24)
+        self.assertIsNone(body["price"])
+        self.assertEqual(body["room_temp"][0][1], 20.0)
+        self.assertEqual(body["setpoint"][0][1], 23.0)
+        # every point sits inside the requested window
+        for series in (body["room_temp"], body["setpoint"], body["outdoor"]):
+            for iso, _ in series:
+                self.assertGreaterEqual(
+                    datetime.fromisoformat(iso),
+                    self.NOW - timedelta(hours=24))
+                self.assertLess(datetime.fromisoformat(iso), self.NOW)
+
+    def test_prices_included_when_stored(self):
+        server = self._start_with_history(seed_prices=True)
+        status, body = http_json("GET",
+                                 self._url(server, "/api/history?"
+                                 "unit=unit-1&range=day"))
+        self.assertEqual(status, 200)
+        self.assertIsInstance(body["price"], list)
+        self.assertEqual(len(body["price"]), 96)
+        # raw is EUR/MWh; the API reports c/kWh (raw / 10)
+        self.assertEqual(body["price"][0][1], 10.0)
+        self.assertEqual(body["price"][1][1], 11.0)
+
+    def test_bad_range_400(self):
+        server = self._start_with_history()
+        status, body = http_json("GET",
+                                 self._url(server, "/api/history?"
+                                 "unit=unit-1&range=decade"))
+        self.assertEqual(status, 400)
+        self.assertEqual(body["error"], "bad_query")
+
+    def test_missing_unit_400(self):
+        server = self._start_with_history()
+        status, body = http_json("GET",
+                                 self._url(server, "/api/history"
+                                 "?range=day"))
+        self.assertEqual(status, 400)
+        self.assertEqual(body["error"], "bad_query")
+
+    def test_post_not_allowed_405(self):
+        server = self._start_with_history()
+        status, body = http_json("POST",
+                                 self._url(server, "/api/history"),
+                                 {"unit": "unit-1"})
+        self.assertEqual(status, 405)
+        self.assertEqual(body["error"], "method_not_allowed")
+
+
 class CommandApiTests(AppTestCase):
+    def test_cross_origin_and_rebound_host_cannot_send_commands(self):
+        server, _ = self._start_app(FakeClient(make_unit_payloads()))
+        service = self._services[-1]
+        for headers in (
+            {"Content-Type": "application/json", "Origin": "https://unrelated.example"},
+            {"Content-Type": "application/json", "Host": "unrelated.example"},
+            {"Content-Type": "text/plain"},
+        ):
+            request = urllib.request.Request(
+                self._url(server, "/api/command"), method="POST",
+                data=json.dumps({"unit": "test-1", "action": "power", "value": True}).encode(),
+                headers=headers)
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen(request, timeout=5)
+            self.assertIn(ctx.exception.code, (403, 415))
+        self.assertEqual(service.events(), [])
+
     def test_confirmed_setpoint_over_http(self):
         server, _ = self._start_app(FakeClient(make_unit_payloads()))
         self.wait_for(lambda: self._view(server)["service"]["state"] == "ok")
@@ -421,6 +579,22 @@ class DemoTests(AppTestCase):
 
 
 class CliTests(unittest.TestCase):
+    def test_bind_failure_closes_service_before_start(self):
+        service = mock.Mock()
+        with mock.patch("villa_kuppis.pump_app.make_demo_service", return_value=service), \
+             mock.patch("villa_kuppis.pump_app.PumpAppServer", side_effect=OSError("busy")):
+            with self.assertRaises(OSError):
+                main(["serve", "--demo", "--data-dir", "unused"])
+        service.start.assert_not_called()
+        service.close.assert_called_once()
+
+    def test_nonlocal_bind_rejected_before_client_creation(self):
+        with mock.patch("villa_kuppis.pump_app.make_live_service") as factory, \
+             mock.patch("sys.stderr", new=io.StringIO()):
+            self.assertEqual(main(["serve", "--live", "--host", "0.0.0.0",
+                                   "--data-dir", "unused"]), 1)
+        factory.assert_not_called()
+
     def test_parser_requires_mode(self):
         with self.assertRaises(SystemExit) as ctx:
             build_parser().parse_args(["serve", "--data-dir", "x"])
@@ -441,6 +615,52 @@ class CliTests(unittest.TestCase):
                                  "--port", "0"])
         self.assertEqual(code, 1)
         self.assertIn("environment variables", stderr.getvalue())
+
+
+class LauncherTests(unittest.TestCase):
+    def launcher(self):
+        path = Path(__file__).resolve().parents[1] / "scripts" / "start-pump-app.py"
+        return runpy.run_path(str(path))["main"]
+
+    def test_cancelled_login_opens_no_client(self):
+        main_fn = self.launcher()
+        factory = mock.Mock()
+        with mock.patch.dict(main_fn.__globals__, {
+                "gui_getpass": lambda: lambda _: "",
+                "make_live_service": factory}), \
+             mock.patch("sys.argv", ["launcher", "--live"]), \
+             mock.patch.dict(os.environ, {}, clear=True), \
+             mock.patch("builtins.print"):
+            self.assertEqual(main_fn(), 0)
+        factory.assert_not_called()
+
+    def test_live_launcher_restores_environment_and_closes(self):
+        main_fn = self.launcher()
+        credentials = iter(("synthetic@example.invalid", "synthetic-password"))
+        service, server = mock.Mock(), mock.Mock()
+        server.serve_forever.side_effect = KeyboardInterrupt
+        def make_service(_):
+            self.assertEqual(os.environ["VILLA_KUPPIS_MELCLOUD_USERNAME"],
+                             "synthetic@example.invalid")
+            self.assertNotIn("VILLA_KUPPIS_WEATHER_HOME", os.environ)
+            return service
+        def open_browser(_):
+            self.assertNotIn("VILLA_KUPPIS_MELCLOUD_USERNAME", os.environ)
+            self.assertNotIn("VILLA_KUPPIS_MELCLOUD_PASSWORD", os.environ)
+        with tempfile.TemporaryDirectory() as data, \
+             mock.patch.dict(os.environ, {"VILLA_KUPPIS_WEATHER_HOME": "60,25"}, clear=True), \
+             mock.patch.dict(main_fn.__globals__, {
+                 "gui_getpass": lambda: lambda _: next(credentials),
+                 "make_live_service": make_service,
+                 "PumpAppServer": mock.Mock(return_value=server)}), \
+             mock.patch("sys.argv", ["launcher", "--live"]), \
+             mock.patch("tempfile.mkdtemp", return_value=data), \
+             mock.patch("webbrowser.open", side_effect=open_browser), mock.patch("builtins.print"):
+            self.assertEqual(main_fn(), 0)
+            self.assertNotIn("VILLA_KUPPIS_MELCLOUD_PASSWORD", os.environ)
+            self.assertEqual(os.environ["VILLA_KUPPIS_WEATHER_HOME"], "60,25")
+        service.close.assert_called_once()
+        server.server_close.assert_called_once()
 
 
 if __name__ == "__main__":

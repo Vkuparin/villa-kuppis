@@ -2,7 +2,7 @@
 
 A personal Finnish-language home automation app that brings the home and cottage devices into one app.
 
-**Status: implementation started. The first experiment covers spot prices and temperature plans; device integrations and the UI are still pending.** The UI will be Finnish. Start with the [design documents](docs/README.md), the [cottage plan](docs/cottage.md) and [spot-price automation](docs/spot-price.md).
+**Status: the PC pump service and Finnish web app are ready for a supervised device check.** The app includes controls, an event log and pump, outdoor-temperature and spot-price history. Android and automation are still pending. Start with the [design documents](docs/README.md), the [cottage plan](docs/cottage.md) and [spot-price automation](docs/spot-price.md).
 
 Repository: [Vkuparin/villa-kuppis](https://github.com/Vkuparin/villa-kuppis). The project is based on the owner's template and contains no private template history. See the [setup record](docs/setup.md) for verification and environment limitations.
 
@@ -34,7 +34,11 @@ $devData = Join-Path ([IO.Path]::GetTempPath()) ("villa-kuppis-dev-" + [guid]::N
 .venv\Scripts\python -m unittest discover -s tests -v
 ```
 
-All data commands require an explicit data directory. `--help` lists the on-demand price fetch and opt-in daily scheduler. Device commands, the web app and the Android app are still pending. See the [setup record](docs/setup.md) for installed development tools.
+All data commands require an explicit data directory. `--help` lists the on-demand price fetch and opt-in daily scheduler. See the [setup record](docs/setup.md) for installed development tools.
+
+Start the offline pump app with `.venv\Scripts\python scripts/start-pump-app.py --demo`. It opens the browser and uses fresh temporary data. After the owner authorizes the specific live test, use `--live`: a local dialog asks for email and password, includes Show password, and keeps credentials in memory. Close the service with Ctrl+C after restoring the tested controls. Stopping the app does not restore device settings automatically.
+
+The app listens on localhost and rejects unrelated browser origins. Boot startup, Tailscale identity and persistent credential storage belong to F3.2. Optional outdoor data for the direct `pump_app serve --live` command uses `VILLA_KUPPIS_WEATHER_HOME` and `VILLA_KUPPIS_WEATHER_COTTAGE` (`lat,lon`); keep precise locations in private environment settings. The supervised launcher clears these to keep the pump test separate. FMI observations use the nearest returned station, not a sensor at the property. Prices appear when the price experiment has populated `prices.db` in the same data directory. Missing history is shown as a gap; energy, cottage and plan series need their later integrations.
 
 The [Mitsubishi probe](docs/mitsubishi.md#probe-commands) prepares the next integration test with a synthetic demo and a supervised setpoint change. Live account and device checks require approval; credentials are entered locally and are not saved.
 

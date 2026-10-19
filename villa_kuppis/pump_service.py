@@ -29,10 +29,13 @@ import math
 import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
+from typing import Sequence
 
 from aiomelcloudhome.models.ata import ATAFanSpeed, ATAOperationMode
 
+from . import weather
 from .pump_probe import (
     _default_client_factory,
     _operation_message,
@@ -53,9 +56,43 @@ MODES = ("Cool", "Heat", "Dry", "Fan", "Automatic")
 FAN_NAMES = ("One", "Two", "Three", "Four", "Five")
 ACTIONS = ("power", "setpoint", "mode", "fan")
 
+# History (card F3.3): a history row is written every HISTORY_INTERVAL_SECONDS
+# unless one of the five fields changed since the last row, and /api/history is
+# downsampled to at most the per-range point budgets below (year stays ~1s).
+HISTORY_INTERVAL_SECONDS = 300
+HISTORY_RANGES = {
+    "day": (24 * 3600, 288),
+    "week": (7 * 24 * 3600, 700),
+    "month": (30 * 24 * 3600, 900),
+    "year": (365 * 24 * 3600, 1000),
+}
+# Outdoor temperature (card F3.3): one hourly FMI fetch per configured site,
+# a one-time backfill at start, then a 75-minute overlap window every hour.
+WEATHER_UPDATE_INTERVAL = 3600.0
+WEATHER_BACKFILL_HOURS = 24.0
+WEATHER_OVERLAP_HOURS = 1.25
+WEATHER_RETRY_SECONDS = 300.0
+PRICE_DB_FILENAME = "prices.db"
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _to_epoch(value) -> int:
+    """datetime or ISO-8601 (UTC) string -> unix seconds (naive = UTC)."""
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.timestamp())
+
+
+def _iso(epoch: int) -> str:
+    """unix seconds -> ISO-8601 UTC string (the API's timestamp form)."""
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
 
 
 # --- validation ------------------------------------------------------------------
@@ -237,6 +274,24 @@ CREATE TABLE IF NOT EXISTS event (
     detail TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_event_id_desc ON event (id DESC);
+CREATE TABLE IF NOT EXISTS pump_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts_utc INTEGER NOT NULL,
+    unit_id TEXT NOT NULL,
+    power INTEGER,
+    mode TEXT,
+    setpoint REAL,
+    fan TEXT,
+    room_temp REAL
+);
+CREATE INDEX IF NOT EXISTS idx_pump_history_unit
+    ON pump_history (unit_id, ts_utc);
+CREATE TABLE IF NOT EXISTS outdoor_temperature (
+    site TEXT NOT NULL,
+    ts_utc INTEGER NOT NULL,
+    temp_c REAL NOT NULL,
+    PRIMARY KEY (site, ts_utc)
+);
 """
 
 
@@ -369,6 +424,119 @@ class PumpStore:
             }
             for r in rows
         ]
+
+    # -- history (card F3.3) --------------------------------------------------
+
+    def record_history(self, states: list[dict]) -> int:
+        """Persist the on-change / 5-minute history; return rows written.
+
+        A row is written when any of the five fields changed since the last
+        row for that unit, or when the last row is at least
+        HISTORY_INTERVAL_SECONDS old. One transaction per call.
+        """
+        written = 0
+        with self._lock, self._conn:
+            for s in states:
+                last = self._conn.execute(
+                    "SELECT ts_utc, power, mode, setpoint, fan, room_temp "
+                    "FROM pump_history WHERE unit_id = ? ORDER BY ts_utc DESC, id DESC "
+                    "LIMIT 1", (s["id"],)).fetchone()
+                if last is not None:
+                    changed = (
+                        s["power"] != last[1] or s["mode"] != last[2]
+                        or s["setpoint"] != last[3] or s["fan"] != last[4]
+                        or s["room_temp"] != last[5]
+                    )
+                    if not changed:
+                        try:
+                            gap = _to_epoch(s["updated_at"]) - last[0]
+                            if gap < HISTORY_INTERVAL_SECONDS:
+                                continue
+                        except (KeyError, ValueError):
+                            pass  # unparseable timestamp: record it
+                self._conn.execute(
+                    "INSERT INTO pump_history (ts_utc, unit_id, power, mode, "
+                    "setpoint, fan, room_temp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (_to_epoch(s["updated_at"]), s["id"], s["power"],
+                     s["mode"], s["setpoint"], s["fan"], s["room_temp"]))
+                written += 1
+            self._conn.commit()
+        return written
+
+    @staticmethod
+    def _bucket_seconds(start: int, end: int, max_points: int) -> float:
+        return max(1, end - start) / max(1, max_points)
+
+    def pump_history(self, unit_id: str, start, end,
+                     max_points: int) -> list[tuple]:
+        """Downsampled (ts, room_temp, setpoint) rows, last sample per bucket."""
+        s, e = _to_epoch(start), _to_epoch(end)
+        b = self._bucket_seconds(s, e, max_points)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT ts_utc, room_temp, setpoint FROM ("
+                "  SELECT ts_utc, room_temp, setpoint, "
+                "         ROW_NUMBER() OVER (PARTITION BY CAST((ts_utc - ?) / ? AS INTEGER) "
+                "                            ORDER BY ts_utc DESC, id DESC) AS rn "
+                "  FROM pump_history WHERE unit_id = ? AND ts_utc >= ? "
+                "    AND ts_utc < ?"
+                ") WHERE rn = 1 ORDER BY ts_utc", (s, b, unit_id, s, e)).fetchall()
+        return [tuple(r) for r in rows]
+
+    def outdoor_upsert(self, site: str, values: Sequence[tuple]) -> int:
+        """Insert/refresh outdoor temperatures; return the row count."""
+        rows = [(site, _to_epoch(ts), float(temp_c)) for ts, temp_c in values]
+        if not rows:
+            return 0
+        with self._lock:
+            self._conn.executemany(
+                "INSERT INTO outdoor_temperature (site, ts_utc, temp_c) "
+                "VALUES (?, ?, ?) ON CONFLICT(site, ts_utc) DO UPDATE SET "
+                "temp_c = excluded.temp_c", rows)
+            self._conn.commit()
+        return len(rows)
+
+    def outdoor_series(self, site: str, start, end,
+                       max_points: int) -> list[tuple]:
+        """Downsampled (ts, temp_c) outdoor rows, last sample per bucket."""
+        s, e = _to_epoch(start), _to_epoch(end)
+        b = self._bucket_seconds(s, e, max_points)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT ts_utc, temp_c FROM ("
+                "  SELECT ts_utc, temp_c, "
+                "         ROW_NUMBER() OVER (PARTITION BY CAST((ts_utc - ?) / ? AS INTEGER) "
+                "                            ORDER BY ts_utc DESC) AS rn "
+                "  FROM outdoor_temperature WHERE site = ? AND ts_utc >= ? "
+                "    AND ts_utc < ?"
+                ") WHERE rn = 1 ORDER BY ts_utc", (s, b, site, s, e)).fetchall()
+        return [tuple(r) for r in rows]
+
+    def price_series(self, prices_db, start, end,
+                     max_points: int) -> list[tuple] | None:
+        """Downsampled (ts, c/kWh) prices from prices.db (opened read-only).
+
+        Returns None when prices.db does not exist (the API reports price
+        null); otherwise a list, possibly empty.
+        """
+        path = Path(prices_db)
+        if not path.exists():
+            return None
+        s, e = _to_epoch(start), _to_epoch(end)
+        b = self._bucket_seconds(s, e, max_points)
+        uri = path.resolve().as_uri() + "?mode=ro"
+        conn = sqlite3.connect(uri, uri=True)
+        try:
+            rows = conn.execute(
+                "SELECT ts_utc, price_raw_eur_mwh FROM ("
+                "  SELECT ts_utc, price_raw_eur_mwh, "
+                "         ROW_NUMBER() OVER (PARTITION BY CAST((ts_utc - ?) / ? AS INTEGER) "
+                "                            ORDER BY ts_utc DESC) AS rn "
+                "  FROM price_interval WHERE ts_utc >= ? AND ts_utc < ?"
+                ") WHERE rn = 1 ORDER BY ts_utc", (s, b, s, e)).fetchall()
+        finally:
+            conn.close()
+        return [(ts, float(Decimal(raw) / Decimal(10))) for ts, raw in rows]
 
     def close(self) -> None:
         with self._lock:
@@ -510,6 +678,11 @@ class PumpGateway:
                 now_iso = self._now().isoformat()
                 states = [unit_state(u, now_iso) for u in collect_units(context)]
                 self._store.upsert_units(states)
+                try:
+                    self._store.record_history(states)
+                except sqlite3.Error:
+                    # A history write failure must not take polling down.
+                    pass
                 with self._lock:
                     self._last_ok = self._now()
                     self._last_error = None
@@ -632,9 +805,9 @@ class PumpGateway:
                     # the view shows the confirmed value at once, not on
                     # the next poll.
                     try:
-                        self._store.upsert_units(
-                            [unit_state(unit, self._now().isoformat())]
-                        )
+                        states = [unit_state(unit, self._now().isoformat())]
+                        self._store.upsert_units(states)
+                        self._store.record_history(states)
                     except sqlite3.Error:
                         pass
                     detail = "the write response failed but the change was confirmed" if write_failed else ""
@@ -666,7 +839,12 @@ class PumpService:
                  stale_after: float = DEFAULT_STALE_AFTER,
                  readback_polls: int = DEFAULT_READBACK_POLLS,
                  readback_delay: float = DEFAULT_READBACK_DELAY,
-                 command_timeout: float = DEFAULT_COMMAND_TIMEOUT):
+                 command_timeout: float = DEFAULT_COMMAND_TIMEOUT,
+                 weather_sites: dict | None = None,
+                 weather_fetcher=weather.fetch_hourly_temperature,
+                 weather_interval: float = WEATHER_UPDATE_INTERVAL,
+                 weather_backfill_hours: float = WEATHER_BACKFILL_HOURS,
+                 prices_db=None):
         self._data_dir = Path(data_dir)
         self._now = now
         self._stale_after = stale_after
@@ -682,6 +860,16 @@ class PumpService:
             command_timeout=command_timeout,
             teardown=teardown,
         )
+        self._weather_sites = {str(k): (float(v[0]), float(v[1]))
+                               for k, v in (weather_sites or {}).items()}
+        self._weather_fetcher = weather_fetcher
+        self._weather_interval = float(weather_interval)
+        self._weather_backfill_hours = float(weather_backfill_hours)
+        self._prices_db = (Path(prices_db) if prices_db is not None
+                           else self._data_dir / PRICE_DB_FILENAME)
+        self._weather_stop = threading.Event()
+        self._weather_write_lock = threading.Lock()
+        self._weather_thread: threading.Thread | None = None
         self._closed = False
 
     # -- lifecycle --
@@ -695,12 +883,22 @@ class PumpService:
         # memory, so every pending event at start time is an orphan, no
         # matter how recently the last process died.
         self.store.fail_orphaned_pending()
+        if self._weather_sites:
+            self._weather_stop.clear()
+            self._weather_thread = threading.Thread(
+                target=self._weather_loop, name="pump-weather", daemon=True)
+            self._weather_thread.start()
         self.gateway.start()
 
     def close(self) -> None:
         if self._closed:
             return
         self._closed = True
+        with self._weather_write_lock:
+            self._weather_stop.set()
+        if self._weather_thread is not None:
+            self._weather_thread.join(timeout=10.0)
+            self._weather_thread = None
         self.gateway.stop()
         self.store.close()
 
@@ -736,6 +934,71 @@ class PumpService:
 
     def events(self, limit: int = 100) -> list[dict]:
         return self.store.events(limit)
+
+    # -- history (card F3.3) ---------------------------------------------------
+
+    def history(self, unit: str, range_name: str,
+                site: str | None = None) -> dict:
+        """One history payload: downsampled room/setpoint/outdoor/price.
+
+        range_name is one of day | week | month | year; site selects the
+        outdoor-temperature site (default "home").
+        """
+        if range_name not in HISTORY_RANGES:
+            raise ValueError(
+                "range must be one of: " + ", ".join(sorted(HISTORY_RANGES)))
+        span_seconds, max_points = HISTORY_RANGES[range_name]
+        site = site or "home"
+        end = self._now()
+        start = end - timedelta(seconds=span_seconds)
+        unit_rows = self.store.pump_history(unit, start, end, max_points)
+        outdoor = self.store.outdoor_series(site, start, end, max_points)
+        price = self.store.price_series(self._prices_db, start, end,
+                                        max_points)
+        return {
+            "unit": unit,
+            "range": range_name,
+            "start": _iso(_to_epoch(start)),
+            "end": _iso(_to_epoch(end)),
+            "room_temp": [[_iso(ts), v] for ts, v, _ in unit_rows
+                          if v is not None],
+            "setpoint": [[_iso(ts), v] for ts, _, v in unit_rows
+                         if v is not None],
+            "outdoor": [[_iso(ts), v] for ts, v in outdoor],
+            "price": None if price is None
+                     else [[_iso(ts), v] for ts, v in price],
+        }
+
+    # -- outdoor temperature (card F3.3) ---------------------------------------
+
+    def _weather_loop(self) -> None:
+        """Backfill each site, retry failed fetches, then update hourly."""
+        backfilled = set()
+        while not self._weather_stop.is_set():
+            failed = False
+            for name, (lat, lon) in self._weather_sites.items():
+                if self._weather_stop.is_set():
+                    return
+                try:
+                    self._fetch_outdoor(
+                        name, lat, lon,
+                        hours_back=(WEATHER_OVERLAP_HOURS if name in backfilled
+                                    else self._weather_backfill_hours))
+                    backfilled.add(name)
+                except Exception:
+                    failed = True
+            delay = (min(self._weather_interval, WEATHER_RETRY_SECONDS)
+                     if failed else self._weather_interval)
+            self._weather_stop.wait(delay)
+
+    def _fetch_outdoor(self, site: str, lat: float, lon: float,
+                       hours_back: float) -> None:
+        end = self._now()
+        series = self._weather_fetcher(lat, lon,
+                                       end - timedelta(hours=hours_back), end)
+        with self._weather_write_lock:
+            if not self._weather_stop.is_set():
+                self.store.outdoor_upsert(site, list(series.values))
 
     # -- writes --
 
@@ -825,4 +1088,5 @@ def make_live_service(data_dir, *, poll_interval=DEFAULT_POLL_INTERVAL,
         poll_interval=poll_interval, stale_after=stale_after,
         readback_polls=readback_polls, readback_delay=readback_delay,
         command_timeout=command_timeout,
+        weather_sites=weather.weather_sites_from_env(os.environ),
     )

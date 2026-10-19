@@ -4,7 +4,7 @@ Project: Villa Kuppis.
 
 Purpose: A personal Finnish-language home automation app that brings the home and cottage devices into one app.
 
-Stack: Implementation started. Python 3.13 with SQLite for the PC service; tzdata supplies Europe/Helsinki time on Windows. The pump experiment uses aiomelcloudhome 0.3.1. Planned: Finnish web app for desktop, native Kotlin Android app (Google Home APIs, web app in a WebView) for the cottage devices in Google Home over Matter, and Tailscale between phones and PC. No Home Assistant or VM unless last resort. Update this line when the runtime, framework or key libraries change.
+Stack: Python 3.13 and SQLite for the PC service, a Finnish web app served by the standard-library HTTP server, aiomelcloudhome 0.3.1 for pumps, and tzdata for Europe/Helsinki on Windows. FMI observations use the standard-library HTTP/XML client. Planned: native Kotlin Android app (Google Home APIs and the web app in a WebView) for cottage Matter devices, and Tailscale between phones and PC. No Home Assistant or VM unless last resort. Update this line when the runtime, framework or key libraries change.
 
 Codex, Hermes and Claude Code (through `CLAUDE.md`) all read this file. This is a hobby project: move quickly, keep process small, and ask the owner only about real product choices.
 
@@ -24,6 +24,9 @@ Codex, Hermes and Claude Code (through `CLAUDE.md`) all read this file. This is 
 | Python tests (mocked network, temporary data) | .venv\Scripts\python -m unittest discover -s tests -v |
 | Pump probe help and offline demo | .venv\Scripts\python -m villa_kuppis.pump_probe --help; .venv\Scripts\python -m villa_kuppis.pump_probe demo |
 | Pump probe tests (mocked network and devices) | .venv\Scripts\python -m unittest discover -s tests -p "test_pump*.py" -v |
+| FMI weather tests (synthetic responses and local HTTP fixtures) | .venv\Scripts\python -m unittest discover -s tests -p "test_weather.py" -v |
+| Pump app tests (mock devices and localhost HTTP) | .venv\Scripts\python -m unittest discover -s tests -p "test_pump_app.py" -v |
+| Supervised pump web app (fresh temporary data; local login dialog with Show password) | .venv\Scripts\python scripts/start-pump-app.py --demo; .venv\Scripts\python scripts/start-pump-app.py --live (owner approval) |
 | Live pump probe (owner approval; local interactive terminal) | .venv\Scripts\python -m villa_kuppis.pump_probe --live read; .venv\Scripts\python -m villa_kuppis.pump_probe --live test-setpoint |
 | Live pump power test (owner approval; starts off, on for 30 seconds after read-back, then off) | .venv\Scripts\python -m villa_kuppis.pump_probe --live test-power |
 | One-off live price fetch (owner approval; new temporary data directory) | .venv\Scripts\python -m villa_kuppis --data-dir DATA_DIR refresh --date YYYY-MM-DD |

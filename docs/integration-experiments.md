@@ -26,14 +26,14 @@ Extends [C](#c-mitsubishi-through-melcloud-home): the same cloud route, now thro
 
 Steps (owner present; go-ahead given before any write):
 
-1. Create a fresh throwaway data directory (for example `%TEMP%\vk-live-check`). Never reuse a demo directory.
-2. Set the two environment variables in the shell only; the values are never written to disk or Git.
-3. Start the app: `.venv\Scripts\python -m villa_kuppis.pump_app serve --data-dir <dir> --live` (binds 127.0.0.1:8377).
+1. Agree on one unit, a setpoint change of at most 1 °C and an optional fan change. Keep power and mode unchanged. Record the original power, mode, setpoint and fan in private test notes. Have the official app available to restore them if needed.
+2. Start `.venv\Scripts\python scripts/start-pump-app.py --live`. Enter credentials in the local dialog; email is visible and Show password lets the owner check typing. Credentials stay in process memory. This launcher creates a fresh temporary data directory and disables optional weather fetches for this check.
+3. The browser opens at 127.0.0.1:8377. The direct environment-based `pump_app serve --live` command remains available for development; never put credentials in command arguments or files.
 4. Open the page and confirm all three installed indoor units appear with an OK status (not stale), and that each card's power, mode, temperature and fan match the official mobile app at the same moment.
 5. Soak for at least three poll cycles (10 seconds each): values stay fresh and the last-updated time advances.
 6. Change one setpoint on one unit (owner chooses the unit and direction, within the reported range, for example +1 °C). The card shows the pending state, then a confirmed event row (read-back allows up to about 15 seconds). The event names the actor; the change is visible in the mobile app.
-7. Change the fan or mode of the same unit; verify the same way.
-8. Restore the setpoint to its original value and confirm the restoration.
+7. If separately authorized, change the fan of the same unit by one supported step; verify it the same way, then restore and verify the original fan. Do not change mode or power during this test.
+8. Restore the setpoint to its original value and confirm the restoration in both apps. Confirm all four controls match the private baseline, including the unmodified mode and power. If any command fails or remains pending, inspect the official app before doing anything else and restore there if needed; do not blindly retry ambiguous writes.
 9. Stop with Ctrl+C while nothing is pending.
 
 Expected quirk: MELCloud returns HTTP 500 on writes that actually apply (recorded in C). The service then still confirms the command from the read-back, and the event row carries the note "the write response failed but the change was confirmed" under the status. That is a pass, not a failure.
@@ -43,6 +43,8 @@ Current naming: the web page does not yet ask for a name, so commands are logged
 Pass: steps 4–5 show all three units live and fresh; steps 6–8 are each confirmed by read-back, visible in the mobile app and in the event log; no other unit or control changed; the units end in their original states.
 
 The outcome is recorded here with the commit run and the date.
+
+Offline review on 19 October 2026: Codex reviewed the inherited service and unfinished history/weather batch. Fixes cover transactional and locked history access, command read-back recording, failed weather backfill retries, shutdown during a weather request, UTC/hour-aligned FMI queries, missing measurements, browser-origin/Host checks, and stale chart responses. The local credential launcher has mocked cancellation and cleanup checks. A synthetic year with roughly 140,000 pump readings plus hourly outdoor and quarter-hour prices returned 1,000 points per series (148 KB) in 0.13 seconds on the owner's PC and rendered in the browser. This is offline evidence, not a live-device pass. The app's stop command does not reverse accepted device commands.
 
 ## D. Spot prices and fixed thresholds
 
