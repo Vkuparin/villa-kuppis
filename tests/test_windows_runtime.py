@@ -281,6 +281,28 @@ class RuntimeTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     Config.load(path)
 
+    def test_config_weather_sites_reach_the_live_service(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "service.json"
+            values = {"data_dir":str(Path(temp)/"data"),"backup_dir":str(Path(temp)/"backups"),
+                      "weather":{"home":"60.2,24.9"}}
+            path.write_text(json.dumps(values))
+            config = Config.load(path)
+            self.assertEqual(config.weather, (("home",(60.2,24.9)),))
+            for bad in ({"sauna":"60,25"}, {"home":"north"}, ["60,25"]):
+                path.write_text(json.dumps(dict(values, weather=bad)))
+                with self.assertRaises(ValueError):
+                    Config.load(path)
+            stop = threading.Event()
+            server = mock.Mock()
+            server.handle_request.side_effect = stop.set
+            with mock.patch("villa_kuppis.runtime.read_credentials") as read, \
+                    mock.patch("villa_kuppis.runtime.make_live_service") as live:
+                run(config, stop_event=stop, server_factory=lambda *a, **k: server,
+                    backup_factory=lambda *a: mock.Mock())
+            self.assertEqual(live.call_args.kwargs["weather_sites"], {"home":(60.2,24.9)})
+            read.assert_called_once()
+
     def test_runner_cleans_up_and_does_not_read_credentials_for_demo(self):
         service, server, backup = mock.Mock(), mock.Mock(), mock.Mock()
         stop = threading.Event()

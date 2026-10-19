@@ -9,6 +9,8 @@ fully offline) plus a small JSON API on top of PumpService:
 * GET  /api/history   downsampled time series (card F3.3)
 * GET  /api/identity  the trusted actor of this connection (card F3.2)
 * GET  /api/settings  setting definitions, overrides and effective values
+* GET  /api/plan      today's cooling plan (card F4.1)
+* GET  /api/rooms     learned room rates and the FMI forecast (card F5.1)
 * POST /api/settings  {"scope", "key", "value" | "reset"} (card F3.5)
 * GET/POST /api/away  home-away button, {"away": bool} (card F6.1)
 * POST /api/command   {"unit", "action", "value"} -> the service
@@ -52,6 +54,9 @@ from .pump_service import MAX_ACTOR_LENGTH, PumpService, make_live_service
 from .plan_ui import SCRIPT as _PLAN_SCRIPT
 from .plan_ui import SECTION_HTML as _PLAN_HTML
 from .plan_ui import STYLE as _PLAN_STYLE
+from .rooms_ui import SCRIPT as _ROOMS_SCRIPT
+from .rooms_ui import SECTION_HTML as _ROOMS_HTML
+from .rooms_ui import STYLE as _ROOMS_STYLE
 from .settings_ui import SCRIPT as _SETTINGS_SCRIPT
 from .settings_ui import SECTION_HTML as _SETTINGS_HTML
 from .settings_ui import STYLE as _SETTINGS_STYLE
@@ -262,6 +267,7 @@ td.result-pending { color: #0b3f9e; }
 .alert.info { background: #eef4ff; border-color: #0b3f9e; color: #0b3f9e; }
 /*SETTINGS_STYLE*/
 /*PLAN_STYLE*/
+/*ROOMS_STYLE*/
 @media (max-width: 560px) {
   .row { flex-direction: column; align-items: stretch; gap: .35rem; }
   .row .label { order: 1; }
@@ -312,6 +318,7 @@ ohjaavat vain esittelyyksiköitä.</div>
       Sähkönhinta: Elering. Käyrät on harvennettu näytölle.</p>
   </section>
 <!--PLAN_SECTION-->
+<!--ROOMS_SECTION-->
 <!--SETTINGS_SECTION-->
   <section class="events" aria-label="Tapahtumat">
     <h2>Tapahtumat</h2>
@@ -917,6 +924,7 @@ setInterval(loadIdentity, 60000);
 </script>
 <script>/*SETTINGS_SCRIPT*/</script>
 <script>/*PLAN_SCRIPT*/</script>
+<script>/*ROOMS_SCRIPT*/</script>
 </body>
 </html>
 """
@@ -927,6 +935,9 @@ def render_page(demo: bool) -> str:
             .replace("/*PLAN_STYLE*/", _PLAN_STYLE)
             .replace("<!--PLAN_SECTION-->", _PLAN_HTML)
             .replace("/*PLAN_SCRIPT*/", _PLAN_SCRIPT)
+            .replace("/*ROOMS_STYLE*/", _ROOMS_STYLE)
+            .replace("<!--ROOMS_SECTION-->", _ROOMS_HTML)
+            .replace("/*ROOMS_SCRIPT*/", _ROOMS_SCRIPT)
             .replace("<!--SETTINGS_SECTION-->", _SETTINGS_HTML)
             .replace("/*SETTINGS_SCRIPT*/", _SETTINGS_SCRIPT))
     if not demo:
@@ -1115,6 +1126,8 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             self._json(200, self.app.service.plan_view())
         elif parts.path == "/api/away":
             self._json(200, {"away": self.app.service.automation.away()})
+        elif parts.path == "/api/rooms":
+            self._json(200, self.app.service.room_rates())
         elif parts.path == "/api/identity":
             self._json(200, {"actor": identity["actor"],
                              "display_name": identity["display_name"],
@@ -1148,7 +1161,7 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             self._json(200, self.app.service.set_away(body["away"],
                                                       identity["actor"]))
         elif parts.path in ("/", "/api/view", "/api/events", "/api/history",
-                            "/api/identity", "/api/plan"):
+                            "/api/identity", "/api/plan", "/api/rooms"):
             # Known paths with the wrong method: 405, mirroring how
             # do_GET answers /api/command.
             self._json(405, {"error": "method_not_allowed",

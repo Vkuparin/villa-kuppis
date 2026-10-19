@@ -36,7 +36,7 @@ from zoneinfo import ZoneInfo
 
 from aiomelcloudhome.models.ata import ATAFanSpeed, ATAOperationMode
 
-from . import weather
+from . import learning, weather
 from .cooling import CoolingAutomation
 from .settings import SettingsStore
 from .pump_probe import (
@@ -78,6 +78,11 @@ WEATHER_BACKFILL_HOURS = 24.0
 WEATHER_OVERLAP_HOURS = 1.25
 WEATHER_RETRY_SECONDS = 300.0
 PRICE_DB_FILENAME = "prices.db"
+# Forecast (card F5.1): fetched with each hourly weather pass, 48 hours ahead.
+FORECAST_HOURS = 48.0
+# Learned room rates (card F5.1) are recomputed at most this often.
+ROOM_RATES_CACHE_SECONDS = 600.0
+ROOM_RATES_PREDICT_HOURS = 6
 
 
 def utc_now() -> datetime:
@@ -101,6 +106,10 @@ def _iso(epoch: int) -> str:
 
 
 # --- validation ------------------------------------------------------------------
+
+def _round(value, digits):
+    return None if value is None else round(value, digits)
+
 
 def _is_number(value) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
@@ -302,6 +311,12 @@ CREATE TABLE IF NOT EXISTS plan_target (
     ts_utc INTEGER NOT NULL,
     target_c REAL NOT NULL,
     PRIMARY KEY (unit_id, ts_utc)
+);
+CREATE TABLE IF NOT EXISTS outdoor_forecast (
+    site TEXT NOT NULL,
+    ts_utc INTEGER NOT NULL,
+    temp_c REAL NOT NULL,
+    PRIMARY KEY (site, ts_utc)
 );
 CREATE TABLE IF NOT EXISTS pump_energy (
     unit_id TEXT NOT NULL,
@@ -537,6 +552,53 @@ class PumpStore:
                 "    AND ts_utc < ?"
                 ") WHERE rn = 1 ORDER BY ts_utc", (s, b, site, s, e)).fetchall()
         return [tuple(r) for r in rows]
+
+    def outdoor_rows(self, site: str, start, end) -> list[tuple]:
+        """All (ts, temp_c) outdoor rows in the range, oldest first."""
+        s, e = _to_epoch(start), _to_epoch(end)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT ts_utc, temp_c FROM outdoor_temperature WHERE site = ? "
+                "AND ts_utc >= ? AND ts_utc < ? ORDER BY ts_utc",
+                (site, s, e)).fetchall()
+        return [tuple(r) for r in rows]
+
+    # -- learning inputs and forecast (card F5.1) -----------------------------
+
+    def forecast_upsert(self, site: str, values: Sequence[tuple]) -> int:
+        """Store the latest forecast; a newer fetch replaces older values."""
+        rows = [(site, _to_epoch(ts), float(temp_c)) for ts, temp_c in values]
+        if not rows:
+            return 0
+        with self._lock:
+            self._conn.executemany(
+                "INSERT INTO outdoor_forecast (site, ts_utc, temp_c) "
+                "VALUES (?, ?, ?) ON CONFLICT(site, ts_utc) DO UPDATE SET "
+                "temp_c = excluded.temp_c", rows)
+            self._conn.commit()
+        return len(rows)
+
+    def forecast_rows(self, site: str, start, end) -> list[tuple]:
+        """(ts, temp_c) forecast rows in the range, oldest first."""
+        s, e = _to_epoch(start), _to_epoch(end)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT ts_utc, temp_c FROM outdoor_forecast WHERE site = ? "
+                "AND ts_utc >= ? AND ts_utc < ? ORDER BY ts_utc",
+                (site, s, e)).fetchall()
+        return [tuple(r) for r in rows]
+
+    def learning_readings(self, unit_id: str, start, end) -> list:
+        """Every stored history row of a unit as learning.Reading."""
+        s, e = _to_epoch(start), _to_epoch(end)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT ts_utc, room_temp, setpoint, power, mode "
+                "FROM pump_history WHERE unit_id = ? AND ts_utc >= ? "
+                "AND ts_utc < ? ORDER BY ts_utc, id", (unit_id, s, e)).fetchall()
+        return [learning.Reading(r[0], r[1], r[2],
+                                 None if r[3] is None else bool(r[3]), r[4])
+                for r in rows]
 
     def price_series(self, prices_db, start, end,
                      max_points: int) -> list[tuple] | None:
@@ -985,6 +1047,7 @@ class PumpService:
                  weather_fetcher=weather.fetch_hourly_temperature,
                  weather_interval: float = WEATHER_UPDATE_INTERVAL,
                  weather_backfill_hours: float = WEATHER_BACKFILL_HOURS,
+                 forecast_fetcher=None,
                  prices_db=None,
                  automation_interval: float | None = None):
         self._data_dir = Path(data_dir)
@@ -1008,6 +1071,9 @@ class PumpService:
         self._weather_fetcher = weather_fetcher
         self._weather_interval = float(weather_interval)
         self._weather_backfill_hours = float(weather_backfill_hours)
+        self._forecast_fetcher = forecast_fetcher
+        self._room_rates_cache: tuple[datetime, dict] | None = None
+        self._room_rates_lock = threading.Lock()
         self._prices_db = (Path(prices_db) if prices_db is not None
                            else self._data_dir / PRICE_DB_FILENAME)
         self.automation = CoolingAutomation(
@@ -1150,6 +1216,11 @@ class PumpService:
                     backfilled.add(name)
                 except Exception:
                     failed = True
+                if self._forecast_fetcher is not None:
+                    try:
+                        self._fetch_forecast(name, lat, lon)
+                    except Exception:
+                        failed = True
             delay = (min(self._weather_interval, WEATHER_RETRY_SECONDS)
                      if failed else self._weather_interval)
             self._weather_stop.wait(delay)
@@ -1162,6 +1233,81 @@ class PumpService:
         with self._weather_write_lock:
             if not self._weather_stop.is_set():
                 self.store.outdoor_upsert(site, list(series.values))
+
+    def _fetch_forecast(self, site: str, lat: float, lon: float) -> None:
+        start = self._now()
+        series = self._forecast_fetcher(
+            lat, lon, start, start + timedelta(hours=FORECAST_HOURS))
+        with self._weather_write_lock:
+            if not self._weather_stop.is_set():
+                self.store.forecast_upsert(site, list(series.values))
+
+    # -- learned room rates (card F5.1) ----------------------------------------
+
+    def room_rates(self, site: str = "home") -> dict:
+        """Learned rates, held-out error and a short prediction per unit."""
+        now = self._now()
+        with self._room_rates_lock:
+            cached = self._room_rates_cache
+            if cached is not None and 0 <= (now - cached[0]).total_seconds() \
+                    < ROOM_RATES_CACHE_SECONDS:
+                return cached[1]
+            payload = self._compute_room_rates(site, now)
+            self._room_rates_cache = (now, payload)
+            return payload
+
+    def _compute_room_rates(self, site: str, now: datetime) -> dict:
+        start = now - timedelta(days=learning.LEARN_DAYS)
+        observed = self.store.outdoor_rows(site, start, now + timedelta(hours=1))
+        ahead = self.store.forecast_rows(
+            site, now - timedelta(hours=1), now + timedelta(hours=FORECAST_HOURS))
+        outdoor = learning.Outdoor(observed)
+        # The prediction runs on the forecast, falling back to observations.
+        future = learning.Outdoor(
+            [r for r in observed if r[0] < _to_epoch(now)]
+            + [r for r in ahead if r[0] >= _to_epoch(now)])
+        now_ts = _to_epoch(now)
+        units = []
+        for state in self.store.unit_states():
+            readings = self.store.learning_readings(state["id"], start, now)
+            model = learning.fit(readings, outdoor)
+            _trained, check = learning.validate(readings, outdoor, now)
+            room = state["room_temp"]
+            out_now = future.at(now_ts)
+            if out_now is None:
+                out_now = future.last_before(now_ts)
+            current = predicted = None
+            if model.ready and room is not None:
+                passive = model.passive_rate(room, out_now)
+                current = {
+                    "room_c": room, "outdoor_c": _round(out_now, 1),
+                    "off_c_per_h": round(passive, 2),
+                    "cooling_c_per_h": (None if model.cool_c_per_h is None
+                                        else round(passive - model.cool_c_per_h, 2)),
+                    "heating_c_per_h": (None if model.heat_c_per_h is None
+                                        else round(passive + model.heat_c_per_h, 2)),
+                }
+                end_ts = now_ts + ROOM_RATES_PREDICT_HOURS * 3600
+                path = learning.simulate(model, room, now_ts, end_ts,
+                                         lambda _ts: (False, None, None), future)
+                predicted = {"hours": ROOM_RATES_PREDICT_HOURS,
+                             "off_c": round(path[-1][1], 1),
+                             "forecast": bool(ahead)}
+            units.append({
+                "id": state["id"], "name": state["name"],
+                "hours": (round((readings[-1].ts - readings[0].ts) / 3600)
+                          if readings else 0),
+                "model": model.public(),
+                "validation": None if check is None else check.public(),
+                "now": current, "predicted": predicted,
+            })
+        return {
+            "site": site, "updated": _iso(now_ts),
+            "learn_days": learning.LEARN_DAYS, "limit_c": learning.MAX_MAE_C,
+            "forecast": [[_iso(ts), v] for ts, v in ahead
+                         if now_ts - 3600 < ts < now_ts + 24 * 3600],
+            "units": units,
+        }
 
     # -- writes --
 
@@ -1258,5 +1404,6 @@ def make_live_service(data_dir, *, credentials=None, weather_sites=None,
         command_timeout=command_timeout,
         weather_sites=(weather.weather_sites_from_env(os.environ)
                        if weather_sites is None else weather_sites),
+        forecast_fetcher=weather.fetch_forecast_temperature,
         automation_interval=automation_interval,
     )

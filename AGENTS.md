@@ -25,6 +25,7 @@ Codex, Hermes and Claude Code (through `CLAUDE.md`) all read this file. This is 
 | Pump probe help and offline demo | .venv\Scripts\python -m villa_kuppis.pump_probe --help; .venv\Scripts\python -m villa_kuppis.pump_probe demo |
 | Pump probe tests (mocked network and devices) | .venv\Scripts\python -m unittest discover -s tests -p "test_pump*.py" -v |
 | FMI weather tests (synthetic responses and local HTTP fixtures) | .venv\Scripts\python -m unittest discover -s tests -p "test_weather.py" -v |
+| Learned room rates tests (synthetic rooms, fake forecast, localhost HTTP) | .venv\Scripts\python -m unittest discover -s tests -p "test_learning.py" -v |
 | Pump app tests (mock devices and localhost HTTP) | .venv\Scripts\python -m unittest discover -s tests -p "test_pump_app.py" -v |
 | Startup, credential and backup tests (mock Windows/network boundaries; temporary data) | .venv\Scripts\python -m unittest discover -s tests -p "test_windows_runtime.py" -v; .venv\Scripts\python -m unittest discover -s tests -p "test_backup.py" -v |
 | Plan unattended setup (no changes) | .venv\Scripts\python scripts/setup-pump-service.py plan --backup-dir BACKUP_DIR |

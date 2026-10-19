@@ -16,6 +16,7 @@ from urllib.parse import unquote
 
 from villa_kuppis.weather import (
     WeatherError,
+    fetch_forecast_temperature,
     fetch_hourly_temperature,
     nearest_station,
     parse_coord_spec,
@@ -152,15 +153,18 @@ class _FixtureHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
+    body = _FIXTURE
+
     def do_GET(self):
-        body = _FIXTURE.encode("utf-8")
+        # Remember the request before answering, so the client never sees
+        # the response first.
+        type(self).last_request = self.path
+        body = self.body.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/xml")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
-        # Remember the request for assertions.
-        _FixtureHandler.last_request = self.path
 
 
 class _ServerCase(unittest.TestCase):
@@ -351,3 +355,69 @@ class WeatherSitesFromEnvTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# A reduced point forecast in the timevaluepair layout (card F5.1): one
+# member for the requested point, parameter Temperature.
+_FORECAST = """<?xml version="1.0" encoding="UTF-8"?>
+<wfs:FeatureCollection
+    xmlns:wfs="http://www.opengis.net/wfs/2.0"
+    xmlns:omso="http://inspire.ec.europa.eu/schemas/omso/3.0"
+    xmlns:om="http://www.opengis.net/om/2.0"
+    xmlns:sams="http://www.opengis.net/samplingSpatial/2.0"
+    xmlns:gml="http://www.opengis.net/gml/3.2"
+    xmlns:wml2="http://www.opengis.net/waterml/2.0"
+    xmlns:xlink="http://www.w3.org/1999/xlink">
+  <wfs:member>
+    <omso:PointTimeSeriesObservation gml:id="fc-1">
+      <om:observedProperty
+          xlink:href="https://opendata.fmi.fi/meta?observableProperty=forecast&amp;param=Temperature&amp;language=eng"/>
+      <om:featureOfInterest>
+        <sams:SF_SpatialSamplingFeature gml:id="fi-fc-1">
+          <sams:shape>
+            <gml:Point gml:id="pt-fc-1" srsDimension="2">
+              <gml:name>60.17,24.95</gml:name>
+              <gml:pos>60.17000 24.95000 </gml:pos>
+            </gml:Point>
+          </sams:shape>
+        </sams:SF_SpatialSamplingFeature>
+      </om:featureOfInterest>
+      <om:result>
+        <wml2:MeasurementTimeseries gml:id="res-fc-1">
+          <wml2:point><wml2:MeasurementTVP>
+            <wml2:time>2026-10-19T13:00:00Z</wml2:time>
+            <wml2:value>7.5</wml2:value>
+          </wml2:MeasurementTVP></wml2:point>
+          <wml2:point><wml2:MeasurementTVP>
+            <wml2:time>2026-10-19T14:00:00Z</wml2:time>
+            <wml2:value>6.9</wml2:value>
+          </wml2:MeasurementTVP></wml2:point>
+        </wml2:MeasurementTimeseries>
+      </om:result>
+    </omso:PointTimeSeriesObservation>
+  </wfs:member>
+</wfs:FeatureCollection>
+"""
+
+
+class _ForecastHandler(_FixtureHandler):
+    body = _FORECAST
+
+
+class FetchForecastTest(_ServerCase):
+    def test_point_forecast_query_and_values(self):
+        base = self.start_server(_ForecastHandler)
+        start = datetime(2026, 10, 19, 12, 40, tzinfo=timezone.utc)
+        result = fetch_forecast_temperature(60.17, 24.95, start,
+                                            start + timedelta(hours=48),
+                                            base_url=base)
+        self.assertEqual([v for _t, v in result.values], [7.5, 6.9])
+        request = unquote(_ForecastHandler.last_request)
+        self.assertIn("storedquery_id=fmi::forecast::edited::weather::"
+                      "scandinavia::point::timevaluepair", request)
+        self.assertIn("latlon=60.1700,24.9500", request)
+        self.assertIn("parameters=Temperature", request)
+        self.assertIn("starttime=2026-10-19T12:00:00Z", request)
+
+    def test_observation_parser_ignores_forecast_members(self):
+        self.assertEqual(parse_timevaluepair(_FORECAST), [])

@@ -66,6 +66,14 @@ The owner enters an arrival time and a target temperature, e.g. Friday 18:00 and
 - The end-visit button returns the cottage to maintenance heating.
 - A notification warns if the plan cannot reach the target in time.
 
+## Learned room rates
+
+Card F5.1, in `villa_kuppis/learning.py`. Each room is a first-order model per hour: `dT/dt = a·(T_out − T) + b − c·cooling + h·heating`. `a` is how fast the room follows the outdoor temperature, `b` the steady drift (sun, people, the home's geothermal radiators), `c` and `h` what the unit adds while it actively cools or heats. The devices are their own thermostats, so a simulation holds the room at the setpoint once it gets there.
+
+The fit uses the last 28 days of stored readings in 15-minute steps and ordinary least squares. It skips steps where the unit just holds its setpoint, steps whose controls changed, and modes it does not cover (dry, automatic). It needs a day of steps without the unit working; the unit's own rate needs two hours of active cooling or heating. Without outdoor data the `a` term is left out.
+
+**Agreed error:** the model is trained on the days before the most recent complete day, then predicts that day from its first reading with the recorded controls and outdoor temperature. The day's mean absolute error must be at most 1.0 °C (the pumps report the room in 0.5 °C steps). The app shows the rates at the current conditions, the held-out result and a six-hour prediction with the unit off, using the FMI point forecast (`fmi::forecast::edited::weather::scandinavia::point::timevaluepair`, parameter `Temperature`).
+
 ## Plan view
 
 Today's and tomorrow's prices with the planned target per period and per room, the estimated cost, and the reason for each change (threshold, optimizer, visit).

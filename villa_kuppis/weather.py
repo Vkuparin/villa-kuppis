@@ -1,4 +1,4 @@
-"""FMI open data client for outdoor temperature (card F3.3).
+"""FMI open data client for outdoor temperature (cards F3.3 and F5.1).
 
 Standard library only (urllib + ElementTree): the pump service must stay
 dependency-free, and FMI's open data service needs no key.
@@ -20,6 +20,13 @@ service pads it with trailing whitespace) and the values are
 
 A request covering several hours returns one member per station with all
 hours in it, so a 24-hour backfill is a single request.
+
+The forecast (card F5.1) uses the point query
+
+    fmi::forecast::edited::weather::scandinavia::point::timevaluepair
+
+with ``latlon`` and the parameter ``Temperature``. Its answer has the same
+timevaluepair layout, with one member for the requested point.
 """
 
 from __future__ import annotations
@@ -37,6 +44,8 @@ from typing import Mapping
 WFS_BASE = "https://opendata.fmi.fi/wfs"
 STORED_QUERY_ID = "fmi::observations::weather::hourly::timevaluepair"
 TEMP_PARAM = "TA_PT1H_AVG"  # hourly mean air temperature, Celsius
+FORECAST_QUERY_ID = "fmi::forecast::edited::weather::scandinavia::point::timevaluepair"
+FORECAST_PARAM = "Temperature"  # forecast air temperature, Celsius
 DEFAULT_TIMEOUT = 30.0
 # About 50 km north/south, narrower east/west in Finland. Include nearby
 # stations in rural areas; choose the closest one from the returned data.
@@ -148,10 +157,11 @@ def _station_name(member) -> str:
     return ""
 
 
-def parse_timevaluepair(text: str) -> list[StationSeries]:
+def parse_timevaluepair(text: str, param: str = TEMP_PARAM) -> list[StationSeries]:
     """Parse a FMI timevaluepair FeatureCollection into station series.
 
-    Only members carrying the hourly mean temperature parameter are kept;
+    Only members carrying ``param`` (by default the hourly mean
+    temperature) are kept;
     members without a usable position or without values are dropped.
     Raises WeatherError if the document is not parseable at all.
     """
@@ -170,7 +180,8 @@ def parse_timevaluepair(text: str) -> list[StationSeries]:
         if prop is None:
             prop = member.find(f".//{{{_NS_TARGET}}}observedProperty")
         href = prop.get(f"{{{_NS_XLINK}}}href", "") if prop is not None else ""
-        if f"param={TEMP_PARAM}" not in urllib.parse.unquote(href):
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(href).query)
+        if param not in query.get("param", []):
             continue
         # Station id: the member's single gml:identifier (inside
         # target:Location in the live layout).
@@ -215,6 +226,30 @@ def nearest_station(series: list[StationSeries], lat: float,
     return min(series, key=lambda s: (s.distance_km(lat, lon), s.id))
 
 
+def _get(base_url: str, query: dict, timeout: float) -> str:
+    """One GET to the WFS endpoint; WeatherError on any failure."""
+    url = base_url + "?" + urllib.parse.urlencode(query)
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as resp:
+            text = resp.read().decode("utf-8")
+    except urllib.error.HTTPError as err:
+        detail = ""
+        try:
+            body = err.read().decode("utf-8", "replace")
+            detail = " ".join(body.split())[:200]
+        except Exception:
+            pass
+        raise WeatherError(
+            f"FMI returned HTTP {err.code}"
+            + (f": {detail}" if detail else "")
+        ) from None
+    except (urllib.error.URLError, TimeoutError, OSError) as err:
+        reason = getattr(err, "reason", err)
+        raise WeatherError(f"could not reach FMI: {reason}") from None
+    return text
+
+
 def fetch_hourly_temperature(lat: float, lon: float, start: datetime,
                              end: datetime, *, base_url: str = WFS_BASE,
                              timeout: float = DEFAULT_TIMEOUT,
@@ -245,24 +280,39 @@ def fetch_hourly_temperature(lat: float, lon: float, start: datetime,
         "endtime": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "parameters": TEMP_PARAM,
     }
-    url = base_url + "?" + urllib.parse.urlencode(query)
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as resp:
-            text = resp.read().decode("utf-8")
-    except urllib.error.HTTPError as err:
-        detail = ""
-        try:
-            body = err.read().decode("utf-8", "replace")
-            detail = " ".join(body.split())[:200]
-        except Exception:
-            pass
-        raise WeatherError(
-            f"FMI returned HTTP {err.code}"
-            + (f": {detail}" if detail else "")
-        ) from None
-    except (urllib.error.URLError, TimeoutError, OSError) as err:
-        reason = getattr(err, "reason", err)
-        raise WeatherError(f"could not reach FMI: {reason}") from None
+    text = _get(base_url, query, timeout)
     series = parse_timevaluepair(text)
+    return nearest_station(series, lat, lon)
+
+
+def fetch_forecast_temperature(lat: float, lon: float, start: datetime,
+                               end: datetime, *, base_url: str = WFS_BASE,
+                               timeout: float = DEFAULT_TIMEOUT
+                               ) -> StationSeries:
+    """Hourly forecast air temperature at a point (card F5.1).
+
+    Same contract as fetch_hourly_temperature: one request, timezone-aware
+    (or UTC) start/end, WeatherError on failure. The series is the
+    forecast point itself, not a station.
+    """
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    start = start.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    end = end.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    query = {
+        "service": "WFS",
+        "version": "2.0.0",
+        "request": "getFeature",
+        "storedquery_id": FORECAST_QUERY_ID,
+        "latlon": f"{lat:.4f},{lon:.4f}",
+        "starttime": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "endtime": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "timestep": "60",
+        "parameters": FORECAST_PARAM,
+    }
+    series = parse_timevaluepair(_get(base_url, query, timeout), FORECAST_PARAM)
+    if not series:
+        raise WeatherError("FMI returned no forecast for the point")
     return nearest_station(series, lat, lon)
