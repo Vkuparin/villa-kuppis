@@ -11,11 +11,13 @@ from __future__ import annotations
 import asyncio
 import shutil
 import tempfile
+import threading
 import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from villa_kuppis.pump_probe import FakeClient, _unit_payload
 from villa_kuppis.pump_service import PumpService, PumpStore, validate_request
@@ -270,6 +272,42 @@ class CommandTests(ServiceTestCase):
         )
         self.assertEqual(self._unit(service, "unit-2")["fan"], "Three")
 
+    def test_command_error_does_not_kill_worker(self):
+        # A command that blows up mid-pipeline must fail only that
+        # command: the worker must keep processing the next one.
+        client = FakeClient(make_unit_payloads())
+        service, _ = self._start(client)
+        self.wait_for(lambda: len(service.view()["units"]) >= 1)
+        real = validate_request
+        calls = {"n": 0}
+
+        def flaky(state, action, value):
+            calls["n"] += 1
+            if calls["n"] == 2:  # the worker's own validation pass
+                raise RuntimeError("boom in validation")
+            return real(state, action, value)
+
+        with mock.patch("villa_kuppis.pump_service.validate_request",
+                        side_effect=flaky):
+            status, _ = service.request("unit-1", "setpoint", 24.0, "Ville")
+            self.assertEqual(status, 202)
+            self.wait_for(
+                lambda: service.events()
+                and service.events()[0]["result"] != "pending"
+            )
+            self.assertEqual(service.events()[0]["result"], "failed")
+            self.assertIn("command failed", service.events()[0]["detail"])
+            # The worker survived: the next command still completes.
+            status, _ = service.request("unit-1", "setpoint", 25.0, "Ville")
+            self.assertEqual(status, 202)
+            self.wait_for(
+                lambda: len(service.events()) >= 2
+                and service.events()[0]["result"] == "confirmed"
+            )
+        self.assertEqual(len(client.control_calls), 1)
+        self.assertEqual(client.control_calls[0][1]["set_temperature"], 25.0)
+        self.assertEqual(self._unit(service, "unit-1")["setpoint"], 25.0)
+
 
 class StaleTests(ServiceTestCase):
     def test_stale_when_cloud_polls_fail(self):
@@ -359,6 +397,50 @@ class RequestTests(ServiceTestCase):
         self.wait_for(lambda: service.events()[0]["result"] == "confirmed")
         self.assertEqual(self._unit(service, "unit-1")["setpoint"], 25.0)
 
+    def test_concurrent_same_unit_one_409(self):
+        # Two requests for the same unit racing: exactly one wins the
+        # pending slot (202); the loser gets 409, not a 503, and only the
+        # winner ever touches the device.
+        client = SlowFake(make_unit_payloads(), delay=0.4)
+        service, _ = self._start(client)
+        self.wait_for(lambda: len(service.view()["units"]) >= 1)
+        barrier = threading.Barrier(2)
+        results: list[tuple[int, dict]] = []
+        results_lock = threading.Lock()
+
+        def post():
+            barrier.wait()
+            status, body = service.request("unit-1", "setpoint", 24.0, "Ville")
+            with results_lock:
+                results.append((status, body))
+
+        threads = [threading.Thread(target=post) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+        for t in threads:
+            self.assertFalse(t.is_alive())
+        self.assertEqual(sorted(s for s, _ in results), [202, 409])
+        body409 = next(b for s, b in results if s == 409)
+        self.assertEqual(body409["error"], "pending")
+        self.wait_for(
+            lambda: all(e["result"] != "pending" for e in service.events())
+            and any(e["result"] == "confirmed" for e in service.events())
+        )
+        confirmed = [e for e in service.events() if e["result"] == "confirmed"]
+        failed = [e for e in service.events() if e["result"] == "failed"]
+        self.assertEqual(len(confirmed), 1)
+        # The loser either left no trace (caught by the pending check) or a
+        # failed event (lost the reservation race); never a second confirmed
+        # command and never a pending one.
+        self.assertLessEqual(len(failed), 1)
+        for e in failed:
+            self.assertIn("another change", e["detail"])
+        self.assertEqual(len(client.control_calls), 1)
+        self.assertEqual(client.control_calls[0][1]["set_temperature"], 24.0)
+        self.assertEqual(self._unit(service, "unit-1")["setpoint"], 24.0)
+
     def test_actor_truncated_and_default(self):
         client = FakeClient(make_unit_payloads())
         service, _ = self._start(client)
@@ -392,8 +474,9 @@ class OrphanTests(ServiceTestCase):
                          if u["id"] == "unit-1")["pending"] is not None
         )
         service.close()  # the command is still in flight: it becomes an orphan
-        # After the orphan window, a new service marks the event failed.
-        clock.advance(121)
+        # A restart seconds later must already fail the event: the pending
+        # queue never survives a process restart, so no age window applies.
+        clock.advance(5)
         service2 = PumpService(data, client=client, now=clock, **kw)
         service2.start()
         self._services.append(service2)
@@ -545,12 +628,12 @@ class StoreTests(unittest.TestCase):
             self.assertEqual(event["requested"], 24.0)
             store.finish_event(event_id, "confirmed", "")
             self.assertEqual(store.events()[0]["result"], "confirmed")
-            # An old pending event is marked failed by the orphan sweep.
+            # A pending event is marked failed by the orphan sweep,
+            # regardless of age: the queue never survives a restart.
             orphan_id = store.add_event(
                 "2026-10-19T10:00:00+00:00", "u1", "B", "Ville",
                 "power", False)
-            marked = store.mark_stale_pending(
-                datetime(2026, 10, 19, 12, 0, 0, tzinfo=timezone.utc), 120.0)
+            marked = store.fail_orphaned_pending()
             self.assertEqual(marked, 1)
             by_id = {e["id"]: e for e in store.events()}
             self.assertEqual(by_id[event_id]["result"], "confirmed")

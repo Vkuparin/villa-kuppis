@@ -46,7 +46,6 @@ DEFAULT_STALE_AFTER = 60.0
 DEFAULT_READBACK_POLLS = 3
 DEFAULT_READBACK_DELAY = 5.0
 DEFAULT_COMMAND_TIMEOUT = 30.0
-ORPHAN_PENDING_MAX_AGE = 120.0
 MAX_ACTOR_LENGTH = 80
 DEFAULT_ACTOR = "web"
 
@@ -334,15 +333,19 @@ class PumpStore:
             )
             self._conn.commit()
 
-    def mark_stale_pending(self, now: datetime, max_age_seconds: float) -> int:
-        """Mark pending events older than max_age as failed (orphaned)."""
-        cutoff = (now - timedelta(seconds=max_age_seconds)).isoformat()
+    def fail_orphaned_pending(self) -> int:
+        """Fail every pending event.
+
+        The command queue is in memory, so any event still pending when a
+        service starts belongs to a previous process and can never be
+        confirmed from here — even if the restart happened seconds after
+        the crash.
+        """
         with self._lock:
             cur = self._conn.execute(
                 """UPDATE event SET result = 'failed',
                           detail = 'the service restarted before the change was confirmed'
-                   WHERE result = 'pending' AND ts_utc < ?""",
-                (cutoff,),
+                   WHERE result = 'pending'"""
             )
             self._conn.commit()
             return cur.rowcount
@@ -585,6 +588,11 @@ class PumpGateway:
             # start marks it as an orphaned failure.
             cancelled = True
             raise
+        except Exception as err:
+            # A per-command failure (a bad read, a validation or
+            # normalization error) fails this one command and never the
+            # worker: the next command must still be processed.
+            detail = _operation_message("command", err)
         finally:
             with self._lock:
                 self._pending.pop(unit_id, None)
@@ -670,9 +678,14 @@ class PumpService:
     # -- lifecycle --
 
     def start(self) -> None:
-        # A command interrupted by the previous run's shutdown was never
-        # confirmed; it cannot be confirmed now, so it is failed.
-        self.store.mark_stale_pending(self._now(), ORPHAN_PENDING_MAX_AGE)
+        if self.gateway.running:
+            return
+        # A command interrupted by the previous run's shutdown or by a
+        # crash was never confirmed; it cannot be confirmed now, so it is
+        # failed. The pending queue lives in the previous process's
+        # memory, so every pending event at start time is an orphan, no
+        # matter how recently the last process died.
+        self.store.fail_orphaned_pending()
         self.gateway.start()
 
     def close(self) -> None:
@@ -732,14 +745,29 @@ class PumpService:
         if self.gateway.has_pending(unit_id):
             return 409, {"error": "pending",
                          "detail": "a previous change for this unit is still being confirmed"}
-        ok, value, code, detail = validate_request(state, action, value)
+        try:
+            ok, value, code, detail = validate_request(state, action, value)
+        except Exception:
+            # A validation bug must not drop the connection with a raw
+            # traceback; report it and let the next command try again.
+            return 500, {"error": "internal_error",
+                         "detail": "the command could not be validated"}
         if not ok:
             return 400, {"error": code, "detail": detail}
         event_id = self.store.add_event(
-            self._now().isoformat(), unit_id, state["name"], actor, action, value
-        )
+            self._now().isoformat(), unit_id, state["name"], actor, action, value)
         if not self.gateway.submit(event_id, unit_id, action, value, actor):
-            self.store.finish_event(event_id, "failed", "the service is shutting down")
+            if self.gateway.has_pending(unit_id):
+                # Lost the reservation race to a concurrent command: the
+                # service is fine, this unit is simply busy.
+                self.store.finish_event(
+                    event_id, "failed",
+                    "another change for this unit was still being confirmed")
+                return 409, {"error": "pending",
+                             "detail": "a previous change for this unit "
+                                       "is still being confirmed"}
+            self.store.finish_event(event_id, "failed",
+                                    "the service is shutting down")
             return 503, {"error": "not_running",
                          "detail": "the pump service is shutting down"}
         return 202, {"status": "pending", "unit": unit_id, "action": action,

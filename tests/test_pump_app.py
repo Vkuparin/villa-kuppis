@@ -360,6 +360,24 @@ class CommandApiTests(AppTestCase):
         self.assertEqual(json.loads(raw)["error"], "method_not_allowed")
         status, ctype, raw = http("GET", self._url(server, "/api/command"))
         self.assertEqual(status, 405)
+        status, ctype, raw = http("POST", self._url(server, "/api/view"), b"{}")
+        self.assertEqual(status, 405)
+        self.assertEqual(json.loads(raw)["error"], "method_not_allowed")
+
+    def test_post_unknown_path_404(self):
+        # POST follows do_GET's routing: unknown API paths get a JSON 404,
+        # non-API paths a plain 404, never a blanket 405.
+        server, _ = self._start_app(FakeClient(make_unit_payloads()))
+        self.wait_for(lambda: self._view(server)["service"]["state"] == "ok")
+        status, ctype, raw = http("POST", self._url(server, "/api/nope"),
+                                  b"{}")
+        self.assertEqual(status, 404)
+        self.assertIn("application/json", ctype)
+        self.assertEqual(json.loads(raw)["error"], "not_found")
+        status, ctype, raw = http("POST", self._url(server, "/definitely/not"),
+                                  b"{}")
+        self.assertEqual(status, 404)
+        self.assertNotIn("application/json", ctype)
 
     def test_unknown_path_404(self):
         server, _ = self._start_app(FakeClient(make_unit_payloads()))

@@ -509,10 +509,20 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parts = urlsplit(self.path)
-        if parts.path != "/api/command":
+        if parts.path == "/api/command":
+            self._post_command()
+        elif parts.path in ("/", "/api/view", "/api/events"):
+            # Known paths with the wrong method: 405, mirroring how
+            # do_GET answers /api/command.
             self._json(405, {"error": "method_not_allowed",
                              "detail": "use GET for this path"})
-            return
+        elif parts.path.startswith("/api/"):
+            self._json(404, {"error": "not_found",
+                             "detail": "unknown API path"})
+        else:
+            self._send(404, b"not found", "text/plain; charset=utf-8")
+
+    def _post_command(self) -> None:
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
