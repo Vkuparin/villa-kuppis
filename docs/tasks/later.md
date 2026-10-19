@@ -6,7 +6,7 @@ Ideas the owner agreed to that have no release yet. Add a feature heading and th
 
 | ID | Task and Done when | Agent | Depends on | Status |
 | --- | --- | --- | --- | --- |
-| W1.1 | Let Kynsi coordinate and implement T2–T3, use Sol 6.1 Light for completed T2 batch reviews and Medium for T1, and allow Codex subscription agents from Hermes while preserving manual Claude coordination. Done when project, template and bridge checks pass. | Tier 1 | | In progress: codex:01a1517c-f9b4-7371-88e2-4aac2b793140, main, workflow and Codex-only Hermes handoff across three repositories |
+| W1.1 | Let Kynsi coordinate and implement T2–T3, use Sol 6.1 Light for completed T2 batch reviews and Medium for T1, and allow Codex subscription agents from Hermes while preserving manual Claude coordination. Done when project, template and bridge checks pass. | Tier 1 | | In progress: codex:01a1517c-f9b4-7371-88e2-4aac2b793140, main, workflow and bridge implemented (02df30a, local-workers 67753c9/008e2a5); template 82fc5c3 committed locally. Eighteen Node bridge checks, four installer checks, actual Codex parser and nineteen template checks passed. Real Kynsi-to-Codex subscription review completed; one wording repair is pending Hermes protected-instruction approvals in Telegram. Request workflow-codex-repair-20261019 owns four AGENTS/agents.md edits; template lease hermes:workflow-20261019. After approval, inspect template-workflow-recheck-20261019, integrate and push both document repairs, finish cards and release leases |
 
 ## L1. Beyond the first releases
 
