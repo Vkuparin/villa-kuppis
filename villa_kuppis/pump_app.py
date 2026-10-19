@@ -279,7 +279,7 @@ button.switch .track::after { content: ""; position: absolute; top: 3px; left: 3
                               box-shadow: 0 1px 3px rgba(0,0,0,.35); }
 button.switch[aria-checked="true"] .track { background: var(--accent); }
 button.switch[aria-checked="true"] .track::after { transform: translateX(22px); }
-.stepper { display: inline-flex; gap: .4rem; }
+.stepper { display: inline-flex; gap: .4rem; margin-left: auto; }
 .stepper button { min-width: 44px; font-size: 1.15rem; font-weight: 700; }
 .pending { margin-top: .8rem; padding: .55rem .75rem; border: 1px dashed var(--accent);
            border-radius: .5rem; background: var(--info-bg); color: var(--info); }
@@ -329,7 +329,20 @@ td.result-pending { color: var(--info); }
   .row .label { order: 1; }
   .row > *:not(.label) { order: 2; }
   th, td { padding: .4rem .45rem; font-size: .92rem; }
+  /* Event log: one card per event instead of a five-column table. */
+  table.ev, table.ev tbody, table.ev tr, table.ev td { display: block; width: 100%; }
+  table.ev thead { display: none; }
+  table.ev tr { border: 1px solid var(--line); border-radius: .6rem;
+                padding: .35rem .7rem; margin-bottom: .6rem; }
+  table.ev td { display: flex; justify-content: space-between; gap: 1rem;
+                border: 0; padding: .15rem 0; text-align: right; }
+  table.ev td::before { content: attr(data-label); color: var(--text3);
+                        text-align: left; flex: none; }
+  table.ev td#no-events { justify-content: flex-start; }
+  table.ev td#no-events::before { content: none; }
 }
+/* Control text sits on the right, next to the switches. */
+.set-row input, .set-row select, .card select { text-align: right; text-align-last: right; }
 </style>
 </head>
 <body data-demo="0">
@@ -378,7 +391,7 @@ ohjaavat vain esittelyyksiköitä.</div>
 <!--SETTINGS_SECTION-->
   <section class="events" aria-label="Tapahtumat">
     <h2>Tapahtumat</h2>
-    <table>
+    <table class="ev">
       <thead>
         <tr><th>Milloin</th><th>Yksikkö</th><th>Kuka</th><th>Muutos</th><th>Tulos</th></tr>
       </thead>
@@ -624,14 +637,14 @@ function renderEvents(events) {
   }
   $rows.innerHTML = events.map((ev) => (
     "<tr>" +
-    '<td title="' + esc(fmtClock(ev.ts)) + '">' + esc(fmtWhen(ev.ts)) + "</td>" +
-    "<td>" + esc(ev.unit_name) + "</td>" +
-    "<td>" + esc(ev.actor) + "</td>" +
-    "<td>" + esc(changeText(ev.action, ev.requested)) + "</td>" +
-    '<td class="result-' + esc(ev.result) + '">' +
+    '<td data-label="Milloin" title="' + esc(fmtClock(ev.ts)) + '">' + esc(fmtWhen(ev.ts)) + "</td>" +
+    '<td data-label="Yksikkö">' + esc(ev.unit_name) + "</td>" +
+    '<td data-label="Kuka">' + esc(ev.actor) + "</td>" +
+    '<td data-label="Muutos">' + esc(changeText(ev.action, ev.requested)) + "</td>" +
+    '<td data-label="Tulos" class="result-' + esc(ev.result) + '"><span>' +
     esc(RESULT_TEXT[ev.result] || ev.result) +
     (ev.detail ? '<span class="detail">' + esc(ev.detail) + "</span>" : "") +
-    "</td></tr>"
+    "</span></td></tr>"
   )).join("");
 }
 
