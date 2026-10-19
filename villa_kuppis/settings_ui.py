@@ -112,14 +112,18 @@ SCRIPT = r"""
       var ctl = controlFor(d, eff[d.key], id);
       var src = make("span", { className: "set-src",
         textContent: SRC[eff[d.key].source] });
-      var save = make("button", { type: "button", textContent: "Tallenna" });
-      save.addEventListener("click", function () {
+      // Saved when the control is released ("change"), not on every keystroke.
+      ctl.addEventListener("change", function () {
         var v = readControl(d, ctl);
-        if (v === null) { say("Anna arvo ennen tallennusta.", true); return; }
+        if (v === null) {
+          say("Anna arvo ennen tallennusta.", true);
+          render();
+          return;
+        }
+        if (v === eff[d.key].value) return;
         send({ scope: scope, key: d.key, value: v });
       });
       row.appendChild(label); row.appendChild(ctl); row.appendChild(src);
-      row.appendChild(save);
       if (Object.prototype.hasOwnProperty.call(own, d.key)) {
         var reset = make("button", { type: "button",
                                      textContent: "Palauta oletus" });
