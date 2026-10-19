@@ -18,6 +18,8 @@ Recovery repair at `d9ce704`: 22 focused pump tests passed on Windows Python 3.1
 
 The approved retry at `d9ce704` identified HTTP 500 on both control requests; a separate GET confirmed the original setpoint, giving exit code 1. The owner also reported that the official mobile app can report failure while applying a manual setpoint change. The next probe must verify the requested state after an ambiguous write error and avoid automatic PUT retries. The target change has not yet been verified by this probe.
 
+Read-back repair at `6087c3f`: 29 focused pump tests, offline demo/help, document parsing and whitespace checks passed. Sol 6.1 Medium implemented the changed command semantics. Installed-client HTTP tests confirm one attempt per control request, verify both states after simulated HTTP 500 responses, and retain failures when the target or restoration cannot be observed. Payloads, headers, endpoints and power state are unchanged.
+
 ## D. Spot prices and fixed thresholds
 
 No hardware needed. Fetch tomorrow's 15-minute FI spot prices from Elering (no key), store them, and compute plans from fixed thresholds per room and per site, for heating and cooling. Test against saved price fixtures with the network mocked.
