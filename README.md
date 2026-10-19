@@ -14,7 +14,7 @@ Open Codex or Claude Code from its app with this project's directory, or ask per
 node scripts/start-agent.mjs hermes
 ```
 
-All three read [AGENTS.md](AGENTS.md). Whichever one you start coordinates. All local agent work goes to Kynsi, with the same memory and conversation you use from Telegram and Desktop. It uses Hermes's selected local model while `local_runtime.enabled` is true. When the switch is off, Codex/Claude uses a suitable paid model without waking the local runtime. [Agent workflow](docs/agents.md) covers routing, Kynsi and resuming. To see where things stand:
+All three read [AGENTS.md](AGENTS.md). In the Kynsi-led workflow, persistent Kynsi coordinates and implements T2–T3; Sol 6.1 Light reviews completed T2 batches and Medium handles T1. Kynsi can call Codex CLI as needed using ChatGPT subscription limits, with no API billing or Claude invocation. Owner-assigned Claude coordination stays unchanged. The local runtime switch remains authoritative. [Agent workflow](docs/agents.md) covers routing and resuming. To see where things stand:
 
 ```powershell
 node scripts/coordinate.mjs status

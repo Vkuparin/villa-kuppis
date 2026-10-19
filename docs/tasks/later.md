@@ -2,6 +2,12 @@
 
 Ideas the owner agreed to that have no release yet. Add a feature heading and the standard card table when there is concrete work; keep IDs when a card moves to a release. Card rules are in [README.md](README.md).
 
+## W1. Agent workflow
+
+| ID | Task and Done when | Agent | Depends on | Status |
+| --- | --- | --- | --- | --- |
+| W1.1 | Let Kynsi coordinate and implement T2–T3, use Sol 6.1 Light for completed T2 batch reviews and Medium for T1, and allow Codex subscription agents from Hermes while preserving manual Claude coordination. Done when project, template and bridge checks pass. | Tier 1 | | In progress: codex:01a1517c-f9b4-7371-88e2-4aac2b793140, main, workflow and Codex-only Hermes handoff across three repositories |
+
 ## L1. Beyond the first releases
 
 | ID | Task and Done when | Agent | Depends on | Status |
