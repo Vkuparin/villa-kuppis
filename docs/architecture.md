@@ -51,7 +51,7 @@ Google runs the uploaded automations, so the cottage follows its plan with the P
 
 ## Stack
 
-- **PC:** Python 3.13, SQLite and a Finnish web app served by the standard-library HTTP server. Pumps use `aiomelcloudhome` 0.3.1; `tzdata` supplies Europe/Helsinki on Windows. The weather client uses the standard library. Unattended Windows startup, Tailscale identity and durable credential storage remain in F3.2.
+- **PC:** Python 3.13, SQLite and a Finnish web app served by the standard-library HTTP server. Pumps use `aiomelcloudhome` 0.3.1; `tzdata` supplies Europe/Helsinki on Windows. The weather client uses the standard library. The unattended runner reads Windows Credential Manager under the owner's account; a password-backed Windows boot task runs it without an interactive login. Tailscale Serve supplies the remote user's identity. Deployment and before-login startup require the F3.2 live checks.
 - **Android:** Kotlin with the Google Home APIs; the web app is shown in a WebView.
 - **Shared data:** spot prices from Elering's public API and the outdoor forecast from FMI open data. Neither needs a key; both were tested from a cloud session on 18 October 2026.
 
@@ -102,5 +102,9 @@ Each household member uses their own Google account; nothing new to remember:
 Google Family Link manages supervised child accounts but offers no sign-in for other apps. Supervised accounts may be limited in Google Home and Tailscale; check before relying on them.
 
 Keep MELCloud Home and Google credentials outside Git, in the Windows credential store. The service copies the SQLite database once a day to a backup folder the owner chooses.
+
+The Windows task runs with least privilege as the same account that enrolled the MELCloud credential. Task Scheduler receives the Windows account password through its own local prompt; Villa Kuppis does not collect it. S4U/no-password tasks and SYSTEM are not substitutes: their network or credential access differs. Tailscale runs unattended and Serve uses its background configuration. The installer refuses conflicting Serve/Funnel settings and existing unrelated tasks.
+
+The app accepts the configured HTTPS authority only with Tailscale identity headers and a matching Origin when supplied. Localhost requests use a fixed local actor and ignore proxy identity headers; request bodies cannot select an actor. Loopback processes on the PC are trusted. Tailnet access rules determine who can control the app. Backups use SQLite's online backup API and contain personal history; they exclude Credential Manager secrets. A completed Helsinki-date marker prevents repeating a successful day's backup across restarts. Backups are individually consistent databases, not a transaction spanning multiple files.
 
 No AI model is in the command path. Plans are deterministic code.

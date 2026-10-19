@@ -26,6 +26,12 @@ Codex, Hermes and Claude Code (through `CLAUDE.md`) all read this file. This is 
 | Pump probe tests (mocked network and devices) | .venv\Scripts\python -m unittest discover -s tests -p "test_pump*.py" -v |
 | FMI weather tests (synthetic responses and local HTTP fixtures) | .venv\Scripts\python -m unittest discover -s tests -p "test_weather.py" -v |
 | Pump app tests (mock devices and localhost HTTP) | .venv\Scripts\python -m unittest discover -s tests -p "test_pump_app.py" -v |
+| Startup, credential and backup tests (mock Windows/network boundaries; temporary data) | .venv\Scripts\python -m unittest discover -s tests -p "test_windows_runtime.py" -v; .venv\Scripts\python -m unittest discover -s tests -p "test_backup.py" -v |
+| Plan unattended setup (no changes) | .venv\Scripts\python scripts/setup-pump-service.py plan --backup-dir BACKUP_DIR |
+| Configure unattended app (local credential enrollment and Windows task password; owner present) | .venv\Scripts\python scripts/setup-pump-service.py apply --backup-dir BACKUP_DIR |
+| Inspect unattended app (no credential values) | .venv\Scripts\python scripts/setup-pump-service.py inspect |
+| Run configured service (live requires owner go-ahead; demo uses explicit temporary paths) | .venv\Scripts\python -m villa_kuppis.runtime --config CONFIG_FILE [--demo] |
+| Inspect Tailscale connection and publication | tailscale status --json; tailscale serve status --json |
 | Supervised pump web app (fresh temporary data; local login dialog with Show password) | .venv\Scripts\python scripts/start-pump-app.py --demo; .venv\Scripts\python scripts/start-pump-app.py --live (owner approval) |
 | Live pump probe (owner approval; local interactive terminal) | .venv\Scripts\python -m villa_kuppis.pump_probe --live read; .venv\Scripts\python -m villa_kuppis.pump_probe --live test-setpoint |
 | Live pump power test (owner approval; starts off, on for 30 seconds after read-back, then off) | .venv\Scripts\python -m villa_kuppis.pump_probe --live test-power |

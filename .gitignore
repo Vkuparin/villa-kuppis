@@ -31,3 +31,4 @@ secrets.yaml
 secrets.*.yaml
 config/local/
 backups/
+/db/

@@ -10,7 +10,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from villa_kuppis.pump_app import PumpAppServer, make_demo_service
 from villa_kuppis.pump_service import make_live_service
 
-def gui_getpass():
+def gui_getpass(*, title="Villa Kuppis - MELCloud Home login",
+                notice="Credentials stay in memory and are not saved.",
+                accept_label="Sign in"):
     """Collect once in a local dialog; return fields only to the probe."""
     credentials = None
     position = 0
@@ -22,7 +24,7 @@ def gui_getpass():
             from tkinter import ttk
 
             dialog = tk.Tk()
-            dialog.title("Villa Kuppis - MELCloud Home login")
+            dialog.title(title)
             dialog.resizable(False, False)
             dialog.attributes("-topmost", True)
             panel = ttk.Frame(dialog, padding=20)
@@ -40,7 +42,7 @@ def gui_getpass():
             password_entry.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(3, 6))
             ttk.Checkbutton(panel, text="Show password", variable=visible,
                             command=lambda: password_entry.configure(show="" if visible.get() else "*")).grid(row=4, column=0, columnspan=2, sticky="w")
-            ttk.Label(panel, text="Credentials stay in memory and are not saved.").grid(row=5, column=0, columnspan=2, sticky="w", pady=(12, 14))
+            ttk.Label(panel, text=notice, wraplength=420).grid(row=5, column=0, columnspan=2, sticky="w", pady=(12, 14))
 
             def accept(_event=None):
                 if not email.get().strip():
@@ -53,7 +55,7 @@ def gui_getpass():
                 dialog.destroy()
 
             ttk.Button(panel, text="Cancel", command=dialog.destroy).grid(row=6, column=0, sticky="w")
-            ttk.Button(panel, text="Sign in", command=accept).grid(row=6, column=1, sticky="e")
+            ttk.Button(panel, text=accept_label, command=accept).grid(row=6, column=1, sticky="e")
             dialog.bind("<Return>", accept)
             dialog.bind("<Escape>", lambda _event: dialog.destroy())
             dialog.update_idletasks()

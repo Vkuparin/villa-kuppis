@@ -50,6 +50,27 @@ Owner-approved live acceptance passed on 19 October 2026 at `4bfc692`. All three
 
 Offline review on 19 October 2026: Codex reviewed the inherited service and unfinished history/weather batch. Fixes cover transactional and locked history access, command read-back recording, failed weather backfill retries, shutdown during a weather request, UTC/hour-aligned FMI queries, missing measurements, browser-origin/Host checks, and stale chart responses. The local credential launcher has mocked cancellation and cleanup checks. A synthetic year with roughly 140,000 pump readings plus hourly outdoor and quarter-hour prices returned 1,000 points per series (148 KB) in 0.13 seconds on the owner's PC and rendered in the browser. This is offline evidence, not a live-device pass. The app's stop command does not reverse accepted device commands.
 
+## C3. Windows startup and Tailscale phone access (F3.2 check)
+
+The unattended app stores data under the owner's local Windows profile. Its configuration and task XML contain paths and the private Tailscale origin, but no passwords. Keep them outside Git. The backup folder is selected during setup; repository-local `db/` is ignored. A backup on the same disk does not protect against losing that disk.
+
+Preparation and installation:
+
+1. Run `.venv\Scripts\python scripts/setup-pump-service.py plan --backup-dir BACKUP_DIR`. This reads Tailscale/task status only. Review the proposed paths, HTTPS origin and Windows account task. Ensure no temporary app still owns port 8377.
+2. With the owner present, run the same command with `apply`. The owner enters MELCloud credentials in the local dialog and chooses **Save and enable service**. That action enrolls the credential for this Windows account and authorizes the live service connection. Cancellation installs nothing. No device command is submitted during setup.
+3. Complete any Tailscale HTTPS consent on the vendor's page. Approve Windows elevation for task registration, then enter the Windows account password in the native `schtasks` prompt. The Windows Hello PIN cannot replace that password. The app task itself runs unelevated, with Password logon and a boot trigger. Do not enable Windows autologin.
+4. Run `.venv\Scripts\python scripts/setup-pump-service.py inspect`; check the app's private HTTPS origin and localhost page. The service log is rotated in its data directory. Check for a dated backup directory and completed SQLite snapshots. No credentials should appear in config, task arguments or logs.
+
+Phone and boot acceptance (owner present):
+
+1. The phone needs Tailscale signed in to the same network and a normal browser. No APK installation is needed for this web-app check. Turn Wi-Fi off, keep Tailscale connected, and open the private HTTPS origin printed by setup.
+2. Confirm fresh units and the signed-in user's identity. For an explicitly approved device check, record one unit's baseline, change its target by at most 1 °C, then restore it. Verify both confirmed events contain the Tailscale identity and match MELCloud Home. Leave mode, power, fan and other units unchanged. Do not retry an ambiguous write without inspection.
+3. When convenient for the owner, reboot the PC. Before signing in to Windows, use the phone on mobile data to confirm the app resumes and gets fresh pump readings. Check task state and logs after login. Do not claim before-login startup from a manual task launch alone.
+
+The background Serve configuration persists separately from Tailscale's unattended setting. The setup uses Serve for private access and never enables Funnel. [Tailscale documents identity headers and the localhost trust boundary](https://tailscale.com/docs/features/tailscale-serve), and [unattended mode](https://tailscale.com/docs/how-to/run-unattended). [Windows documents the credential's account scope](https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credreadw) and [password prompting in schtasks](https://learn.microsoft.com/en-us/windows/win32/taskschd/schtasks). Windows task termination or power loss may skip Python cleanup; SQLite transactions and orphan-command handling cover restart recovery.
+
+Current acceptance: pending installation, phone and before-login boot checks. Offline results and the deployed commit will be recorded here.
+
 ## D. Spot prices and fixed thresholds
 
 No hardware needed. Fetch tomorrow's 15-minute FI spot prices from Elering (no key), store them, and compute plans from fixed thresholds per room and per site, for heating and cooling. Test against saved price fixtures with the network mocked.

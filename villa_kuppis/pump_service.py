@@ -16,8 +16,8 @@ The async MELCloud Home client runs in a background thread with its own
 event loop; the synchronous API (view, request, events) is safe to call
 from HTTP server threads. Live mode reads MELCloud Home credentials from
 the environment (VILLA_KUPPIS_MELCLOUD_USERNAME /
-VILLA_KUPPIS_MELCLOUD_PASSWORD) for development; F3.2 will move them to
-the Windows credential store. Demo mode runs the same code against the
+VILLA_KUPPIS_MELCLOUD_PASSWORD) for development; the unattended runner
+supplies them from Windows Credential Manager. Demo mode runs the same code against the
 in-memory FakeClient, fully offline.
 """
 
@@ -1064,20 +1064,23 @@ class PumpService:
 
 # --- client factories -------------------------------------------------------------
 
-def make_live_service(data_dir, *, poll_interval=DEFAULT_POLL_INTERVAL,
+def make_live_service(data_dir, *, credentials=None, weather_sites=None,
+                      poll_interval=DEFAULT_POLL_INTERVAL,
                       stale_after=DEFAULT_STALE_AFTER,
                       readback_polls=DEFAULT_READBACK_POLLS,
                       readback_delay=DEFAULT_READBACK_DELAY,
                       command_timeout=DEFAULT_COMMAND_TIMEOUT) -> PumpService:
-    """Live service from environment credentials (development mode).
+    """Live service with explicit credentials, or development environment values.
 
-    F3.2 will replace the environment credentials with the Windows
-    credential store. The credential values are never printed or logged.
+    The unattended runner supplies credentials from Windows Credential Manager.
+    Values are never printed or logged.
     """
     import os
 
-    username = os.environ.get("VILLA_KUPPIS_MELCLOUD_USERNAME")
-    password = os.environ.get("VILLA_KUPPIS_MELCLOUD_PASSWORD")
+    username = (credentials.username if credentials is not None else
+                os.environ.get("VILLA_KUPPIS_MELCLOUD_USERNAME"))
+    password = (credentials.password if credentials is not None else
+                os.environ.get("VILLA_KUPPIS_MELCLOUD_PASSWORD"))
     if not username or not password:
         raise RuntimeError(
             "live mode requires the VILLA_KUPPIS_MELCLOUD_USERNAME and "
@@ -1101,5 +1104,6 @@ def make_live_service(data_dir, *, poll_interval=DEFAULT_POLL_INTERVAL,
         poll_interval=poll_interval, stale_after=stale_after,
         readback_polls=readback_polls, readback_delay=readback_delay,
         command_timeout=command_timeout,
-        weather_sites=weather.weather_sites_from_env(os.environ),
+        weather_sites=(weather.weather_sites_from_env(os.environ)
+                       if weather_sites is None else weather_sites),
     )
