@@ -1,6 +1,6 @@
 # Villa Kuppis design documents
 
-Status: tentative, 18 October 2026, revision 5. Design only; no device, account or network has been changed.
+The initial design is complete. Implementation began on 19 October 2026 with the spot-price experiment. Device and account integrations have not been tested.
 
 | Document | Purpose |
 | --- | --- |

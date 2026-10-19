@@ -2,7 +2,7 @@
 
 A personal Finnish-language home automation app that brings the home and cottage devices into one app.
 
-**Status: research and design scaffold. No working app or device integration yet.** The UI will be Finnish. Start with the [design documents](docs/README.md), the [cottage plan](docs/cottage.md) and [spot-price automation](docs/spot-price.md).
+**Status: implementation started. The first experiment covers spot prices and temperature plans; device integrations and the UI are still pending.** The UI will be Finnish. Start with the [design documents](docs/README.md), the [cottage plan](docs/cottage.md) and [spot-price automation](docs/spot-price.md).
 
 Repository: [Vkuparin/villa-kuppis](https://github.com/Vkuparin/villa-kuppis). The project is based on the owner's template and contains no private template history. See the [setup record](docs/setup.md) for verification and environment limitations.
 
