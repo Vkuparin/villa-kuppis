@@ -69,7 +69,7 @@ Phone and boot acceptance (owner present):
 
 The background Serve configuration persists separately from Tailscale's unattended setting. The setup uses Serve for private access and never enables Funnel. [Tailscale documents identity headers and the localhost trust boundary](https://tailscale.com/docs/features/tailscale-serve), and [unattended mode](https://tailscale.com/docs/how-to/run-unattended). [Windows documents the credential's account scope](https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credreadw) and [password prompting in schtasks](https://learn.microsoft.com/en-us/windows/win32/taskschd/schtasks). Windows task termination or power loss may skip Python cleanup; SQLite transactions and orphan-command handling cover restart recovery.
 
-Current acceptance: pending installation, phone and before-login boot checks. Offline results and the deployed commit will be recorded here.
+Current acceptance: pending installation, phone and before-login boot checks. Offline checkpoint on 20 October 2026: 53 app, 17 backup and 17 Windows runtime tests passed. A temporary-data runtime demo confirmed local and synthetic Tailscale identities, trusted command attribution, and a SQLite backup passing integrity_check. No live pump command or installation was performed. The owner requested a stop before setup; resume with the steps above.
 
 ## D. Spot prices and fixed thresholds
 

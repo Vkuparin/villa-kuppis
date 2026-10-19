@@ -7,11 +7,24 @@ fully offline) plus a small JSON API on top of PumpService:
 * GET  /api/view      unit states, pending slots and service status
 * GET  /api/events    the event log (newest first)
 * GET  /api/history   downsampled time series (card F3.3)
-* POST /api/command   {"unit", "action", "value", "user"} -> the service
+* GET  /api/identity  the trusted actor of this connection (card F3.2)
+* POST /api/command   {"unit", "action", "value"} -> the service
 
 The page shows the cloud-reported state and the requested change
 separately until the device confirms it (docs/ui-fi.md). Format is
 fi-FI: decimal comma, Celsius, 24-hour clock, Europe/Helsinki times.
+
+Identity (card F3.2): the server always binds loopback only. Loopback
+hosts (127.0.0.1:port, localhost:port) are the local machine in every
+mode: same-origin HTTP and the local actor, Tailscale identity headers
+ignored. With a configured public origin -- the HTTPS ts.net origin of
+Tailscale Serve -- the exact public Host is additionally required for
+non-loopback requests, plus exactly one trusted Tailscale-User-Login
+header on every route (identity-less requests are refused), and an
+Origin header, when present, must match the configured origin exactly
+(duplicate Origins are refused). The optional Tailscale-User-Name
+header (RFC 2047) supplies the display name. The browser body never
+chooses the actor.
 
 Offline-first: importing this module and ``--help`` never touch the
 network. Demo mode runs the whole app against the in-memory FakeClient;
@@ -23,15 +36,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
+from email.header import decode_header
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
 from urllib.parse import parse_qs, urlsplit
 
 from .pump_probe import FakeClient, _unit_payload
-from .pump_service import PumpService, make_live_service
+from .pump_service import MAX_ACTOR_LENGTH, PumpService, make_live_service
 
 DEFAULT_HOST = "127.0.0.1"
+# The actor used for every request that arrives without a trusted remote
+# identity (i.e. directly on the loopback interface).
+DEFAULT_LOCAL_ACTOR = "Paikallinen käyttäjä"
 DEFAULT_PORT = 8377
 MAX_BODY_BYTES = 64 * 1024
 
@@ -58,6 +76,82 @@ def make_demo_service(data_dir, *, poll_interval: float = 5.0,
     )
 
 
+# --- trusted identity (card F3.2) -------------------------------------------------
+
+TAILNET_SUFFIX = ".ts.net"
+_HOSTNAME_LABEL = re.compile(r"[a-z0-9-]+\Z")
+
+
+def _is_dns_hostname(name: str) -> bool:
+    """True for an ASCII DNS hostname (already lower-cased)."""
+    labels = name.split(".")
+    if not (2 <= len(labels) <= 128) or len(name) > 253:
+        return False
+    for label in labels:
+        if not label or len(label) > 63 or label[0] == "-" or label[-1] == "-":
+            return False
+        if not _HOSTNAME_LABEL.match(label):
+            return False
+    return True
+
+
+def _validate_public_origin(origin: str) -> tuple[str, str]:
+    """Validate the configured public origin.
+
+    Returns ``(origin, authority)`` where origin is the normalized
+    ``https://host[:port]`` URL to require in the Origin header and
+    authority is the exact ``host[:port]`` to require in the Host header.
+    Only HTTPS ts.net tailnet hostnames are accepted: no userinfo, no
+    path/query/fragment, no wildcard or suffix trust.
+    """
+    if not isinstance(origin, str) or not origin.strip():
+        raise ValueError("the public origin must be a non-empty HTTPS URL")
+    try:
+        parts = urlsplit(origin.strip())
+    except ValueError as err:
+        raise ValueError(f"the public origin is not a valid URL: {err}") from err
+    if parts.scheme.lower() != "https":
+        raise ValueError("the public origin must use HTTPS")
+    if parts.username is not None or parts.password is not None:
+        raise ValueError("the public origin must not contain credentials")
+    if parts.path not in ("", "/") or parts.query or parts.fragment:
+        raise ValueError("the public origin must not contain a path, "
+                         "query or fragment")
+    host = parts.hostname
+    if not host:
+        raise ValueError("the public origin has no hostname")
+    host = host.lower()
+    if not _is_dns_hostname(host):
+        raise ValueError("the public origin hostname is not a valid DNS name")
+    if not host.endswith(TAILNET_SUFFIX):
+        raise ValueError("the public origin must be a ts.net tailnet hostname")
+    if parts.port is not None:
+        return f"https://{host}:{parts.port}", f"{host}:{parts.port}"
+    return f"https://{host}", host
+
+
+def _decode_rfc2047(value: str) -> str:
+    """Decode an optional RFC 2047 encoded-word header value."""
+    try:
+        parts = decode_header(value)
+    except Exception:
+        return value
+    out = []
+    for chunk, charset in parts:
+        if isinstance(chunk, bytes):
+            try:
+                out.append(chunk.decode(charset or "utf-8", errors="replace"))
+            except LookupError:
+                out.append(chunk.decode("utf-8", errors="replace"))
+        else:
+            out.append(chunk)
+    return "".join(out)
+
+
+def _has_control_chars(text: str) -> bool:
+    return any(ord(c) < 0x20 or ord(c) == 0x7F for c in text)
+
+
 # --- the page ---------------------------------------------------------------
 
 _PAGE = """<!doctype html>
@@ -81,6 +175,10 @@ h1 { font-size: 1.35rem; margin: 0; }
 .badge.warn { color: #8a5b00; border-color: #8a5b00; background: #fdf3dd; }
 .badge.err  { color: #a11d1d; border-color: #a11d1d; background: #fdecec; }
 .badge.info { color: #0b3f9e; border-color: #0b3f9e; background: #eef4ff; }
+#identity { max-width: 240px; overflow: hidden; text-overflow: ellipsis;
+           white-space: nowrap; font-size: .85rem; color: #44505c;
+           background: #eef1f4; border: 1px solid #d7dde3;
+           border-radius: .5rem; padding: .18rem .6rem; }
 #last-updated { font-size: .85rem; color: #55606b; }
 #demo-banner { display: none; padding: .6rem 1.25rem; background: #fdf3dd;
                border-bottom: 1px solid #e8d9a8; color: #6b4d00; }
@@ -156,6 +254,7 @@ td.result-pending { color: #0b3f9e; }
 <body data-demo="0">
 <header class="top">
   <h1>Pumput</h1>
+  <span id="identity" class="identity" title="Kirjautunut käyttäjä"></span>
   <span id="service-status" role="status"><span class="badge info">Yhteyttä muodostetaan…</span></span>
   <span id="last-updated"></span>
 </header>
@@ -660,6 +759,23 @@ async function refresh() {
   }
 }
 
+async function loadIdentity() {
+  try {
+    const id = await fetch("/api/identity").then((r) => {
+      if (!r.ok) throw new Error("http " + r.status);
+      return r.json();
+    });
+    const el = document.getElementById("identity");
+    if (!el) return;
+    const label = (id.display_name && id.display_name !== id.actor)
+      ? id.display_name : id.actor;
+    el.textContent = label || "";
+    el.title = id.actor || "";
+  } catch (err) {
+    /* The identity chip stays empty if the request fails. */
+  }
+}
+
 let sending = false;
 async function sendCommand(unitId, action, value) {
   if (sending) return;
@@ -668,8 +784,7 @@ async function sendCommand(unitId, action, value) {
     const res = await fetch("/api/command", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ unit: unitId, action: action, value: value,
-                             user: "" })
+      body: JSON.stringify({ unit: unitId, action: action, value: value })
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -730,8 +845,10 @@ window.addEventListener("resize", () => {
   histResizeTimer = setTimeout(loadHistory, 200);
 });
 refresh();
+loadIdentity();
 setInterval(refresh, POLL_MS);
 setInterval(loadHistory, 60000);
+setInterval(loadIdentity, 60000);
 </script>
 </body>
 </html>
@@ -772,21 +889,122 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             "application/json; charset=utf-8",
         )
 
-    def _local_request(self) -> bool:
-        host = self.headers.get("Host", "")
-        allowed = {f"127.0.0.1:{self.app.server_port}",
-                   f"localhost:{self.app.server_port}"}
-        if host.lower() not in allowed:
-            self._json(403, {"error": "forbidden", "detail": "local host required"})
-            return False
-        origin = self.headers.get("Origin")
-        if origin is not None and origin.lower() != "http://" + host.lower():
-            self._json(403, {"error": "forbidden", "detail": "same origin required"})
-            return False
-        return True
+    def _identity(self) -> dict | None:
+        """Resolve the trusted identity of this connection.
+
+        Returns ``{"actor", "display_name", "source", "login"}`` or None
+        after an error response has already been sent.
+
+        Without a configured public origin the only accepted host is the
+        loopback, acting as the local actor; Tailscale identity headers
+        are ignored. With a configured public origin the loopback hosts
+        keep working as the local actor (the deployed runtime
+        administers the app from the local PC while phones come through
+        Serve), and non-loopback requests must carry the exact public
+        authority, exactly one non-empty Tailscale-User-Login header on
+        every route (identity-less requests are refused), and an Origin
+        header, when present, that matches the configured origin
+        exactly. Duplicate Host/Origin/identity headers are refused.
+        Forwarded/X-Forwarded-* headers are never consulted for
+        identity; Serve itself strips client-supplied identity headers
+        before proxying to this loopback server.
+        """
+        port = self.app.server_port
+        host_values = self.headers.get_all("Host")
+        if not host_values or len(host_values) != 1:
+            self._json(403, {"error": "forbidden",
+                             "detail": "exactly one Host header is required"})
+            return None
+        host = host_values[0].strip().lower()
+        if host in (f"127.0.0.1:{port}", f"localhost:{port}"):
+            # Loopback is the local machine, trusted in every mode:
+            # same-origin HTTP, Tailscale identity headers ignored.
+            origins = self.headers.get_all("Origin")
+            if origins is not None:
+                if len(origins) != 1:
+                    self._json(403, {"error": "forbidden",
+                                     "detail": "duplicate Origin header"})
+                    return None
+                if origins[0].strip().lower() != "http://" + host:
+                    self._json(403, {"error": "forbidden",
+                                     "detail": "same origin required"})
+                    return None
+            return {"actor": self.app.local_actor, "display_name": None,
+                    "source": "local", "login": None}
+        if self.app.public_origin is None:
+            self._json(403, {"error": "forbidden",
+                             "detail": "local host required"})
+            return None
+        if host != self.app.public_authority:
+            self._json(403, {"error": "forbidden",
+                             "detail": "the host does not match the "
+                                       "configured public origin"})
+            return None
+        origins = self.headers.get_all("Origin")
+        if origins is not None:
+            if len(origins) != 1:
+                self._json(403, {"error": "forbidden",
+                                 "detail": "duplicate Origin header"})
+                return None
+            if origins[0].strip().lower() != self.app.public_origin:
+                self._json(403, {"error": "forbidden",
+                                 "detail": "the origin does not match the "
+                                           "configured public origin"})
+                return None
+        logins = self.headers.get_all("Tailscale-User-Login")
+        if not logins:
+            self._json(403, {"error": "forbidden",
+                             "detail": "the Tailscale user login header "
+                                       "is missing"})
+            return None
+        if len(logins) != 1:
+            self._json(403, {"error": "forbidden",
+                             "detail": "duplicate Tailscale user login "
+                                       "header"})
+            return None
+        login = logins[0].strip()
+        if not login:
+            self._json(403, {"error": "forbidden",
+                             "detail": "the Tailscale user login header "
+                                       "is empty"})
+            return None
+        if _has_control_chars(login):
+            self._json(403, {"error": "forbidden",
+                             "detail": "the Tailscale user login header "
+                                       "contains invalid characters"})
+            return None
+        if len(login) > MAX_ACTOR_LENGTH:
+            self._json(403, {"error": "forbidden",
+                             "detail": "the Tailscale user login header "
+                                       f"is longer than {MAX_ACTOR_LENGTH} "
+                                       "characters"})
+            return None
+        display = None
+        names = self.headers.get_all("Tailscale-User-Name")
+        if names:
+            if len(names) != 1:
+                self._json(403, {"error": "forbidden",
+                                 "detail": "duplicate Tailscale user name "
+                                           "header"})
+                return None
+            display = "".join(c for c in _decode_rfc2047(names[0]).strip()
+                              if ord(c) >= 0x20 and ord(c) != 0x7F)
+            if not display:
+                display = None
+        # The login is the stable identity; the display name is mutable
+        # and not unique. Show the human-readable combined form while it
+        # fits the event log column, otherwise the login alone.
+        if display:
+            combined = f"{display} ({login})"
+            actor = combined if len(combined) <= MAX_ACTOR_LENGTH else login
+        else:
+            actor = login
+        return {"actor": actor, "display_name": display,
+                "source": "tailscale", "login": login}
 
     def do_GET(self) -> None:
-        if not self._local_request():
+        identity = self._identity()
+        if identity is None:
             return
         parts = urlsplit(self.path)
         if parts.path == "/":
@@ -818,6 +1036,10 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
                 self._json(400, {"error": "bad_query", "detail": str(err)})
                 return
             self._json(200, payload)
+        elif parts.path == "/api/identity":
+            self._json(200, {"actor": identity["actor"],
+                             "display_name": identity["display_name"],
+                             "source": identity["source"]})
         elif parts.path == "/api/command":
             self._json(405, {"error": "method_not_allowed",
                              "detail": "use POST for this path"})
@@ -828,12 +1050,14 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             self._send(404, b"not found", "text/plain; charset=utf-8")
 
     def do_POST(self) -> None:
-        if not self._local_request():
+        identity = self._identity()
+        if identity is None:
             return
         parts = urlsplit(self.path)
         if parts.path == "/api/command":
-            self._post_command()
-        elif parts.path in ("/", "/api/view", "/api/events", "/api/history"):
+            self._post_command(identity)
+        elif parts.path in ("/", "/api/view", "/api/events", "/api/history",
+                            "/api/identity"):
             # Known paths with the wrong method: 405, mirroring how
             # do_GET answers /api/command.
             self._json(405, {"error": "method_not_allowed",
@@ -844,7 +1068,7 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
         else:
             self._send(404, b"not found", "text/plain; charset=utf-8")
 
-    def _post_command(self) -> None:
+    def _post_command(self, identity) -> None:
         if self.headers.get_content_type() != "application/json":
             self._json(415, {"error": "bad_body", "detail": "JSON body required"})
             return
@@ -869,16 +1093,15 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
         unit = body.get("unit")
         action = body.get("action")
         value = body.get("value")
-        user = body.get("user")
         if not isinstance(unit, str) or not isinstance(action, str):
             self._json(400, {"error": "bad_body",
                              "detail": "unit and action must be strings"})
             return
-        if isinstance(user, str):
-            user = user.strip()[:80] or None
-        elif user is not None:
-            user = None
-        status, payload = self.app.service.request(unit, action, value, user)
+        # The actor is always the trusted identity of the connection
+        # (the local actor or the Tailscale login); the body's user
+        # field, if any, is ignored on purpose.
+        status, payload = self.app.service.request(
+            unit, action, value, identity["actor"])
         self._json(status, payload)
 
 
@@ -888,11 +1111,24 @@ class PumpAppServer(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(self, service: PumpService, host: str = DEFAULT_HOST,
-                 port: int = 0, demo: bool = False):
+                 port: int = 0, demo: bool = False,
+                 public_origin: str | None = None,
+                 local_actor: str = DEFAULT_LOCAL_ACTOR):
         if host not in ("127.0.0.1", "localhost"):
             raise ValueError("the pump app must listen on localhost")
+        if public_origin is not None:
+            origin, authority = _validate_public_origin(public_origin)
+        else:
+            origin, authority = None, None
+        actor = str(local_actor).strip()
+        if not actor or len(actor) > MAX_ACTOR_LENGTH:
+            raise ValueError("the local actor must be a non-empty string "
+                             f"of at most {MAX_ACTOR_LENGTH} characters")
         self.service = service
         self.demo = demo
+        self.public_origin = origin
+        self.public_authority = authority
+        self.local_actor = actor
         self.page_html = render_page(demo)
         super().__init__((host, port), _PumpAppHandler)
 
@@ -918,6 +1154,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help=f"bind address (default: {DEFAULT_HOST})")
     p.add_argument("--port", type=int, default=DEFAULT_PORT,
                    help=f"port (default: {DEFAULT_PORT}; 0 = pick one)")
+    p.add_argument("--public-origin", default=None,
+                   help="the HTTPS ts.net origin of Tailscale Serve; "
+                        "enables trusted remote access and Tailscale user "
+                        "identity, e.g. https://pump.tail1234.ts.net "
+                        "(default: local access only)")
     mode = p.add_mutually_exclusive_group(required=True)
     mode.add_argument("--live", action="store_true",
                       help="real MELCloud Home (credentials from the "
@@ -946,11 +1187,15 @@ def _cmd_serve(args, print_fn=print) -> int:
     server = None
     try:
         server = PumpAppServer(service, host=args.host, port=args.port,
-                               demo=args.demo)
+                               demo=args.demo,
+                               public_origin=args.public_origin)
         service.start()
         print_fn(f"Pumppusovellus käynnissä: {server.url}{mode} "
                  "(Ctrl+C pysäyttää)")
         server.serve_forever(poll_interval=0.5)
+    except ValueError as err:
+        print_fn(f"error: {err}", file=sys.stderr)
+        return 1
     except KeyboardInterrupt:
         print_fn("Pysäytetty.")
     finally:

@@ -2,13 +2,27 @@
 
 Coordinator detail for [AGENTS.md](../AGENTS.md). Keep work resumable and review completed batches.
 
+## Default Codex routing
+
+| Tier | Task shape | Who does it |
+| --- | --- | --- |
+| Automation | Search, formatting, generated files and running checks | Scripts and tools |
+| Tier 3 | Clear behavior, known files and a focused check | Sol 6.1 Light implements and checks; Codex reviews and integrates |
+| Tier 2 | Bounded work under a settled interface | Codex coordinator |
+| Tier 1 | Architecture, shared interfaces, ambiguous behavior and difficult diagnosis | Codex coordinator |
+| Owner | A real product choice or live acceptance | The owner |
+
+The Codex coordinator owns Tier 1 and Tier 2 design, diagnosis, implementation, review and integration. Delegate only clear, bounded Tier 3 work to Sol 6.1 Light (`gpt-6.1-sol`, `low`). Split work by judgment required, not file count. New API behavior, authentication and device recovery that need investigation belong in Tier 1. Kynsi requires explicit owner opt-in for Codex work; never use it automatically or as a fallback.
+
+Keep paid workers sequential unless the owner requests parallel work. Give each worker the root, goal, owned files, constraints and focused checks. Workers must not take the lease, edit cards, commit, push or delegate. Review their changes and checks before integration. Use ChatGPT-authenticated Codex and subscription usage limits, never API credits. If authentication, usage limits or a model fail, report the blocker and keep completed work resumable. Hermes must never invoke Claude.
+
 ## Starting and resuming
 
-Start persistent Kynsi with `node scripts/start-agent.mjs hermes`; an optional project root and selected local model ID follow. This uses its existing conversation, memory, skills and Telegram replies. Kynsi owns the lease, cards, checks and integration while coordinating. A paid Codex session does not need to stay open to supervise it.
+The owner starting a harness in the project directory authorizes taking over a stale lease. Run `node scripts/coordinate.mjs status`, inspect uncommitted work and the current card, then take the lease. Never overwrite another agent's work.
 
-You can still open Codex or assign Claude Code as coordinator in the project directory. The owner starting a harness authorizes taking over a stale lease. Run `node scripts/coordinate.mjs status`, inspect uncommitted work and the current card, then take the lease. Never overwrite another agent's work.
+## Owner opt-in: Kynsi-led coordination
 
-## Kynsi-led routing
+When the owner explicitly assigns Kynsi as coordinator, start persistent Kynsi with `node scripts/start-agent.mjs hermes`; an optional project root and selected local model ID follow. This uses its existing conversation, memory, skills and Telegram replies. Kynsi owns the lease, cards, checks and integration while coordinating. A paid Codex session does not need to stay open to supervise it. The following Kynsi-led routing and review rules apply only to this explicit assignment.
 
 | Tier | Task shape | Who does it |
 | --- | --- | --- |
@@ -24,7 +38,7 @@ Kynsi may call paid Codex agents as needed while coordinating an approved projec
 
 Work sequentially unless the owner requests parallel paid work. Give a Codex agent the root, goal, owned files, constraints and focused checks. It is a worker: it must not take the lease, edit cards, commit, push or delegate back to Hermes. Review requests are read-only. Kynsi integrates the reviewed result and publishes under the project's rules.
 
-## Completed Tier 2 batches (Kynsi-led coordination)
+### Completed Tier 2 batches
 
 A batch is one coherent change under a settled interface. Finish implementation and focused checks, then send the diff, check results and acceptance conditions to Light once. Do not pay for a reviewer to watch local progress or poll an idle agent.
 
@@ -38,7 +52,7 @@ Claude's existing workflow stays unchanged. When the owner assigns it as coordin
 
 “Kynsi,” “Hermes,” “local agent” and “local workers” mean the same persistent agent. Never spawn stateless local workers, separate Hermes profiles or local subagents, or substitute direct model inference. Codex agents use the separate paid CLI handoff; Hermes's own inference remains on its selected local model.
 
-Codex and Claude delegate local work through the `hermes` MCP:
+For owner-approved Kynsi work, Codex uses the `hermes` MCP. Claude uses it under its unchanged owner-assigned workflow:
 
 1. Read `agent_connection` to inspect the runtime switch, selected model and gateway without inference. An offline gateway is recoverable through a real assignment while enabled; never restart an active gateway.
 2. Submit `agent_request` with a stable request ID, root, goal, owned files, acceptance conditions, development settings and named checks. Set `local_only: true` for local-only work. A worker returns changes and check evidence without commits or card edits; a coordinator assignment explicitly grants the coordinator role.
@@ -47,7 +61,7 @@ Codex and Claude delegate local work through the `hermes` MCP:
 
 Respect `local_runtime.enabled` on submission, queue dispatch and every local inference call. False or missing means no local work, even if a model server is running. Never enable the switch, download a model or force a server restart. While enabled, a real task may start the existing stopped gateway and wake the selected downloaded model; metadata checks do neither. Changed model selection stops an admitted task. Normal coding turns have a 100-iteration runtime budget, distinct from small acceptance-test instructions.
 
-When local work is disabled, leave it off. The calling Codex/Claude harness may use its lowest-cost capable paid model within scope, or its current coordinator when model selection is unavailable. If Kynsi was working, review partial files and checks before paid continuation; `fallback.requires_review` records this case. Explicit local-only work waits. Existing Codex jobs do not enable the local runtime.
+When local work is disabled, leave it off. Codex follows its default tier routing; Claude follows its unchanged owner-assigned workflow. The current coordinator can continue when model selection is unavailable. If Kynsi was working, review partial files and checks before paid continuation; `fallback.requires_review` records this case. Explicit local-only work waits. Existing Codex jobs do not enable the local runtime.
 
 ## Lease, cards and publication
 

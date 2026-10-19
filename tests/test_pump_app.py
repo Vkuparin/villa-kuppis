@@ -1,18 +1,22 @@
-"""Tests for the Finnish pump web app (card F2.3, front end).
+"""Tests for the Finnish pump web app (cards F2.3, F3.2, F3.3, front end).
 
 Runs the real PumpService + PumpAppServer over HTTP on 127.0.0.1 with an
 ephemeral port, fully offline against the FakeClient. Covers the page,
 the view/events API, confirmed/failed/stale states through the command
-API, error paths, the demo mode and the CLI parser.
+API, trusted connection identity (the local actor and the Tailscale
+path), error paths, the demo mode and the CLI parser.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import json
 import os
+import re
 import runpy
+import socket
 import sqlite3
 import subprocess
 import tempfile
@@ -21,13 +25,15 @@ import time
 import unittest
 import urllib.error
 import urllib.request
+from http.client import HTTPConnection
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from villa_kuppis.pump_app import (PumpAppServer, build_parser, main,
-                                   make_demo_service)
+from villa_kuppis.pump_app import (PumpAppServer, _validate_public_origin,
+                                   build_parser, main, make_demo_service,
+                                   DEFAULT_LOCAL_ACTOR)
 from villa_kuppis.pump_probe import FakeClient, _unit_payload
 from villa_kuppis.pump_service import PumpService
 
@@ -108,6 +114,57 @@ def http_json(method, url, body=None):
     return status, json.loads(raw)
 
 
+def http_raw(server, method, path, headers, body=b""):
+    """One HTTP request with an explicit (possibly repeating) header list.
+
+    headers is a list of (name, value) pairs; the same name may appear
+    more than once, which urllib cannot express. The Host header is
+    always supplied by the caller.
+    """
+    conn = HTTPConnection("127.0.0.1",
+                          server.server_address[1], timeout=5)
+    try:
+        conn.putrequest(method, path, skip_host=True,
+                        skip_accept_encoding=True)
+        for name, value in headers:
+            conn.putheader(name, value)
+        conn.putheader("Connection", "close")
+        conn.putheader("Content-Length", str(len(body)))
+        conn.endheaders(body or None)
+        resp = conn.getresponse()
+        return resp.status, resp.read()
+    finally:
+        conn.close()
+
+
+def http_raw_socket(server, request_bytes):
+    """Send raw request bytes and return (status, response_body).
+
+    For bytes that no stdlib client will put on the wire (control
+    characters inside header values).
+    """
+    port = server.server_address[1]
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as sock:
+        sock.sendall(request_bytes)
+        data = b""
+        while b"\r\n\r\n" not in data:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            data += chunk
+        head, _, rest = data.partition(b"\r\n\r\n")
+        status = int(head.split(b" ", 2)[1])
+        m = re.search(rb"content-length:\s*(\d+)", head, re.I)
+        if m:
+            need = int(m.group(1))
+            while len(rest) < need:
+                chunk = sock.recv(65536)
+                if not chunk:
+                    break
+                rest += chunk
+        return status, rest
+
+
 class AppTestCase(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory(prefix="vk-pump-app-")
@@ -165,11 +222,9 @@ class AppTestCase(unittest.TestCase):
     def _unit(self, view, unit_id):
         return next(u for u in view["units"] if u["id"] == unit_id)
 
-    def _post(self, server, unit, action, value, user=None):
-        body = {"unit": unit, "action": action, "value": value}
-        if user is not None:
-            body["user"] = user
-        return http_json("POST", self._url(server, "/api/command"), body)
+    def _post(self, server, unit, action, value):
+        return http_json("POST", self._url(server, "/api/command"),
+                         {"unit": unit, "action": action, "value": value})
 
 
 class PageTests(AppTestCase):
@@ -402,8 +457,7 @@ class CommandApiTests(AppTestCase):
     def test_confirmed_setpoint_over_http(self):
         server, _ = self._start_app(FakeClient(make_unit_payloads()))
         self.wait_for(lambda: self._view(server)["service"]["state"] == "ok")
-        status, body = self._post(server, "unit-1", "setpoint", 24.0,
-                                  user="test")
+        status, body = self._post(server, "unit-1", "setpoint", 24.0)
         self.assertEqual(status, 202)
         self.assertEqual(body["status"], "pending")
         self.wait_for(lambda: self._unit(self._view(server), "unit-1")["setpoint"] == 24.0)
@@ -411,7 +465,7 @@ class CommandApiTests(AppTestCase):
         self.assertIsNone(unit["pending"])
         events = self._view_events(server)
         self.assertEqual(events[0]["result"], "confirmed")
-        self.assertEqual(events[0]["actor"], "test")
+        self.assertEqual(events[0]["actor"], DEFAULT_LOCAL_ACTOR)
         self.assertEqual(events[0]["requested"], 24.0)
         self.assertEqual(events[0]["unit"], "unit-1")
 
@@ -546,6 +600,392 @@ class CommandApiTests(AppTestCase):
         self.assertIn("application/json", ctype)
 
 
+class IdentityTests(AppTestCase):
+    """Trusted connection identity: local actor and the Tailscale path."""
+
+    ORIGIN = "https://pump.tail1234.ts.net"
+    AUTHORITY = "pump.tail1234.ts.net"
+    LOGIN = "ville.kuparinen@example.com"
+
+    def _start_public(self, client=None):
+        client = client or FakeClient(make_unit_payloads())
+        clock = FakeClock()
+        service = PumpService(Path(self._tmp.name), client=client,
+                              now=clock, **SERVICE_KWARGS)
+        service.start()
+        self._services.append(service)
+        server = PumpAppServer(service, host="127.0.0.1", port=0,
+                               public_origin=self.ORIGIN)
+        self._servers.append(server)
+        threading.Thread(target=server.serve_forever,
+                         kwargs={"poll_interval": 0.1},
+                         daemon=True).start()
+        return server
+
+    def _public_headers(self, *, host=None, login=None, name=None,
+                        origin=None):
+        headers = {}
+        if host is not None:
+            headers["Host"] = host
+        if login is not None:
+            headers["Tailscale-User-Login"] = login
+        if name is not None:
+            headers["Tailscale-User-Name"] = name
+        if origin is not None:
+            headers["Origin"] = origin
+        return headers
+
+    def _get_public(self, server, path, **kwargs):
+        host = kwargs.pop("host", self.AUTHORITY)
+        headers = self._public_headers(host=host, **kwargs)
+        req = urllib.request.Request(self._url(server, path),
+                                     headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=5) as res:
+                return res.status, res.read()
+        except urllib.error.HTTPError as err:
+            return err.code, err.read()
+
+    def _post_public(self, server, body, **kwargs):
+        kwargs.setdefault("host", self.AUTHORITY)
+        headers = self._public_headers(**kwargs)
+        headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(
+            self._url(server, "/api/command"), method="POST",
+            data=json.dumps(body).encode(), headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=5) as res:
+                return res.status, res.read()
+        except urllib.error.HTTPError as err:
+            return err.code, err.read()
+
+    def _public_view(self, server):
+        status, raw = self._get_public(server, "/api/view", login=self.LOGIN)
+        self.assertEqual(status, 200)
+        return json.loads(raw)
+
+    def test_unknown_display_name_charset_keeps_login(self):
+        server = self._start_public()
+        status, raw = self._get_public(
+            server, "/api/identity", login=self.LOGIN,
+            name="=?unknown-charset?b?VmlsbGU=?=")
+        self.assertEqual(status, 200)
+        self.assertIn(self.LOGIN, json.loads(raw)["actor"])
+
+    # --- local mode ---------------------------------------------------------
+
+    def test_local_mode_reports_local_actor(self):
+        server, _ = self._start_app(FakeClient(make_unit_payloads()))
+        status, body = http_json("GET", self._url(server, "/api/identity"))
+        self.assertEqual(status, 200)
+        self.assertEqual(body, {"actor": DEFAULT_LOCAL_ACTOR,
+                                "display_name": None, "source": "local"})
+
+    def test_local_mode_ignores_tailscale_identity_headers(self):
+        server, _ = self._start_app(FakeClient(make_unit_payloads()))
+        req = urllib.request.Request(
+            self._url(server, "/api/identity"),
+            headers={"Tailscale-User-Login": "evil@ts.net",
+                     "Tailscale-User-Name": "evil"})
+        with urllib.request.urlopen(req, timeout=5) as res:
+            body = json.loads(res.read())
+        self.assertEqual(body["actor"], DEFAULT_LOCAL_ACTOR)
+        self.assertEqual(body["source"], "local")
+
+    def test_local_mode_duplicate_host_rejected(self):
+        server, _ = self._start_app(FakeClient(make_unit_payloads()))
+        host = f"127.0.0.1:{server.server_address[1]}"
+        status, _ = http_raw(server, "GET", "/",
+                             [("Host", host), ("Host", host)])
+        self.assertEqual(status, 403)
+
+    # --- public mode: required identity -------------------------------------
+
+    def test_public_mode_requires_login_on_every_route(self):
+        server = self._start_public()
+        for path in ("/", "/api/view", "/api/events",
+                     "/api/history?unit=unit-1&range=day", "/api/identity"):
+            status, _ = self._get_public(server, path)
+            self.assertEqual(status, 403, path)
+        # loopback keeps working as the local actor even in public mode:
+        # the deployed runtime administers the app from the local PC
+        # while phones come through Serve.
+        host = f"127.0.0.1:{server.server_address[1]}"
+        status, raw = self._get_public(server, "/api/identity",
+                                       host=host, login=self.LOGIN)
+        body = json.loads(raw)
+        self.assertEqual(status, 200)
+        self.assertEqual(body["actor"], DEFAULT_LOCAL_ACTOR)
+        self.assertEqual(body["source"], "local")
+        # a non-loopback host that is not the configured authority is
+        # refused, even with a login
+        status, _ = self._get_public(server, "/api/identity",
+                                     host="other.tail1234.ts.net",
+                                     login=self.LOGIN)
+        self.assertEqual(status, 403)
+        # the right Host plus the login reaches every route
+        for path in ("/", "/api/view", "/api/events", "/api/identity"):
+            status, _ = self._get_public(server, path, login=self.LOGIN)
+            self.assertEqual(status, 200, path)
+
+    def test_public_mode_localhost_stays_local(self):
+        server = self._start_public()
+        self.wait_for(
+            lambda: self._public_view(server)["service"]["state"] == "ok")
+        port = server.server_address[1]
+        for host in (f"127.0.0.1:{port}", f"localhost:{port}"):
+            # view and identity work as the local actor
+            status, _ = self._get_public(server, "/api/view", host=host)
+            self.assertEqual(status, 200, host)
+            status, raw = self._get_public(server, "/api/identity",
+                                           host=host)
+            body = json.loads(raw)
+            self.assertEqual(body["actor"], DEFAULT_LOCAL_ACTOR, host)
+            self.assertEqual(body["source"], "local", host)
+        # forged Tailscale headers and a body user cannot pick the actor
+        status, raw = self._get_public(
+            server, "/api/identity", host=f"localhost:{port}",
+            login="evil@ts.net", name="Evil")
+        body = json.loads(raw)
+        self.assertEqual(body["actor"], DEFAULT_LOCAL_ACTOR)
+        self.assertIsNone(body["display_name"])
+        status, _ = self._post_public(
+            server, {"unit": "unit-1", "action": "setpoint",
+                     "value": 24.0, "user": "spoof"},
+            host=f"localhost:{port}", login="evil@ts.net")
+        self.assertEqual(status, 202)
+        events = self._public_events(server)
+        self.assertEqual(events[0]["actor"], DEFAULT_LOCAL_ACTOR)
+        # a duplicate Origin is rejected even locally
+        host = f"127.0.0.1:{port}"
+        status, _ = http_raw(server, "GET", "/api/identity",
+                             [("Host", host),
+                              ("Origin", f"http://{host}"),
+                              ("Origin", f"http://{host}")])
+        self.assertEqual(status, 403)
+        # and a local origin that does not match the Host still is
+        status, _ = http_raw(server, "GET", "/api/identity",
+                             [("Host", host),
+                              ("Origin", f"http://localhost:{port}")])
+        self.assertEqual(status, 403)
+
+    def test_public_mode_host_must_match_exactly(self):
+        server = self._start_public()
+        for host in ("pump.tail1234.ts.net:443",     # explicit port
+                     "other.tail1234.ts.net",        # another tailnet node
+                     "pump.ts.net.evil.example",     # suffix trick
+                     "sub.pump.tail1234.ts.net"):    # subdomain
+            status, _ = self._get_public(server, "/api/identity",
+                                         host=host, login=self.LOGIN)
+            self.assertEqual(status, 403, host)
+        # DNS hostnames are case-insensitive
+        status, _ = self._get_public(server, "/api/identity",
+                                     host="Pump.Tail1234.TS.Net",
+                                     login=self.LOGIN)
+        self.assertEqual(status, 200)
+
+    def test_public_mode_origin_must_match_exactly(self):
+        server = self._start_public()
+        self.wait_for(
+            lambda: self._public_view(server)["service"]["state"] == "ok")
+        body = {"unit": "unit-1", "action": "power", "value": True}
+        # a foreign origin (or a mangled one) is refused before the service
+        for origin in ("https://other.tail1234.ts.net",
+                       "https://pump.tail1234.ts.net/",
+                       "http://127.0.0.1:9999"):
+            status, _ = self._post_public(server, body, login=self.LOGIN,
+                                          origin=origin)
+            self.assertEqual(status, 403, origin)
+        # a matching origin is fine even in the wrong case
+        status, _ = self._post_public(
+            server, body, login=self.LOGIN,
+            origin="HTTPS://PUMP.TAIL1234.TS.NET")
+        self.assertEqual(status, 202)
+        self.wait_for(lambda: (
+            self._public_view(server)["units"][0]["pending"] is None
+            and self._public_events(server)))
+        # and an absent Origin header is allowed (curl, service-to-service)
+        status, _ = self._post_public(
+            server, {"unit": "unit-2", "action": "power", "value": True},
+            login=self.LOGIN)
+        self.assertEqual(status, 202)
+
+    def _public_events(self, server):
+        status, raw = self._get_public(server, "/api/events",
+                                       login=self.LOGIN)
+        self.assertEqual(status, 200)
+        return json.loads(raw)
+
+    # --- public mode: the actor is the login, never the body ----------------
+
+    def test_public_mode_command_actor_is_the_login(self):
+        server = self._start_public()
+        self.wait_for(
+            lambda: self._public_view(server)["service"]["state"] == "ok")
+        status, _ = self._post_public(
+            server, {"unit": "unit-1", "action": "setpoint", "value": 24.0,
+                     "user": "spoof"},
+            login=self.LOGIN)
+        self.assertEqual(status, 202)
+        events = self._public_events(server)
+        self.assertEqual(events[0]["actor"], self.LOGIN)
+        self.assertEqual(events[0]["unit"], "unit-1")
+
+    def test_public_mode_display_name_rfc2047(self):
+        server = self._start_public()
+        # Q-encoded, plain ASCII display name
+        status, raw = self._get_public(
+            server, "/api/identity", login=self.LOGIN,
+            name="=?utf-8?q?Ville_Kuparinen?=")
+        body = json.loads(raw)
+        self.assertEqual(status, 200)
+        self.assertEqual(body["display_name"], "Ville Kuparinen")
+        self.assertEqual(body["actor"], f"Ville Kuparinen ({self.LOGIN})")
+        # B-encoded, non-ASCII display name
+        encoded = "=?utf-8?B?" + base64.b64encode(
+            "Äijä Tavoittelija".encode("utf-8")).decode("ascii") + "?="
+        status, raw = self._get_public(server, "/api/identity",
+                                       login=self.LOGIN, name=encoded)
+        body = json.loads(raw)
+        self.assertEqual(body["display_name"], "Äijä Tavoittelija")
+        self.assertEqual(body["actor"],
+                         f"Äijä Tavoittelija ({self.LOGIN})")
+
+    def test_public_mode_display_name_in_events(self):
+        server = self._start_public()
+        self.wait_for(
+            lambda: self._public_view(server)["service"]["state"] == "ok")
+        status, _ = self._post_public(
+            server, {"unit": "unit-1", "action": "power", "value": True},
+            login=self.LOGIN, name="=?utf-8?q?Ville_Kuparinen?=")
+        self.assertEqual(status, 202)
+        events = self._public_events(server)
+        self.assertEqual(events[0]["actor"], f"Ville Kuparinen ({self.LOGIN})")
+
+    def test_public_mode_overlong_combined_falls_back_to_login(self):
+        server = self._start_public()
+        login = "l" * 40 + "@example.com"   # 55 characters
+        name = "n" * 60
+        # 60 + 3 + 55 = 118 > 80, so only the login is recorded
+        status, raw = self._get_public(server, "/api/identity",
+                                       login=login, name=name)
+        body = json.loads(raw)
+        self.assertEqual(status, 200)
+        self.assertEqual(body["actor"], login)
+        self.assertEqual(body["display_name"], name)
+
+    # --- public mode: header validation --------------------------------------
+
+    def test_public_mode_login_header_validation(self):
+        server = self._start_public()
+        for login in ("", "   ", "a" * 81):
+            status, _ = self._get_public(server, "/api/identity",
+                                         login=login)
+            self.assertEqual(status, 403, repr(login))
+        # a control character in the login is refused (raw bytes on the wire)
+        req = (b"GET /api/identity HTTP/1.1\r\n"
+               + f"Host: {self.AUTHORITY}\r\n".encode("ascii")
+               + b"Tailscale-User-Login: bad\x01login\r\n"
+               + b"Connection: close\r\n\r\n")
+        status, _ = http_raw_socket(server, req)
+        self.assertEqual(status, 403)
+        # exactly at the length limit is fine
+        status, _ = self._get_public(server, "/api/identity",
+                                     login="a" * 80)
+        self.assertEqual(status, 200)
+
+    def test_public_mode_duplicate_identity_headers_rejected(self):
+        server = self._start_public()
+        for headers in (
+            [("Host", self.AUTHORITY), ("Host", self.AUTHORITY)],
+            [("Host", self.AUTHORITY),
+             ("Tailscale-User-Login", self.LOGIN),
+             ("Tailscale-User-Login", self.LOGIN)],
+            [("Host", self.AUTHORITY),
+             ("Tailscale-User-Login", self.LOGIN),
+             ("Origin", self.ORIGIN), ("Origin", self.ORIGIN)],
+            [("Host", self.AUTHORITY),
+             ("Tailscale-User-Login", self.LOGIN),
+             ("Tailscale-User-Name", "A B"),
+             ("Tailscale-User-Name", "C D")],
+        ):
+            status, _ = http_raw(server, "GET", "/api/identity", headers)
+            self.assertEqual(status, 403, headers)
+
+    def test_public_mode_forwarded_headers_ignored(self):
+        server = self._start_public()
+        headers = self._public_headers(host=self.AUTHORITY,
+                                       login=self.LOGIN)
+        headers["X-Forwarded-For"] = "8.8.8.8"
+        headers["X-Forwarded-Host"] = "evil.ts.net"
+        headers["X-Forwarded-User"] = "evil@example.com"
+        req = urllib.request.Request(self._url(server, "/api/identity"),
+                                     headers=headers)
+        with urllib.request.urlopen(req, timeout=5) as res:
+            body = json.loads(res.read())
+        self.assertEqual(body["actor"], self.LOGIN)
+        self.assertEqual(body["source"], "tailscale")
+
+    # --- configuration -------------------------------------------------------
+
+    def test_public_origin_validation(self):
+        for bad in ("http://pump.ts.net",
+                    "https://user:pw@pump.ts.net",
+                    "https://pump.ts.net/path",
+                    "https://pump.ts.net?x=1",
+                    "https://pump.ts.net#frag",
+                    "https://pump.example.com",
+                    "https://pump.ts.net.evil.example",
+                    "https://pump..ts.net",
+                    "https://-pump.ts.net",
+                    "https://pump.-ts.net",
+                    "https://pump.ts.net:99999",
+                    "not a url",
+                    "https://"):
+            with self.assertRaises(ValueError, msg=bad):
+                _validate_public_origin(bad)
+        self.assertEqual(_validate_public_origin("https://pump.ts.net"),
+                         ("https://pump.ts.net", "pump.ts.net"))
+        self.assertEqual(_validate_public_origin("https://pump.ts.net:8443"),
+                         ("https://pump.ts.net:8443", "pump.ts.net:8443"))
+        self.assertEqual(_validate_public_origin("HTTPS://PUMP.TS.NET/"),
+                         ("https://pump.ts.net", "pump.ts.net"))
+
+    def test_public_origin_with_port_is_enforced(self):
+        client = FakeClient(make_unit_payloads())
+        clock = FakeClock()
+        service = PumpService(Path(self._tmp.name), client=client,
+                              now=clock, **SERVICE_KWARGS)
+        service.start()
+        self._services.append(service)
+        server = PumpAppServer(service, host="127.0.0.1", port=0,
+                               public_origin="https://pump.ts.net:8443")
+        self._servers.append(server)
+        threading.Thread(target=server.serve_forever,
+                         kwargs={"poll_interval": 0.1},
+                         daemon=True).start()
+        # the authority now includes the port
+        status, _ = self._get_public(server, "/api/identity",
+                                     host="pump.ts.net:8443",
+                                     login=self.LOGIN)
+        self.assertEqual(status, 200)
+        status, _ = self._get_public(server, "/api/identity",
+                                     host="pump.ts.net",
+                                     login=self.LOGIN)
+        self.assertEqual(status, 403)
+
+    # --- the page -------------------------------------------------------------
+
+    def test_page_shows_identity_indicator(self):
+        server, _ = self._start_app(FakeClient(make_unit_payloads()))
+        _, _, raw = http("GET", self._url(server, "/"))
+        page = raw.decode("utf-8")
+        self.assertIn('id="identity"', page)
+        self.assertIn('"/api/identity"', page)
+        # the deprecated client-chosen actor field is gone from the page
+        self.assertNotIn('user: ""', page)
+
+
 class DemoTests(AppTestCase):
     def test_demo_serves_three_units(self):
         service = make_demo_service(self._tmp.name)
@@ -572,8 +1012,7 @@ class DemoTests(AppTestCase):
                          kwargs={"poll_interval": 0.1},
                          daemon=True).start()
         self.wait_for(lambda: self._view(server)["service"]["state"] == "ok")
-        status, body = self._post(server, "demo-1", "setpoint", 24.0,
-                                  user="demo")
+        status, body = self._post(server, "demo-1", "setpoint", 24.0)
         self.assertEqual(status, 202)
         self.wait_for(lambda: self._unit(self._view(server), "demo-1")["setpoint"] == 24.0)
 
@@ -587,6 +1026,18 @@ class CliTests(unittest.TestCase):
                 main(["serve", "--demo", "--data-dir", "unused"])
         service.start.assert_not_called()
         service.close.assert_called_once()
+
+    def test_bad_public_origin_rejected_before_start(self):
+        service = mock.Mock()
+        with mock.patch("villa_kuppis.pump_app.make_demo_service",
+                        return_value=service), \
+             mock.patch("sys.stderr", new=io.StringIO()) as stderr:
+            code = main(["serve", "--demo", "--data-dir", "unused",
+                         "--public-origin", "https://pump.example.com"])
+        self.assertEqual(code, 1)
+        service.start.assert_not_called()
+        service.close.assert_called_once()
+        self.assertIn("ts.net", stderr.getvalue())
 
     def test_nonlocal_bind_rejected_before_client_creation(self):
         with mock.patch("villa_kuppis.pump_app.make_live_service") as factory, \
