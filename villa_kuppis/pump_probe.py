@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import getpass
+import json
 import logging
 import math
 import sys
@@ -213,10 +214,14 @@ class FakeClient:
       put_stale[i]   how many following get_context calls still return the
                      pre-write value (read-back lag); 0 = immediate
       mutates[i]     optional callable(unit_payload) run after the i-th apply
+      context_error  exception raised from get_context
+      context_error_after  with context_error set, get_context succeeds for
+                     the first N calls and raises context_error from call
+                     N+1 on (N = this value; None = raise from the first)
     """
 
     def __init__(self, payloads, *, put_errors=(), put_stale=(), mutates=(),
-                 context_error=None, close_error=None):
+                 context_error=None, context_error_after=None, close_error=None):
         from aiomelcloudhome import UserContext
 
         self._user_context = UserContext
@@ -226,16 +231,22 @@ class FakeClient:
         self._put_stale = list(put_stale)
         self._mutates = list(mutates)
         self._context_error = context_error
+        self._context_error_after = context_error_after
         self._close_error = close_error
         self._stale = 0
         self._stale_snapshot = None
+        self._context_calls = 0
         self.closed = 0
 
     def _context(self, units):
         return self._user_context.model_validate(_context_payload(units))
 
     async def get_context(self):
-        if self._context_error is not None:
+        self._context_calls += 1
+        if self._context_error is not None and (
+            self._context_error_after is None
+            or self._context_calls > self._context_error_after
+        ):
             raise self._context_error
         if self._stale:
             self._stale -= 1
@@ -368,6 +379,55 @@ def _generic_message(exc):
     return "A MELCloud Home error occurred."
 
 
+def _response_status(exc):
+    """Numeric HTTP status when the exception is an aiohttp response error."""
+    try:
+        import aiohttp
+    except ImportError:
+        return None
+    if isinstance(exc, aiohttp.ClientResponseError):
+        status = getattr(exc, "status", None)
+        if isinstance(status, int) and 100 <= status < 600:
+            return status
+    return None
+
+
+def _known_cause(exc):
+    """Bounded known cause of a failed operation, or None.
+
+    Two shapes are recognized, walking a few levels along the exception
+    chain: json.JSONDecodeError reports "invalid JSON response"; an
+    aiohttp.ClientResponseError reports "HTTP <status>". Nothing is read
+    from the exception text: no str, repr, args, URLs, bodies, headers.
+    """
+    if isinstance(exc, json.JSONDecodeError):
+        return "invalid JSON response"
+    seen = set()
+    current = exc
+    for _ in range(5):
+        if current is None or id(current) in seen:
+            break
+        seen.add(id(current))
+        status = _response_status(current)
+        if status is not None:
+            return f"HTTP {status}"
+        current = current.__cause__ if current.__cause__ is not None else current.__context__
+    return None
+
+
+def _operation_message(phase, exc):
+    """Safe message for a failed operation: the phase, then a bounded cause.
+
+    Known causes are "invalid JSON response" or "HTTP <status>"; anything
+    else falls back to the existing sanitized categories. The exception
+    itself is never rendered.
+    """
+    known = _known_cause(exc)
+    if known is not None:
+        return f"{phase} failed: {known}"
+    return f"{phase} failed: {_generic_message(exc)}"
+
+
 def _mel_exceptions():
     try:
         from aiomelcloudhome import exceptions as _ex
@@ -398,18 +458,33 @@ async def read_live(client, *, print_fn=print, deadline=DEFAULT_DEADLINE):
 
 
 async def _restore_once(client, unit_id, original, *, deadline, max_polls, poll_delay, sleep_fn, print_fn):
-    """Best-effort restore of the original setpoint with read-back verification."""
-    await asyncio.wait_for(
-        client.control_ata_unit(unit_id, set_temperature=original), timeout=deadline
-    )
+    """Best-effort restore of the original setpoint with read-back verification.
+
+    A failing restore write does not end the attempt: the cloud may have
+    applied the change before the response failed, so a fresh GET decides
+    the outcome. Returns True only when the original is read back.
+    """
+    try:
+        await asyncio.wait_for(
+            client.control_ata_unit(unit_id, set_temperature=original), timeout=deadline
+        )
+    except Exception as err:
+        print_fn(f"  {_operation_message('restoration write', err)}")
     for attempt in range(1, max_polls + 1):
-        context = await asyncio.wait_for(client.get_context(), timeout=deadline)
-        unit = find_unit_by_id(context, unit_id)
-        st = unit.set_temperature if unit is not None else None
-        if unit is not None and st is not None and math.isfinite(st) and st == original:
+        confirmed = False
+        try:
+            context = await asyncio.wait_for(client.get_context(), timeout=deadline)
+            unit = find_unit_by_id(context, unit_id)
+            st = unit.set_temperature if unit is not None else None
+            confirmed = (
+                unit is not None and st is not None and math.isfinite(st) and st == original
+            )
+        except Exception as err:
+            print_fn(f"  {_operation_message('restoration read-back', err)}")
+        if confirmed:
             return True
         if attempt < max_polls:
-            print_fn(f"  restore read-back {attempt}: not yet {original:.1f} C; waiting {poll_delay:.0f}s")
+            print_fn(f"  restoration read-back {attempt}: not yet {original:.1f} C; waiting {poll_delay:.0f}s")
             await sleep_fn(poll_delay)
     return False
 
@@ -456,17 +531,18 @@ async def _supervised_write(client, *, unit_id, name, original, target, baseline
         context = await asyncio.wait_for(client.get_context(), timeout=deadline)
         return find_unit_by_id(context, unit_id)
 
-    async def _verify(expected):
+    async def _verify(expected, phase):
         for attempt in range(1, max_polls + 1):
             unit = await _read_unit()
             st = unit.set_temperature if unit is not None else None
             if unit is not None and st is not None and math.isfinite(st) and st == expected:
                 return unit
             if attempt < max_polls:
-                print_fn(f"  read-back {attempt}: not yet {expected:.1f} C; waiting {poll_delay:.0f}s")
+                print_fn(f"  {phase} {attempt}: not yet {expected:.1f} C; waiting {poll_delay:.0f}s")
                 await sleep_fn(poll_delay)
         return None
 
+    phase = "target write"
     try:
         print_fn(f"Writing {target:.1f} C ...")
         # Flag BEFORE awaiting: a timeout can happen after the write applied.
@@ -474,18 +550,21 @@ async def _supervised_write(client, *, unit_id, name, original, target, baseline
         await asyncio.wait_for(
             client.control_ata_unit(unit_id, set_temperature=target), timeout=deadline
         )
-        unit = await _verify(target)
+        phase = "target read-back"
+        unit = await _verify(target, phase)
         if unit is None:
             raise _ProbeError(
                 f"the change to {target:.1f} C was not confirmed by read-back after {max_polls} attempts"
             )
         print_fn(f"  change confirmed by read-back: {target:.1f} C")
         _note_diffs(unit)
+        phase = "restoration write"
         print_fn(f"Restoring {original:.1f} C ...")
         await asyncio.wait_for(
             client.control_ata_unit(unit_id, set_temperature=original), timeout=deadline
         )
-        final = await _verify(original)
+        phase = "restoration read-back"
+        final = await _verify(original, phase)
         if final is None:
             raise _ProbeError(
                 f"the restore to {original:.1f} C was not confirmed by read-back after {max_polls} attempts"
@@ -513,8 +592,8 @@ async def _supervised_write(client, *, unit_id, name, original, target, baseline
         _unswallow_cancel()
     except _ProbeError as err:
         print_fn(f"Probe failed: {err}")
-    except BaseException as err:  # library errors/timeouts: generic message only
-        print_fn(_generic_message(err))
+    except BaseException as err:  # library errors/timeouts: sanitized, phase-scoped
+        print_fn(_operation_message(phase, err))
     finally:
         if write_attempted and not restore_done:
             print_fn("Cleaning up: restoring the original setpoint ...")

@@ -8,6 +8,7 @@ run offline against the installed package.
 
 import asyncio
 import getpass
+import json
 import subprocess
 import sys
 import unittest
@@ -34,12 +35,14 @@ def _up_payload(**over):
 def _run_live(argv, fake=None, *, inputs=None, getpass_results=("owner", "s3cret"),
               getpass_side_effect=None, custom_getpass=None, isatty=True,
               put_errors=(), put_stale=(), mutates=(), sleep_side_effects=(),
-              context_error=None, close_error=None):
+              context_error=None, context_error_after=None, close_error=None):
     """Drive pump_probe.main in-process with spies. Returns (rc, output, fake, calls)."""
     if fake is None:
         fake = FakeClient([_up_payload()], put_errors=put_errors,
                           put_stale=put_stale, mutates=mutates,
-                          context_error=context_error, close_error=close_error)
+                          context_error=context_error,
+                          context_error_after=context_error_after,
+                          close_error=close_error)
     out = []
     calls = {"getpass": 0, "factory": 0, "input": 0}
     input_queue = list(inputs or [])
@@ -266,18 +269,23 @@ class SupervisedFlows(unittest.TestCase):
         self.assertIn("restored and confirmed by read-back", out)
         self.assertNotIn("RESTORATION UNCONFIRMED", out)
 
-    def test_first_put_applied_then_raised_and_restore_failed(self):
-        """Write applied, then raised, and the cleanup restore also fails:
-        the unconfirmed-restore result (3) must win over the original error."""
+    def test_restore_put_failed_but_independent_get_confirms(self):
+        """An applied-then-raised restore write is decided by the independent
+        GET, not assumed failed: the original is read back, so the exit code
+        is a plain error (1) with the confirmed-restore message, not 3."""
         boom = mel_exc.MelCloudHomeConnectionError("boom")
         rc, out, fake, _calls = _run_live(
             ["--live", "test-setpoint"], inputs=["1", "yes", "TEST"],
             put_errors=[boom, boom],
         )
-        self.assertEqual(rc, pump_probe.EXIT_RESTORE_UNCONFIRMED)
-        self.assertIn("RESTORATION UNCONFIRMED", out)
+        self.assertEqual(rc, 1)
         self.assertEqual(len(fake.control_calls), 2)
+        self.assertEqual(_set_temperature_of(fake.control_calls[0]), 24.0)
         self.assertEqual(_set_temperature_of(fake.control_calls[1]), 23.0)
+        self.assertIn("target write failed:", out)
+        self.assertIn("restoration write failed:", out)
+        self.assertIn("restored and confirmed by read-back", out)
+        self.assertNotIn("RESTORATION UNCONFIRMED", out)
 
     def test_verification_never_confirms_still_restores(self):
         rc, out, fake, _calls = _run_live(
@@ -291,25 +299,35 @@ class SupervisedFlows(unittest.TestCase):
         self.assertIn("restored and confirmed by read-back", out)
         self.assertNotIn("RESTORATION UNCONFIRMED", out)
 
-    def test_restore_failure_is_prominent_and_nonzero(self):
+    def test_genuine_restore_failure_stays_unconfirmed(self):
+        """Genuine restore failures are when the independent GET cannot
+        confirm the original: the GET fails, or the original never reads
+        back. Both stay unconfirmed (3), including when a teardown close
+        error adds noise; no false probe success."""
         boom = mel_exc.MelCloudHomeConnectionError("boom")
-        for name, close_error in (
-            ("plain", None),
-            ("close_error_must_not_mask", RuntimeError("session close broken")),
-        ):
+        cases = [
+            ("get_fails_during_restoration",
+             dict(put_errors=[None, boom], context_error=boom,
+                  context_error_after=3)),
+            ("original_never_reads_back",
+             dict(put_errors=[boom], put_stale=[0, 99])),
+            ("close_error_must_not_mask",
+             dict(put_errors=[boom], put_stale=[0, 99],
+                  close_error=RuntimeError("session close broken"))),
+        ]
+        for name, kwargs in cases:
             with self.subTest(case=name):
                 rc, out, fake, _calls = _run_live(
                     ["--live", "test-setpoint"], inputs=["1", "yes", "TEST"],
-                    put_errors=[None, boom, boom],
-                    close_error=close_error,
+                    **kwargs,
                 )
                 self.assertEqual(rc, pump_probe.EXIT_RESTORE_UNCONFIRMED)
                 self.assertIn("RESTORATION UNCONFIRMED", out)
                 self.assertIn("MELCloud Home app", out)
                 self.assertIn("23.0 C", out)
-                self.assertEqual(len(fake.control_calls), 3)
+                self.assertNotIn("Probe complete.", out)
                 self.assertNotIn("Traceback", out)
-                if close_error is not None:
+                if "close" in name:
                     self.assertNotIn("session close broken", out)
 
     def test_external_control_change_fails_test(self):
@@ -395,6 +413,142 @@ class Sanitization(unittest.TestCase):
         self.assertIn("Input ended", out)
         self.assertNotIn("Traceback", out)
         self.assertEqual(fake.control_calls, [])
+
+
+class DiagnosticsSanitization(unittest.TestCase):
+    """Phase diagnostics: bounded known causes only, never exception text.
+
+    A fake secret rides in the exception's cause/body/URL; only the phase
+    and a numeric status or the sanitized category may reach the output.
+    """
+
+    def _chained_http_error(self, status, secret):
+        """Library connection error chained from an aiohttp response error
+        whose URL and message carry the secret."""
+        import aiohttp
+        from aiohttp import RequestInfo
+        from multidict import CIMultiDict
+
+        url = f"https://mobile.bff.melcloudhome.com/monitor/ataunit/{UP_ID}?token=***"
+        info = RequestInfo(url, "PUT", CIMultiDict({"Authorization": f"Bearer {secret}"}))
+        http_err = aiohttp.ClientResponseError(info, (), status=status,
+                                               message=f"boom {secret}")
+        try:
+            raise mel_exc.MelCloudHomeConnectionError("Connection error")
+        except mel_exc.MelCloudHomeConnectionError as lib_err:
+            lib_err.__cause__ = http_err
+            return lib_err
+
+    def test_http_error_reports_phase_and_status_only(self):
+        secret = "TOKEN-SECRET-abc123"
+        lib_err = self._chained_http_error(401, secret)
+        message = pump_probe._operation_message("target write", lib_err)
+        self.assertEqual(message, "target write failed: HTTP 401")
+        self.assertNotIn(secret, message)
+        self.assertNotIn(UP_ID, message)
+        self.assertNotIn("mobile.bff", message)
+
+    def test_json_error_reports_invalid_json_not_body(self):
+        secret = "TOKEN-SECRET-abc123"
+        err = json.JSONDecodeError(f"Expecting value: {secret}", "Bearer " + secret, 0)
+        message = pump_probe._operation_message("restoration read-back", err)
+        self.assertEqual(message, "restoration read-back failed: invalid JSON response")
+        self.assertNotIn(secret, message)
+
+    def test_failed_write_reports_phase_and_still_restores(self):
+        """In-flow: a secret-bearing chained HTTP error on the target write
+        prints phase + status only, and the restore still confirms."""
+        secret = "TOKEN-SECRET-abc123"
+        lib_err = self._chained_http_error(503, secret)
+        rc, out, fake, _calls = _run_live(
+            ["--live", "test-setpoint"], inputs=["1", "yes", "TEST"],
+            put_errors=[lib_err],
+        )
+        self.assertEqual(rc, 1)
+        self.assertEqual(len(fake.control_calls), 2)
+        self.assertIn("target write failed: HTTP 503", out)
+        self.assertIn("restored and confirmed by read-back", out)
+        self.assertNotIn(secret, out)
+        self.assertNotIn(UP_ID, out)
+        self.assertNotIn("mobile.bff", out)
+        self.assertNotIn("Traceback", out)
+
+    def test_unknown_error_keeps_sanitized_category(self):
+        secret = "TOKEN-SECRET-abc123"
+        fake = FakeClient(
+            [_up_payload()],
+            context_error=RuntimeError(f"Bearer {secret} user=ACCT-42"),
+        )
+        rc, out, _fake, _calls = _run_live(["--live", "read"], fake=fake)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("A MELCloud Home error occurred.", out)
+        self.assertNotIn(secret, out)
+        self.assertNotIn("ACCT-42", out)
+        self.assertNotIn("Traceback", out)
+
+
+class DependencyHttpContract(unittest.TestCase):
+    """Offline contract against the installed aiomelcloudhome dependency.
+
+    A successful 200 whose body is not valid JSON surfaces as a raw
+    json.JSONDecodeError from control_ata_unit: the dependency parses every
+    body unless content_length is 0 or the status is 204/304, and
+    JSONDecodeError is not among its retried transient failures. The
+    outbound PUT carries the full payload, null fields included. No
+    network: the session is a recording stub and the auth is a static
+    token.
+    """
+
+    def test_200_with_unparseable_body_raises_jsondecodeerror(self):
+        from aiomelcloudhome import MELCloudHome
+
+        token = "static-test-token"
+        seen = []
+
+        class _FakeResponse:
+            status = 200
+            content_length = None  # unknown length: no empty-body shortcut
+
+            def raise_for_status(self):
+                return None
+
+            async def text(self):
+                return ""
+
+            async def json(self, content_type=None):
+                raise json.JSONDecodeError("Expecting value", "", 0)
+
+        class _FakeSession:
+            async def request(self, method, url, **kwargs):
+                seen.append({"method": method, "url": str(url), **kwargs})
+                return _FakeResponse()
+
+            async def close(self):
+                return None
+
+        client = MELCloudHome(access_token=token, session=_FakeSession())
+        with self.assertRaises(json.JSONDecodeError):
+            asyncio.run(client.control_ata_unit("LN25-UNIT-42", set_temperature=24.0))
+
+        self.assertEqual(len(seen), 1,
+                         "JSONDecodeError is not a retried transient failure")
+        request = seen[0]
+        self.assertEqual(request["method"], "PUT")
+        self.assertTrue(request["url"].endswith("/monitor/ataunit/LN25-UNIT-42"))
+        self.assertEqual(request["headers"]["Authorization"], f"Bearer {token}")
+        self.assertEqual(
+            request["json"],
+            {
+                "power": None,
+                "operationMode": None,
+                "setTemperature": 24.0,
+                "setFanSpeed": None,
+                "vaneVerticalDirection": None,
+                "vaneHorizontalDirection": None,
+                "temperatureIncrementOverride": None,
+                "inStandbyMode": None,
+            },
+        )
 
 
 class PayloadContract(unittest.TestCase):

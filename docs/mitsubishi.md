@@ -68,6 +68,8 @@ The write test includes a read and unit selection, so the separate read command 
 
 The probe chooses a target 1 °C above the original, or 1 °C below if the upper limit prevents that. It requires reported bounds and a local confirmation before writing. It requests only the setpoint, then reads back the change and restores the original. It also checks whether power, mode, fan, vanes or standby changed. Unknown bounds, unsupported modes and reported errors prevent the write.
 
-Restoration runs after an attempted write even if the request times out. If the probe prints `RESTORATION UNCONFIRMED`, check the app and restore the displayed original value. A forced process or PC shutdown can prevent cleanup; this first test is supervised. Realtime updates and app-side changes are follow-up checks after REST read/change/restore succeeds.
+Restoration runs after an attempted write even if the request times out. A restoration request error still triggers read-back because the server may have applied the change before its reply failed. Confirming the original value resolves the restoration check; an earlier test failure still returns a nonzero exit code. Error messages identify the operation and, when available, an HTTP status without exposing the response body.
+
+If the probe prints `RESTORATION UNCONFIRMED`, check the app and restore the displayed original value. A forced process or PC shutdown can prevent cleanup; this first test is supervised. Realtime updates and app-side changes are follow-up checks after REST read/change/restore succeeds.
 
 The pinned `aiomelcloudhome` 0.3.1 source sends `null` for unspecified control fields. The offline payload test verifies that setpoint is the only non-null requested change; the live check must establish the server's behavior. Source: [client and models](https://github.com/erwindouna/aiomelcloudhome).
