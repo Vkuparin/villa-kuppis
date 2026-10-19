@@ -36,6 +36,8 @@ $devData = Join-Path ([IO.Path]::GetTempPath()) ("villa-kuppis-dev-" + [guid]::N
 
 All data commands require an explicit data directory. `--help` lists the on-demand price fetch and opt-in daily scheduler. Device commands, the web app and the Android app are still pending. See the [setup record](docs/setup.md) for installed development tools.
 
+The [Mitsubishi probe](docs/mitsubishi.md#probe-commands) prepares the next integration test with a synthetic demo and a supervised setpoint change. Live account and device checks require approval; credentials are entered locally and are not saved.
+
 Launch the shared dashboard against this checkout:
 
 ```powershell

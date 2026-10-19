@@ -21,7 +21,7 @@ Codex, Hermes and Claude Code (through `CLAUDE.md`) all read this file. This is 
 | Create the project environment | py -3.13 -m venv .venv; .venv\Scripts\python -m pip install -r requirements.txt |
 | Run the spot-price experiment | .venv\Scripts\python -m villa_kuppis --help (development commands require an explicit temporary data directory) |
 | Offline demo | $devData = Join-Path ([IO.Path]::GetTempPath()) ("villa-kuppis-dev-" + [guid]::NewGuid()); .venv\Scripts\python -m villa_kuppis --data-dir "$devData" demo |
-| Spot-price tests (mocked network, temporary SQLite) | .venv\Scripts\python -m unittest discover -s tests -v |
+| Python tests (mocked network, temporary data) | .venv\Scripts\python -m unittest discover -s tests -v |
 | Pump probe help and offline demo | .venv\Scripts\python -m villa_kuppis.pump_probe --help; .venv\Scripts\python -m villa_kuppis.pump_probe demo |
 | Pump probe tests (mocked network and devices) | .venv\Scripts\python -m unittest discover -s tests -p "test_pump*.py" -v |
 | Development tool verification (new terminal after installation) | py -3.13 --version; java -version; adb version; sdkmanager --sdk_root="$env:ANDROID_HOME" --list_installed; tailscale version |
