@@ -198,6 +198,50 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(len(inspections), 2)
         self.assertFalse(any("set" in c or "--bg" in c for c in calls))
 
+    def test_apply_keeps_credentials_out_of_files_and_subprocess_arguments(self):
+        script = Path(__file__).resolve().parents[1] / "scripts/setup-pump-service.py"
+        main = runpy.run_path(str(script))["main"]
+        published = []
+        shell = mock.Mock()
+        shell.ShellExecuteW.return_value = 33
+        credentials = iter(("mock@example.invalid", "synthetic-password"))
+        matching = {"TCP":{"443":{"HTTPS":True}},"Web":{
+            "test.synthetic.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8377"}}}}}
+        def command(args, **kwargs):
+            if "serve" in args:
+                text = json.dumps(matching if published else {})
+            elif "status" in args:
+                text = json.dumps({"BackendState":"Running", "Self":{
+                    "Online":True,"DNSName":"test.synthetic.ts.net."}})
+            elif args[0] == "schtasks.exe":
+                return mock.Mock(returncode=1,stdout="")
+            elif "/user" in args:
+                text = '"synthetic-user","S-1-5-21-123-1001"'
+            else:
+                text = "synthetic-user"
+            return mock.Mock(returncode=0,stdout=text)
+        def publish(args):
+            published.append(args)
+            return mock.Mock(returncode=0)
+        with tempfile.TemporaryDirectory() as temp, \
+                mock.patch.dict("os.environ", {"LOCALAPPDATA":temp}), \
+                mock.patch.dict(main.__globals__, {
+                    "command":command, "write_credentials":mock.Mock(),
+                    "require_free_port":mock.Mock()}), \
+                mock.patch("runpy.run_path", return_value={"gui_getpass":
+                    lambda **kwargs: lambda _:next(credentials)}), \
+                mock.patch("subprocess.run",side_effect=publish), \
+                mock.patch("ctypes.WinDLL",return_value=shell), \
+                mock.patch("builtins.print"):
+            self.assertEqual(main(["apply","--backup-dir",str(Path(temp)/"backups")]),0)
+            for path in (Path(temp)/"VillaKuppis").iterdir():
+                self.assertNotIn("synthetic-password",path.read_text())
+                self.assertNotIn("mock@example.invalid",path.read_text())
+        for call in shell.ShellExecuteW.call_args_list:
+            self.assertNotIn("synthetic-password",repr(call))
+            self.assertNotIn("mock@example.invalid",repr(call))
+        self.assertEqual(shell.ShellExecuteW.call_args.args[1:3],("runas","powershell.exe"))
+
 
 class RuntimeTests(unittest.TestCase):
     def test_explicit_credentials_and_weather_ignore_development_environment(self):
