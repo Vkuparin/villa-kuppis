@@ -129,10 +129,11 @@ SCRIPT = r"""
       var row = make("div", { className: "set-row" });
       var id = "set-" + d.key;
       var label = make("label", { htmlFor: id,
-        textContent: d.label + unitLabel(d) + " – oletus " + fmtDefault(d) });
+        textContent: d.label + unitLabel(d), title: "Oletus: " + fmtDefault(d) });
       var ctl = controlFor(d, eff[d.key], id);
+      ctl.title = "Oletus: " + fmtDefault(d);
       var src = make("span", { className: "set-src",
-        textContent: SRC[eff[d.key].source] });
+        textContent: eff[d.key].source === "default" ? "" : SRC[eff[d.key].source] });
       // Saved when the control is released ("change"), not on every keystroke.
       ctl.addEventListener(d.type === "bool" ? "click" : "change", function () {
         if (d.type === "bool") {
