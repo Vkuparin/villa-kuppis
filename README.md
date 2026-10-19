@@ -24,6 +24,18 @@ node scripts/coordinate.mjs status
 
 Release goals and product decisions live in [docs/roadmap.md](docs/roadmap.md). Implementation cards live in [docs/tasks/](docs/tasks/README.md). Add product-specific setup and build commands here as code lands.
 
+The first implementation is a command-line spot-price experiment. It stores complete Finnish price days in SQLite and computes temperature targets from fixed thresholds. The offline demo uses synthetic prices and room settings:
+
+```powershell
+py -3.13 -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+$devData = Join-Path ([IO.Path]::GetTempPath()) ("villa-kuppis-dev-" + [guid]::NewGuid())
+.venv\Scripts\python -m villa_kuppis --data-dir "$devData" demo
+.venv\Scripts\python -m unittest discover -s tests -v
+```
+
+All data commands require an explicit data directory. `--help` lists the on-demand price fetch and opt-in daily scheduler. Device commands, the web app and the Android app are still pending. See the [setup record](docs/setup.md) for installed development tools.
+
 Launch the shared dashboard against this checkout:
 
 ```powershell
@@ -47,6 +59,7 @@ Both commands use the machine configuration at `D:/AIstuff/agent-workflow/config
 | `AGENTS.md`, `CLAUDE.md` | Shared instructions and Claude's import |
 | `docs/agents.md` | Routing, persistent Kynsi, resuming and machine tools |
 | `docs/roadmap.md`, `docs/tasks/` | Goals, decisions and canonical task cards |
+| `villa_kuppis/`, `tests/` | Price experiment and offline tests with synthetic fixtures |
 | `scripts/coordinate.mjs` | Coordinator lease and the status a new session resumes from |
 | `scripts/start-agent.mjs` | Ask existing Kynsi to coordinate this project |
 | `scripts/dashboard.mjs`, `scripts/check-docs.mjs` | Shared dashboard launch and document validation |
