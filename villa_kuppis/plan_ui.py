@@ -7,7 +7,7 @@ Plain ASCII JS in raw strings, spliced into the page by
 SECTION_HTML = r"""
   <section class="plan" aria-label="Päivän suunnitelma">
     <h2>Päivän suunnitelma</h2>
-    <p><button type="button" id="away-btn">Poissa kotoa</button></p>
+    <p><button type="button" class="switch" role="switch" aria-checked="false" id="away-btn"><span class="track"></span><span>Poissa kotoa</span></button></p>
     <p id="plan-note" class="detail"></p>
     <div id="plan-body"></div>
   </section>
@@ -36,8 +36,7 @@ SCRIPT = r"""
   var away = false;
   function showAway(on) {
     away = on;
-    $away.textContent = on ? "Palaan kotiin (lopeta poissa-tila)" : "Poissa kotoa";
-    $away.setAttribute("aria-pressed", on ? "true" : "false");
+    $away.setAttribute("aria-checked", on ? "true" : "false");
   }
   $away.addEventListener("click", function () {
     fetch("/api/away", { method: "POST",
