@@ -223,6 +223,17 @@ select { cursor: pointer; min-width: 110px; }
 button:disabled, select:disabled { opacity: .55; cursor: not-allowed; }
 button:focus-visible, select:focus-visible, a:focus-visible {
   outline: 3px solid #0b5fff; outline-offset: 2px; }
+button.switch { display: inline-flex; align-items: center; gap: .6rem;
+                border: 0; background: none; padding: 0; min-width: 0; }
+button.switch .track { position: relative; width: 52px; height: 30px;
+                       border-radius: 15px; background: #9aa4ae;
+                       transition: background .15s; flex: none; }
+button.switch .track::after { content: ""; position: absolute; top: 3px; left: 3px;
+                              width: 24px; height: 24px; border-radius: 50%;
+                              background: #fff; transition: transform .15s;
+                              box-shadow: 0 1px 3px rgba(0,0,0,.35); }
+button.switch[aria-checked="true"] .track { background: #0b6b2a; }
+button.switch[aria-checked="true"] .track::after { transform: translateX(22px); }
 .stepper { display: inline-flex; gap: .4rem; }
 .stepper button { min-width: 44px; font-size: 1.15rem; font-weight: 700; }
 .pending { margin-top: .8rem; padding: .55rem .75rem; border: 1px dashed #0b5fff;
@@ -481,9 +492,10 @@ function cardHtml(unit) {
   const rows = [];
   rows.push(
     '<div class="row"><span class="label">Käynti</span>' +
-    '<button data-action="power" data-unit="' + esc(unit.id) + '" data-value="' +
+    '<button class="switch" role="switch" aria-checked="' + (unit.power === true) +
+    '" data-action="power" data-unit="' + esc(unit.id) + '" data-value="' +
     (unit.power === true ? "false" : "true") + '"' + dis + ">" +
-    esc(powerLabel) + "</button></div>"
+    '<span class="track"></span><span>' + esc(powerLabel) + "</span></button></div>"
   );
   rows.push(
     '<div class="row"><span class="label">Mitattu lämpötila</span>' +
