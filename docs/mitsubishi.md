@@ -39,10 +39,35 @@ Power, mode (cool, heat, dry, fan), target temperature, room temperature, fan sp
 
 ## First experiment
 
-1. With the owner's go-ahead, sign in from the PC with `aiomelcloudhome` and list the units in MELCloud Home. Start with the LN25 upstairs (MAC-597IFB-E). Keep credentials and device IDs in `scratch/`.
+1. With the owner's go-ahead, sign in from the PC with `aiomelcloudhome` and list the units in MELCloud Home. Start with the LN25 upstairs (MAC-597IFB-E). Enter credentials in the probe's masked local prompts; they stay in memory and are not saved. Do not put passwords in chat, shell arguments or files.
 2. Read one unit's state and compare it with the MELCloud Home app.
 3. Change its setpoint by one degree, confirm the read-back, then restore it.
 4. Change something in the MELCloud Home app and confirm the PC sees it.
 5. Note whether the realtime stream works and any sign of rate limiting, to set a safe polling interval.
 
 Done when one unit reads and sets reliably. Then check the other two.
+
+### Probe commands
+
+Install the pinned client through `requirements.txt`. Help and the synthetic demo use no account or network:
+
+```powershell
+.venv\Scripts\python -m villa_kuppis.pump_probe --help
+.venv\Scripts\python -m villa_kuppis.pump_probe demo
+.venv\Scripts\python -m unittest discover -s tests -p "test_pump*.py" -v
+```
+
+After live approval, use a local interactive terminal:
+
+```powershell
+.venv\Scripts\python -m villa_kuppis.pump_probe --live read
+.venv\Scripts\python -m villa_kuppis.pump_probe --live test-setpoint
+```
+
+The write test includes a read and unit selection, so the separate read command is optional. Keep MELCloud Home open to identify the upstairs unit and compare the cloud-reported state. The client does not expose a model/MAC field that can identify it automatically. Unit names appear only in the local terminal; credentials, tokens and device IDs are not written to a report.
+
+The probe chooses a target 1 °C above the original, or 1 °C below if the upper limit prevents that. It requires reported bounds and a local confirmation before writing. It requests only the setpoint, then reads back the change and restores the original. It also checks whether power, mode, fan, vanes or standby changed. Unknown bounds, unsupported modes and reported errors prevent the write.
+
+Restoration runs after an attempted write even if the request times out. If the probe prints `RESTORATION UNCONFIRMED`, check the app and restore the displayed original value. A forced process or PC shutdown can prevent cleanup; this first test is supervised. Realtime updates and app-side changes are follow-up checks after REST read/change/restore succeeds.
+
+The pinned `aiomelcloudhome` 0.3.1 source sends `null` for unspecified control fields. The offline payload test verifies that setpoint is the only non-null requested change; the live check must establish the server's behavior. Source: [client and models](https://github.com/erwindouna/aiomelcloudhome).

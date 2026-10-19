@@ -51,7 +51,7 @@ Google runs the uploaded automations, so the cottage follows its plan with the P
 
 ## Stack
 
-- **PC:** Python 3.13 and SQLite. The first price experiment uses the standard library plus `tzdata` for Europe/Helsinki time on Windows. Planned: MELCloud Home through `aiomelcloudhome`, a service that runs natively on Windows and starts at boot without an interactive login.
+- **PC:** Python 3.13 and SQLite. The price experiment uses the standard library plus `tzdata` for Europe/Helsinki time on Windows. The pump probe uses `aiomelcloudhome` 0.3.1. Planned: a service that runs natively on Windows and starts at boot without an interactive login.
 - **Android:** Kotlin with the Google Home APIs; the web app is shown in a WebView.
 - **Shared data:** spot prices from Elering's public API and the outdoor forecast from FMI open data. Neither needs a key; both were tested from a cloud session on 18 October 2026.
 
