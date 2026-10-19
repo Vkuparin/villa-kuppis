@@ -49,6 +49,7 @@ section.settings h3 { margin: 1rem 0 .3rem; font-size: 1rem; color: var(--text2)
 .set-row { max-width: 40rem; }
 .set-row label { flex: 1 1 14rem; }
 .set-src:empty { display: none; }
+.set-reset { min-width: 44px; padding: 0; font-size: 1.2rem; }
 .set-row input[type=number], .set-row input[type=time] {
   min-height: 44px; width: 7.5rem; font-size: 1rem; padding: 0 .5rem;
   border: 1px solid var(--ctl); border-radius: .5rem;
@@ -124,6 +125,8 @@ SCRIPT = r"""
     var own = data.overrides[scope] || {};
     $body.textContent = "";
     var group = null;
+    // A value set at this very level needs no label; only inherited ones do.
+    var level = scope.indexOf("room:") === 0 ? "room" : "site";
     data.definitions.forEach(function (d, i) {
       if (d.group !== group) {
         group = d.group;
@@ -136,7 +139,8 @@ SCRIPT = r"""
       var ctl = controlFor(d, eff[d.key], id);
       ctl.title = "Oletus: " + fmtDefault(d);
       var src = make("span", { className: "set-src",
-        textContent: eff[d.key].source === "default" ? "" : SRC[eff[d.key].source] });
+        textContent: eff[d.key].source === "default" || eff[d.key].source === level
+          ? "" : SRC[eff[d.key].source] });
       // Saved when the control is released ("change"), not on every keystroke.
       ctl.addEventListener(d.type === "bool" ? "click" : "change", function () {
         if (d.type === "bool") {
@@ -153,8 +157,9 @@ SCRIPT = r"""
       });
       row.appendChild(label); row.appendChild(ctl); row.appendChild(src);
       if (Object.prototype.hasOwnProperty.call(own, d.key)) {
-        var reset = make("button", { type: "button",
-                                     textContent: "Palauta oletus" });
+        var reset = make("button", { type: "button", className: "set-reset",
+                                     textContent: "\u21ba", title: "Palauta oletus" });
+        reset.setAttribute("aria-label", "Palauta oletus");
         reset.addEventListener("click", function () {
           send({ scope: scope, key: d.key, reset: true });
         });
