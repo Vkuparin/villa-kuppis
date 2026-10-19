@@ -265,7 +265,7 @@ assert.equal($histStatus.textContent, '');
         for needle in ('lang="fi"', "<title>Pumput</title>",
                        "Mitattu lämpötila", "Tavoitelämpötila",
                        "Toimintatila", "Puhallus", "Tapahtumat",
-                       "Vanhentunut mittaus", "Lähetetään",
+                       "Tiedot vanhentuneet", "Lähetetään",
                        "Europe/Helsinki", "fi-FI"):
             self.assertIn(needle, page)
 

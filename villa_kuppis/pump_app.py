@@ -585,8 +585,10 @@ function cardHtml(unit) {
   return (
     '<article class="card' + (unit.fresh ? "" : " stale") + '">' +
     '<header class="card-head"><h3>' + esc(unit.name) + "</h3>" +
-    '<span class="badge ' + (unit.fresh ? "ok" : "warn") + '">' +
-    (unit.fresh ? "Uusi mittaus" : "Vanhentunut mittaus") + "</span></header>" +
+    (unit.fresh ? "" :
+      '<span class="badge warn" title="Laitteelta ei ole saatu tuoretta lukemaa ' +
+      'vähään aikaan, joten näytetyt arvot voivat olla vanhoja.">Tiedot vanhentuneet</span>') +
+    "</header>" +
     rows.join("") + pendingHtml + "</article>"
   );
 }
