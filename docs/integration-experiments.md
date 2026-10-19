@@ -8,9 +8,11 @@ Order: C and D first, when implementation begins; A and B when the cottage devic
 
 Follow [the Mitsubishi experiment](mitsubishi.md#first-experiment). Runs on the home PC.
 
-The supervised probe is prepared with `aiomelcloudhome` 0.3.1. Its offline demo changes a synthetic unit from 23 °C to 24 °C and restores 23 °C. The live test awaits owner approval, a local sign-in and confirmation of the upstairs LN25 in the MELCloud Home app. No account or device has been accessed.
+The supervised probe uses `aiomelcloudhome` 0.3.1. Its offline demo changes a synthetic unit from 23 °C to 24 °C and restores 23 °C.
 
 Validated on 19 October 2026 at `9f627d7`: 17 focused pump tests passed on Windows Python 3.13, with network, credentials and devices replaced by fakes. The offline demo and help passed. Tests cover secure-prompt failure, bounds and confirmation checks, failed writes and read-back, restoration failure, interruption, other controls changing, and sanitized errors. Sol 6.1 Medium reviewed the design and implementation; Kynsi implemented the probe and one repair pass.
+
+Owner-approved live check on 19 October 2026: sign-in and cloud state reading succeeded for the upstairs LN25. It reported Cool mode, power off and a 16–31 °C setpoint range. The write test returned exit code 3 without confirming the change or restoration. The owner then confirmed the original setpoint, mode and power in MELCloud Home. The console error detail was unavailable, so the cause remains unresolved. Investigate response handling and restoration verification offline; do not assume the unit must be switched on.
 
 ## D. Spot prices and fixed thresholds
 
