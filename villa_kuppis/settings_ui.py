@@ -156,7 +156,8 @@ SCRIPT = r"""
         send({ scope: scope, key: d.key, value: v });
       });
       row.appendChild(label); row.appendChild(ctl); row.appendChild(src);
-      if (Object.prototype.hasOwnProperty.call(own, d.key)) {
+      // A switch is its own reset: on or off.
+      if (d.type !== "bool" && Object.prototype.hasOwnProperty.call(own, d.key)) {
         var reset = make("button", { type: "button", className: "set-reset",
                                      textContent: "\u21ba", title: "Palauta oletus" });
         reset.setAttribute("aria-label", "Palauta oletus");
