@@ -68,7 +68,9 @@ The write test includes a read and unit selection, so the separate read command 
 
 The probe chooses a target 1 °C above the original, or 1 °C below if the upper limit prevents that. It requires reported bounds and a local confirmation before writing. It requests only the setpoint, then reads back the change and restores the original. It also checks whether power, mode, fan, vanes or standby changed. Unknown bounds, unsupported modes and reported errors prevent the write.
 
-Restoration runs after an attempted write even if the request times out. A restoration request error still triggers read-back because the server may have applied the change before its reply failed. Confirming the original value resolves the restoration check; an earlier test failure still returns a nonzero exit code. Error messages identify the operation and, when available, an HTTP status without exposing the response body.
+Each control request gets one HTTP attempt. A failed response still triggers read-back because the server may have applied the change. The probe must observe both the changed setpoint and the restored original. If both are confirmed and the other controls stay unchanged, a server response error produces a visible warning with the successful result. An unobserved target remains a failed test. Error messages identify the operation and, when available, an HTTP status without exposing the response body.
+
+Restoration runs after an attempted write even if the request times out. Cleanup can make one further restoration attempt if the normal restoration was not confirmed. A read-back of the original resolves restoration; it does not turn an unobserved target change into a successful test.
 
 If the probe prints `RESTORATION UNCONFIRMED`, check the app and restore the displayed original value. A forced process or PC shutdown can prevent cleanup; this first test is supervised. Realtime updates and app-side changes are follow-up checks after REST read/change/restore succeeds.
 

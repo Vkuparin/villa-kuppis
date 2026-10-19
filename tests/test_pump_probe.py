@@ -256,35 +256,39 @@ class SupervisedFlows(unittest.TestCase):
         self.assertEqual(fake.closed, 1)
 
     def test_first_put_applied_then_raised_restored(self):
-        """Failure after the first write: original is restored and confirmed,
-        and the exit code is a plain error (1), not unconfirmed."""
+        """Read-back confirms an applied write despite its response error."""
         rc, out, fake, _calls = _run_live(
             ["--live", "test-setpoint"], inputs=["1", "yes", "TEST"],
             put_errors=[mel_exc.MelCloudHomeConnectionError("boom")],
         )
-        self.assertEqual(rc, 1)
+        self.assertEqual(rc, 0)
         self.assertEqual(len(fake.control_calls), 2)
         self.assertEqual(_set_temperature_of(fake.control_calls[0]), 24.0)
         self.assertEqual(_set_temperature_of(fake.control_calls[1]), 23.0)
-        self.assertIn("restored and confirmed by read-back", out)
+        self.assertIn("change confirmed by read-back", out)
+        self.assertIn("restore confirmed by read-back", out)
+        self.assertIn("WARNING: Server write responses failed.", out)
+        self.assertNotIn("Probe complete.", out)
         self.assertNotIn("RESTORATION UNCONFIRMED", out)
 
     def test_restore_put_failed_but_independent_get_confirms(self):
-        """An applied-then-raised restore write is decided by the independent
-        GET, not assumed failed: the original is read back, so the exit code
-        is a plain error (1) with the confirmed-restore message, not 3."""
+        """Both writes can apply despite failing responses; warn on success."""
         boom = mel_exc.MelCloudHomeConnectionError("boom")
         rc, out, fake, _calls = _run_live(
             ["--live", "test-setpoint"], inputs=["1", "yes", "TEST"],
             put_errors=[boom, boom],
         )
-        self.assertEqual(rc, 1)
+        self.assertEqual(rc, 0)
         self.assertEqual(len(fake.control_calls), 2)
         self.assertEqual(_set_temperature_of(fake.control_calls[0]), 24.0)
         self.assertEqual(_set_temperature_of(fake.control_calls[1]), 23.0)
         self.assertIn("target write failed:", out)
         self.assertIn("restoration write failed:", out)
-        self.assertIn("restored and confirmed by read-back", out)
+        self.assertIn("change confirmed by read-back", out)
+        self.assertIn("restore confirmed by read-back", out)
+        self.assertIn("WARNING: Server write responses failed.", out)
+        self.assertEqual(fake._context_calls, 4)
+        self.assertNotIn("Probe complete.", out)
         self.assertNotIn("RESTORATION UNCONFIRMED", out)
 
     def test_verification_never_confirms_still_restores(self):
@@ -299,20 +303,42 @@ class SupervisedFlows(unittest.TestCase):
         self.assertIn("restored and confirmed by read-back", out)
         self.assertNotIn("RESTORATION UNCONFIRMED", out)
 
+    def test_failed_target_response_without_target_readback_stays_failed(self):
+        rc, out, fake, _calls = _run_live(
+            ["--live", "test-setpoint"], inputs=["1", "yes", "TEST"],
+            put_errors=[mel_exc.MelCloudHomeConnectionError("not applied")],
+            put_stale=[99, 0],
+        )
+        self.assertEqual(rc, 1)
+        self.assertEqual(len(fake.control_calls), 2)
+        self.assertIn("target write failed:", out)
+        self.assertIn("not confirmed by read-back", out)
+        self.assertIn("restored and confirmed by read-back", out)
+        self.assertNotIn("the probe completed", out)
+        self.assertNotIn("RESTORATION UNCONFIRMED", out)
+
     def test_genuine_restore_failure_stays_unconfirmed(self):
         """Genuine restore failures are when the independent GET cannot
         confirm the original: the GET fails, or the original never reads
         back. Both stay unconfirmed (3), including when a teardown close
         error adds noise; no false probe success."""
         boom = mel_exc.MelCloudHomeConnectionError("boom")
+
+        def ignore_restore(payload):
+            for setting in payload["settings"]:
+                if setting["name"] == "SetTemperature":
+                    setting["value"] = "24"
+
         cases = [
             ("get_fails_during_restoration",
              dict(put_errors=[None, boom], context_error=boom,
                   context_error_after=3)),
             ("original_never_reads_back",
-             dict(put_errors=[boom], put_stale=[0, 99])),
+             dict(put_errors=[boom, boom, boom],
+                  mutates=[None, ignore_restore, ignore_restore])),
             ("close_error_must_not_mask",
-             dict(put_errors=[boom], put_stale=[0, 99],
+             dict(put_errors=[boom, boom, boom],
+                  mutates=[None, ignore_restore, ignore_restore],
                   close_error=RuntimeError("session close broken"))),
         ]
         for name, kwargs in cases:
@@ -353,6 +379,30 @@ class SupervisedFlows(unittest.TestCase):
         self.assertIn("restore confirmed by read-back", out)
         self.assertNotIn("Probe complete.", out)
         self.assertNotIn("RESTORATION UNCONFIRMED", out)
+
+    def test_control_drift_during_lag_invalidates_recovered_write(self):
+        """A non-setpoint drift on an unmatched poll must not be forgotten."""
+        fake = FakeClient([_up_payload()], put_errors=[RuntimeError("PRIVATE")],
+                          put_stale=[1, 0])
+        original_get = fake.get_context
+
+        async def context_with_drift():
+            context = await original_get()
+            if fake._context_calls == 3:
+                pump_probe.collect_units(context)[0].power = False
+            return context
+
+        fake.get_context = context_with_drift
+        rc, out, _fake, _calls = _run_live(
+            ["--live", "test-setpoint"], fake=fake, inputs=["1", "yes", "TEST"],
+        )
+        self.assertEqual(rc, 1)
+        self.assertIn("change confirmed by read-back", out)
+        self.assertIn("restore confirmed by read-back", out)
+        self.assertIn("power changed from on to off", out)
+        self.assertIn("FAILED", out)
+        self.assertNotIn("PRIVATE", out)
+        self.assertNotIn("the probe completed", out)
 
     def test_single_interrupt_during_verification_restores_first(self):
         rc, out, fake, _calls = _run_live(
@@ -464,10 +514,12 @@ class DiagnosticsSanitization(unittest.TestCase):
             ["--live", "test-setpoint"], inputs=["1", "yes", "TEST"],
             put_errors=[lib_err],
         )
-        self.assertEqual(rc, 1)
+        self.assertEqual(rc, 0)
         self.assertEqual(len(fake.control_calls), 2)
         self.assertIn("target write failed: HTTP 503", out)
-        self.assertIn("restored and confirmed by read-back", out)
+        self.assertIn("restore confirmed by read-back", out)
+        self.assertIn("WARNING: Server write responses failed.", out)
+        self.assertNotIn("Probe complete.", out)
         self.assertNotIn(secret, out)
         self.assertNotIn(UP_ID, out)
         self.assertNotIn("mobile.bff", out)
@@ -549,6 +601,163 @@ class DependencyHttpContract(unittest.TestCase):
                 "inStandbyMode": None,
             },
         )
+
+
+class SingleWriteRequests(unittest.IsolatedAsyncioTestCase):
+    """Exercise the installed client's retries with a recording HTTP boundary."""
+
+    class Response:
+        content_length = 0
+
+        def __init__(self, status=200, payload=None):
+            self.status = status
+            self.payload = payload
+            if payload is not None:
+                self.content_length = None
+
+        def raise_for_status(self):
+            if self.status >= 400:
+                import aiohttp
+                from multidict import CIMultiDict
+                from yarl import URL
+
+                info = aiohttp.RequestInfo(
+                    URL("https://example.invalid/private-unit?token=PRIVATE"),
+                    "PUT", CIMultiDict({"Authorization": "Bearer PRIVATE"}),
+                )
+                raise aiohttp.ClientResponseError(
+                    info, (), status=self.status, message="PRIVATE response body",
+                )
+
+        async def text(self):
+            return ""
+
+        async def json(self, content_type=None):
+            return self.payload
+
+    class Session:
+        def __init__(self, response=None, error=None):
+            self.response = response
+            self.error = error
+            self.calls = []
+            self.post = object()  # auth methods must be delegated unchanged
+            self.get = object()
+
+        async def request(self, method, url, **kwargs):
+            self.calls.append((method, str(url), kwargs))
+            if self.error is not None:
+                raise self.error
+            return self.response
+
+    async def test_http_failure_is_one_put_without_dependency_retry(self):
+        from aiomelcloudhome import MELCloudHome
+
+        session = self.Session(self.Response(503))
+        client = MELCloudHome(
+            access_token="offline-token", session=pump_probe._SingleWriteSession(session),
+        )
+        with self.assertRaises(pump_probe._SingleWriteError) as caught:
+            await client.control_ata_unit("offline-unit", set_temperature=22.0)
+        self.assertEqual(len(session.calls), 1)
+        self.assertEqual(session.calls[0][0], "PUT")
+        message = pump_probe._operation_message("target write", caught.exception)
+        self.assertEqual(message, "target write failed: HTTP 503")
+        self.assertNotIn("PRIVATE", str(caught.exception))
+
+    async def test_transport_failure_is_one_put_without_dependency_retry(self):
+        import aiohttp
+        from aiomelcloudhome import MELCloudHome
+
+        for error in (aiohttp.ClientConnectionError("PRIVATE"), TimeoutError("PRIVATE")):
+            with self.subTest(error=type(error).__name__):
+                session = self.Session(error=error)
+                client = MELCloudHome(
+                    access_token="offline-token",
+                    session=pump_probe._SingleWriteSession(session),
+                )
+                with self.assertRaises(pump_probe._SingleWriteError) as caught:
+                    await client.control_ata_unit("offline-unit", set_temperature=22.0)
+                self.assertIs(caught.exception.__cause__, error)
+                self.assertEqual(len(session.calls), 1)
+                self.assertNotIn("PRIVATE", str(caught.exception))
+
+    async def test_reads_auth_and_cancellation_are_delegated(self):
+        session = self.Session(self.Response(503))
+        proxy = pump_probe._SingleWriteSession(session)
+        self.assertIs(proxy.post, session.post)
+        self.assertIs(proxy.get, session.get)
+        self.assertIs(await proxy.request("GET", "https://example.invalid/context"),
+                      session.response)
+        cancelled = asyncio.CancelledError()
+        session.error = cancelled
+        with self.assertRaises(asyncio.CancelledError):
+            await proxy.request("PUT", "https://example.invalid/control")
+        self.assertEqual(len(session.calls), 2)
+
+    async def test_live_factory_wraps_session_and_closes_real_session(self):
+        from unittest.mock import AsyncMock, patch
+
+        session = self.Session()
+        session.close = AsyncMock()
+        with patch("aiohttp.ClientSession", return_value=session), \
+                patch("aiomelcloudhome.MELCloudHome") as constructor:
+            _client, closer = pump_probe._default_client_factory("offline", "offline")
+        proxy = constructor.call_args.kwargs["session"]
+        self.assertIsInstance(proxy, pump_probe._SingleWriteSession)
+        self.assertIs(proxy._session, session)
+        await closer()
+        session.close.assert_awaited_once()
+
+    async def test_http500_after_apply_confirms_both_states_with_warning(self):
+        from aiomelcloudhome import MELCloudHome
+
+        response_type = self.Response
+
+        class AppliedSession(self.Session):
+            def __init__(self):
+                super().__init__()
+                self.temperature = "21"
+
+            async def request(self, method, url, **kwargs):
+                self.calls.append((method, str(url), kwargs))
+                if method == "PUT":
+                    self.temperature = str(kwargs["json"]["setTemperature"])
+                    return response_type(500)
+                payload = pump_probe._context_payload([
+                    _up_payload(power="False", set_temp=self.temperature),
+                ])
+                return response_type(payload=payload)
+
+        session = AppliedSession()
+        client = MELCloudHome(
+            access_token="offline-token", session=pump_probe._SingleWriteSession(session),
+        )
+        out = []
+        answers = iter(["1", "yes", "TEST"])
+
+        async def no_sleep(_delay):
+            return None
+
+        rc = await pump_probe.test_setpoint_live(
+            client, input_fn=lambda _prompt: next(answers),
+            sleep_fn=no_sleep, print_fn=out.append,
+        )
+        output = "\n".join(out)
+        self.assertEqual(rc, 0)
+        self.assertEqual([call[0] for call in session.calls],
+                         ["GET", "GET", "PUT", "GET", "PUT", "GET"])
+        self.assertIn("target write failed: HTTP 500", output)
+        self.assertIn("restoration write failed: HTTP 500", output)
+        self.assertIn("change confirmed by read-back: 22.0 C", output)
+        self.assertIn("restore confirmed by read-back: 21.0 C", output)
+        self.assertIn("WARNING: Server write responses failed.", output)
+        self.assertIn("no other controls changed", output)
+        self.assertNotIn("Probe complete.", output)
+        self.assertNotIn("PRIVATE", output)
+        self.assertEqual(session.temperature, "21.0")
+        for method, _url, kwargs in session.calls:
+            if method == "PUT":
+                self.assertIsNone(kwargs["json"]["power"])
 
 
 class PayloadContract(unittest.TestCase):

@@ -15,6 +15,10 @@ Safety model for ``test-setpoint``:
   * the exact word TEST is required immediately before the write;
   * the write is verified by fresh read-backs, then the original setpoint is
     restored and verified the same way;
+  * each live PUT makes one HTTP attempt; failed write responses are followed
+    by read-back because the change may still have applied;
+  * if both setpoints are confirmed despite write-response errors, completion
+    carries a visible warning;
   * once the first write has been attempted, the original setpoint is
     restored again on every exit path (failure, failed verification, Ctrl+C);
   * if the restore cannot be confirmed, the exit code is non-zero and a
@@ -307,6 +311,36 @@ def _demo_client():
 
 # --- live plumbing --------------------------------------------------------------
 
+class _SingleWriteError(Exception):
+    """A PUT failed without entering the dependency's automatic retry path."""
+
+
+class _SingleWriteSession:
+    """Delegate auth and reads; make each control PUT a single HTTP attempt.
+
+    aiomelcloudhome retries transport and HTTP failures. A failed response
+    does not tell us whether a write applied, so only read-back may decide
+    what to do next. The project exception bypasses that retry predicate.
+    """
+
+    def __init__(self, session):
+        self._session = session
+
+    def __getattr__(self, name):
+        return getattr(self._session, name)
+
+    async def request(self, method, url, **kwargs):
+        if method.upper() != "PUT":
+            return await self._session.request(method, url, **kwargs)
+        try:
+            response = await self._session.request(method, url, **kwargs)
+            response.raise_for_status()
+            return response
+        except Exception as err:
+            # CancelledError remains a cancellation, not a response failure.
+            raise _SingleWriteError("Write response failed; request was not repeated.") from err
+
+
 def _default_client_factory(username, password):
     """Real live client: lazy import so --help/demo stay light and offline."""
     from aiohttp import ClientSession
@@ -317,7 +351,7 @@ def _default_client_factory(username, password):
     client = MELCloudHome(
         username=username,
         password=password,
-        session=session,
+        session=_SingleWriteSession(session),
         request_timeout=10.0,
     )
     return client, session.close
@@ -513,6 +547,7 @@ async def _supervised_write(client, *, unit_id, name, original, target, baseline
     interrupted = False
     result = EXIT_ERROR
     observed_diffs = []
+    write_response_failed = False
 
     def _note_diffs(unit):
         """Record any non-setpoint control drifting from the baseline."""
@@ -533,23 +568,37 @@ async def _supervised_write(client, *, unit_id, name, original, target, baseline
 
     async def _verify(expected, phase):
         for attempt in range(1, max_polls + 1):
-            unit = await _read_unit()
-            st = unit.set_temperature if unit is not None else None
-            if unit is not None and st is not None and math.isfinite(st) and st == expected:
-                return unit
+            try:
+                unit = await _read_unit()
+                if unit is not None:
+                    _note_diffs(unit)
+                st = unit.set_temperature if unit is not None else None
+                if unit is not None and st is not None and math.isfinite(st) and st == expected:
+                    return unit
+            except Exception as err:
+                print_fn(f"  {_operation_message(phase, err)}")
             if attempt < max_polls:
                 print_fn(f"  {phase} {attempt}: not yet {expected:.1f} C; waiting {poll_delay:.0f}s")
                 await sleep_fn(poll_delay)
         return None
+
+    async def _write(expected, phase):
+        nonlocal write_response_failed
+        try:
+            await asyncio.wait_for(
+                client.control_ata_unit(unit_id, set_temperature=expected), timeout=deadline
+            )
+        except Exception as err:
+            write_response_failed = True
+            print_fn(_operation_message(phase, err))
+            print_fn("  The write may have applied; checking cloud read-back before continuing.")
 
     phase = "target write"
     try:
         print_fn(f"Writing {target:.1f} C ...")
         # Flag BEFORE awaiting: a timeout can happen after the write applied.
         write_attempted = True
-        await asyncio.wait_for(
-            client.control_ata_unit(unit_id, set_temperature=target), timeout=deadline
-        )
+        await _write(target, phase)
         phase = "target read-back"
         unit = await _verify(target, phase)
         if unit is None:
@@ -560,9 +609,7 @@ async def _supervised_write(client, *, unit_id, name, original, target, baseline
         _note_diffs(unit)
         phase = "restoration write"
         print_fn(f"Restoring {original:.1f} C ...")
-        await asyncio.wait_for(
-            client.control_ata_unit(unit_id, set_temperature=original), timeout=deadline
-        )
+        await _write(original, phase)
         phase = "restoration read-back"
         final = await _verify(original, phase)
         if final is None:
@@ -580,7 +627,11 @@ async def _supervised_write(client, *, unit_id, name, original, target, baseline
             print_fn("Another control changed during the test; the probe result is FAILED.")
         else:
             print_fn("  no other controls changed")
-            print_fn("Probe complete.")
+            if write_response_failed:
+                print_fn("WARNING: Server write responses failed. Both setpoints were confirmed "
+                         "by cloud read-back; the probe completed with this warning.")
+            else:
+                print_fn("Probe complete.")
         if observed_diffs:
             # A drift that later returned to baseline still invalidates the
             # probe: something else touched the unit while we were.
