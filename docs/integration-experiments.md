@@ -44,6 +44,8 @@ Pass: steps 4–5 show all three units live and fresh; steps 6–8 are each conf
 
 The outcome is recorded here with the commit run and the date.
 
+The first supervised app launch on 19 October 2026 at `80bc6d4` stopped before connecting: aiohttp required a running event loop during client creation. The service now creates and closes that client on its gateway loop. All 121 pump tests passed, including a real aiohttp-session lifecycle check with cloud reads mocked. No device command was sent during the failed launch; live acceptance remains pending.
+
 Offline review on 19 October 2026: Codex reviewed the inherited service and unfinished history/weather batch. Fixes cover transactional and locked history access, command read-back recording, failed weather backfill retries, shutdown during a weather request, UTC/hour-aligned FMI queries, missing measurements, browser-origin/Host checks, and stale chart responses. The local credential launcher has mocked cancellation and cleanup checks. A synthetic year with roughly 140,000 pump readings plus hourly outdoor and quarter-hour prices returned 1,000 points per series (148 KB) in 0.13 seconds on the owner's PC and rendered in the browser. This is offline evidence, not a live-device pass. The app's stop command does not reverse accepted device commands.
 
 ## D. Spot prices and fixed thresholds

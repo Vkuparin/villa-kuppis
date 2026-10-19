@@ -559,8 +559,9 @@ class PumpGateway:
                  readback_polls: int = DEFAULT_READBACK_POLLS,
                  readback_delay: float = DEFAULT_READBACK_DELAY,
                  command_timeout: float = DEFAULT_COMMAND_TIMEOUT,
-                 teardown=None):
+                 teardown=None, client_factory=None):
         self._client = client
+        self._client_factory = client_factory
         self._store = store
         self._now = now
         self._poll_interval = poll_interval
@@ -602,6 +603,15 @@ class PumpGateway:
             self._loop.close()
 
     async def _run(self) -> None:
+        if self._client_factory is not None:
+            try:
+                # aiohttp sessions must be created on their running owner loop.
+                self._client, self._teardown = self._client_factory()
+            except Exception as err:
+                with self._lock:
+                    self._last_error = _operation_message("cloud startup", err)
+                await self._stop_event.wait()
+                return
         poll_task = asyncio.create_task(self._poll_loop())
         worker_task = asyncio.create_task(self._worker())
         await self._stop_event.wait()
@@ -639,7 +649,7 @@ class PumpGateway:
 
     @property
     def running(self) -> bool:
-        return self._started
+        return self._started and self._client is not None
 
     def has_pending(self, unit_id: str) -> bool:
         with self._lock:
@@ -706,7 +716,7 @@ class PumpGateway:
         if the slot clears right afterwards; callers must act on the
         reason instead of re-guessing with has_pending().
         """
-        if not self._started or self._loop is None or self._loop.is_closed():
+        if not self.running or self._loop is None or self._loop.is_closed():
             return "stopped"
         with self._lock:
             if unit_id in self._pending:
@@ -834,7 +844,8 @@ class PumpGateway:
 class PumpService:
     """Synchronous facade over the gateway and store, for the HTTP layer."""
 
-    def __init__(self, data_dir, *, client, teardown=None, now=utc_now,
+    def __init__(self, data_dir, *, client, teardown=None,
+                 client_factory=None, now=utc_now,
                  poll_interval: float = DEFAULT_POLL_INTERVAL,
                  stale_after: float = DEFAULT_STALE_AFTER,
                  readback_polls: int = DEFAULT_READBACK_POLLS,
@@ -859,6 +870,7 @@ class PumpService:
             readback_delay=readback_delay,
             command_timeout=command_timeout,
             teardown=teardown,
+            client_factory=client_factory,
         )
         self._weather_sites = {str(k): (float(v[0]), float(v[1]))
                                for k, v in (weather_sites or {}).items()}
@@ -1071,20 +1083,21 @@ def make_live_service(data_dir, *, poll_interval=DEFAULT_POLL_INTERVAL,
             "live mode requires the VILLA_KUPPIS_MELCLOUD_USERNAME and "
             "VILLA_KUPPIS_MELCLOUD_PASSWORD environment variables"
         )
-    client, close_session = _default_client_factory(username, password)
+    def client_factory():
+        client, close_session = _default_client_factory(username, password)
 
-    async def teardown():
-        try:
-            await client.__aexit__(None, None, None)
-        except Exception:
-            pass
-        try:
-            await close_session()
-        except Exception:
-            pass
+        async def teardown():
+            try:
+                await client.__aexit__(None, None, None)
+            except Exception:
+                pass
+            finally:
+                await close_session()
+
+        return client, teardown
 
     return PumpService(
-        data_dir, client=client, teardown=teardown,
+        data_dir, client=None, client_factory=client_factory,
         poll_interval=poll_interval, stale_after=stale_after,
         readback_polls=readback_polls, readback_delay=readback_delay,
         command_timeout=command_timeout,

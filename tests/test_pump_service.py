@@ -20,7 +20,9 @@ from typing import Any
 from unittest import mock
 
 from villa_kuppis.pump_probe import FakeClient, _unit_payload
-from villa_kuppis.pump_service import PumpService, PumpStore, validate_request
+from villa_kuppis.pump_service import (
+    PumpService, PumpStore, make_live_service, validate_request,
+)
 
 SERVICE_KWARGS = dict(
     poll_interval=0.05,
@@ -115,6 +117,75 @@ class ServiceTestCase(unittest.TestCase):
 
     def _latest_event(self, service):
         return service.events()[0]
+
+
+class LiveStartupTests(ServiceTestCase):
+    credentials = {
+        "VILLA_KUPPIS_MELCLOUD_USERNAME": "offline@example.invalid",
+        "VILLA_KUPPIS_MELCLOUD_PASSWORD": "offline-test-password",
+    }
+
+    def test_live_session_created_used_and_closed_on_gateway_loop(self):
+        from aiohttp import ClientSession
+
+        sessions = []
+        create_loops = []
+        read_loops = []
+        close_loops = []
+        original_close = ClientSession.close
+        fake = FakeClient(make_unit_payloads())
+
+        def create_session():
+            create_loops.append(asyncio.get_running_loop())
+            session = ClientSession()
+            sessions.append(session)
+            return session
+
+        async def read_context(client):
+            read_loops.append(asyncio.get_running_loop())
+            return await fake.get_context()
+
+        async def close_session(session):
+            close_loops.append(asyncio.get_running_loop())
+            await original_close(session)
+
+        with mock.patch.dict("os.environ", self.credentials, clear=True), \
+                mock.patch("aiohttp.ClientSession", side_effect=create_session) as factory, \
+                mock.patch.object(ClientSession, "close", new=close_session), \
+                mock.patch("aiomelcloudhome.MELCloudHome.get_context", new=read_context):
+            # Construct from synchronous startup, before any event loop exists.
+            service = make_live_service(self.tmp, **SERVICE_KWARGS)
+            self._services.append(service)
+            factory.assert_not_called()
+            service.start()
+            self.wait_for(lambda: len(read_loops) >= 2)
+            self.assertEqual(len(service.view()["units"]), 3)
+            gateway_loop = service.gateway._loop
+            service.close()
+            factory.assert_called_once_with()
+
+        self.assertEqual(create_loops, [gateway_loop])
+        self.assertTrue(all(loop is gateway_loop for loop in read_loops))
+        self.assertEqual(close_loops, [gateway_loop])
+        self.assertTrue(sessions[0].closed)
+        self.assertTrue(gateway_loop.is_closed())
+
+    def test_live_factory_failure_reports_status_and_stops_cleanly(self):
+        with mock.patch.dict("os.environ", self.credentials, clear=True), \
+                mock.patch("villa_kuppis.pump_service._default_client_factory",
+                           side_effect=RuntimeError("offline startup failure")) as factory:
+            service = make_live_service(self.tmp, **SERVICE_KWARGS)
+            self._services.append(service)
+            service.start()
+            self.wait_for(lambda: service.view()["service"]["state"] == "error")
+            self.assertIn("cloud startup failed", service.view()["service"]["error"])
+            self.assertFalse(service.gateway.running)
+            self.assertEqual(service.request("unit-1", "power", True, "test")[0], 503)
+            thread = service.gateway._thread
+            service.close()
+            factory.assert_called_once()
+        self.assertFalse(thread.is_alive())
+        self.assertTrue(service.gateway._loop.is_closed())
 
 
 class ViewTests(ServiceTestCase):
