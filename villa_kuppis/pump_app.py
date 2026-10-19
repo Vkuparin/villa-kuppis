@@ -296,7 +296,15 @@ section.history h2 { margin: 0 0 .6rem; font-size: 1.15rem; }
 .hist-controls label { display: flex; flex-direction: column; gap: .2rem;
                        font-size: .85rem; color: var(--text2); }
 #hist-status { font-size: .85rem; color: var(--text3); }
-.hist-chart { width: 100%; }
+.hist-chart { width: 100%; position: relative; }
+.hist-chart svg { touch-action: pan-y; }
+.hist-tip { position: absolute; top: 8px; pointer-events: none; z-index: 5;
+            background: var(--surface); color: var(--text); border: 1px solid var(--line3);
+            border-radius: .5rem; padding: .35rem .6rem; font-size: .85rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,.25); white-space: nowrap; }
+.hist-tip b { display: block; margin-bottom: .15rem; font-weight: 600; }
+.hist-tip i { display: inline-block; width: .9rem; height: .25rem; margin-right: .4rem;
+              vertical-align: middle; }
 .hist-chart svg { display: block; width: 100%; height: auto; }
 .hist-legend { list-style: none; display: flex; flex-wrap: wrap;
                gap: .4rem 1.1rem; padding: .4rem 0 0; margin: 0;
@@ -835,7 +843,7 @@ function drawHistory(data) {
   const gapFor = (sampleMs) => Math.max(3 * sampleMs, 2 * expected);
 
   for (const s of series) {
-    const d = seriesPath(s.pts, gapFor(s.key === "outdoor" ? 3600000 : 300000), X, YT);
+    const d = seriesPath(s.pts, gapFor(s.key === "outdoor" || s.key === "forecast" ? 3600000 : 300000), X, YT);
     if (!d) continue;
     const attrs = { d: d, fill: "none", stroke: s.color, "stroke-width": 2,
       "stroke-linejoin": "round", "stroke-linecap": "round" };
@@ -865,6 +873,58 @@ function drawHistory(data) {
   }
 
   $histChart.appendChild(svg);
+
+  // Hover or touch: the values nearest to the pointer's time.
+  const priceFmt = new Intl.NumberFormat("fi-FI", { maximumFractionDigits: 2 });
+  const guide = svgEl("line", { y1: m.top, y2: H - m.bottom, stroke: "var(--text3)",
+    "stroke-width": 1, "stroke-dasharray": "3 3", visibility: "hidden" });
+  svg.appendChild(guide);
+  const tip = document.createElement("div");
+  tip.className = "hist-tip";
+  tip.hidden = true;
+  $histChart.appendChild(tip);
+  const nearest = (pts, t, tol) => {
+    let best = null, bestD = Infinity;
+    for (const p of pts) {
+      if (p[1] === null || p[1] === undefined) continue;
+      const d = Math.abs(p[0] - t);
+      if (d < bestD) { bestD = d; best = p; }
+    }
+    return best && bestD <= tol ? best : null;
+  };
+  const showTip = (ev) => {
+    const rect = svg.getBoundingClientRect();
+    const px = (ev.clientX - rect.left) * (W / rect.width);
+    if (px < m.left || px > W - m.right) { hideTip(); return; }
+    const t = t0 + (px - m.left) / (W - m.left - m.right) * (t1 - t0);
+    const rows = [];
+    for (const s of series) {
+      const sample = s.key === "outdoor" || s.key === "forecast" ? 3600000 : 300000;
+      const hit = nearest(s.pts, t, Math.max(sample, expected) * 1.5);
+      if (hit) rows.push('<div><i style="background:' + s.color + '"></i>' +
+        esc(s.label) + ": " + esc(tempFmt.format(hit[1])) + " \u00b0C</div>");
+    }
+    if (hasPrice) {
+      const hit = nearest(pricePts, t, Math.max(900000, expected) * 1.5);
+      if (hit) rows.push('<div><i style="background:' + PRICE_SERIES.color + '"></i>' +
+        "Sähkön hinta: " + esc(priceFmt.format(hit[1])) + " snt/kWh</div>");
+    }
+    const stamp = new Intl.DateTimeFormat("fi-FI", { timeZone: "Europe/Helsinki",
+      weekday: "short", day: "numeric", month: "numeric", hour: "2-digit",
+      minute: "2-digit" }).format(new Date(t));
+    tip.innerHTML = "<b>" + esc(stamp) + (tNow !== null && t > tNow ? " (ennuste)" : "") +
+      "</b>" + (rows.join("") || "Ei tietoa");
+    tip.hidden = false;
+    const gx = X(t) * (rect.width / W);
+    guide.setAttribute("x1", X(t)); guide.setAttribute("x2", X(t));
+    guide.setAttribute("visibility", "visible");
+    const wide = tip.offsetWidth;
+    tip.style.left = Math.max(0, Math.min(rect.width - wide, gx + 12 > rect.width - wide ? gx - wide - 12 : gx + 12)) + "px";
+  };
+  const hideTip = () => { tip.hidden = true; guide.setAttribute("visibility", "hidden"); };
+  svg.addEventListener("pointermove", showTip);
+  svg.addEventListener("pointerdown", showTip);
+  svg.addEventListener("pointerleave", hideTip);
 
   const items = series.map((s) =>
     '<li><span class="swatch" style="background:' + s.color + '"></span>' +
