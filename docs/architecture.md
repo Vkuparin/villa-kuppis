@@ -6,9 +6,9 @@ Revised on 20 October 2026 to the two-site Home Assistant design (card H1.1). Th
 
 - Villa Kuppis is the one Finnish application for controlling, monitoring and optimizing the home and the cottage. Household members use it in a browser, optionally installed as a PWA. No APK.
 - One Home Assistant per site is the device gateway and local fallback controller. Home Assistant UIs are for administration and emergencies, not the household's daily app.
-- Two refurbished, always-on x86-64 mini-PCs (models not yet chosen):
-  - **Home:** Debian + Docker Compose running Villa Kuppis, Home Assistant Container and a host-level Tailscale client.
-  - **Cottage:** Home Assistant OS with its Matter Server and Tailscale apps.
+- Two always-on x86-64 machines (bought 20 October 2026, not yet arrived):
+  - **Home:** an HP OmniBook laptop (Ryzen AI 5 340, 16 GB, 512 GB NVMe) running Debian + Docker Compose with Villa Kuppis, Home Assistant Container and a host-level Tailscale client.
+  - **Cottage:** an HP MP9 G4 mini-PC (Core i3-8100T, 8 GB, 256 GB NVMe, Ethernet) running Home Assistant OS with its Matter Server and Tailscale apps.
 - Home pumps: Home Assistant's MELCloud Home integration after a parity test (H1.3). The direct `aiomelcloudhome` client stays as the rollback path until then.
 - Cottage: four Mill Gen 4 heaters (Matter over Wi-Fi) and two IKEA ALPSTUGA sensors (Matter over Thread) controlled locally by the cottage Home Assistant. The Google Home Speaker (2026) stays as Thread border router and secondary controller.
 - Villa Kuppis owns prices, forecasts, learning, plans, visits, history and settings. Each Home Assistant owns pairing, actual device state and immediate commands. The cottage Home Assistant also owns the local safe fallback.
@@ -23,7 +23,7 @@ flowchart TB
   Clients[Desktop and phone browsers / optional PWA]
   Clients -->|Private HTTPS through Tailscale| VK[Villa Kuppis web UI + API]
 
-  subgraph Home[Home: mini-PC, Debian + Compose]
+  subgraph Home[Home: OmniBook laptop, Debian + Compose]
     VK --> Core[Python planning: prices, FMI, learning, optimizer]
     Core --> DB[(SQLite + backup)]
     Core <-->|Local REST + WebSocket| HAH[Home Assistant Container]
@@ -31,7 +31,7 @@ flowchart TB
   end
 
   Core <-->|Tailscale: HA REST + WebSocket| HAC[Home Assistant OS]
-  subgraph Cottage[Cottage: mini-PC, HAOS]
+  subgraph Cottage[Cottage: HP MP9 G4, HAOS]
     HAC <-->|Matter over Wi-Fi| Mill[4 Mill Gen 4 heaters]
     HAC <-->|Matter over Thread| Speaker[Google Home Speaker: Thread border router]
     Speaker --- Sensors[2 ALPSTUGA]
@@ -119,13 +119,22 @@ Plans use Europe/Helsinki local time, including the 92- and 100-period daylight-
 
 **Home (H1.4):** Villa Kuppis and Home Assistant Container as separate Compose services with pinned versions, persistent volumes and restart policies. Villa Kuppis reaches Home Assistant on a local endpoint; no Home Assistant port is published. Host-level Tailscale publishes only the Villa Kuppis UI with Serve. Windows-only pieces (Task Scheduler, Credential Manager, `%LOCALAPPDATA%`, the PowerShell update script) move behind OS-neutral configuration and secrets; Windows development keeps working. Backups go off the SSD.
 
-**Cottage (H2.1):** HAOS on a mini-PC wired to the Archer BE230; the NE200-Outdoor provides the 5G uplink (carrier NAT is fine for Tailscale). Local IPv6 and mDNS on a non-isolated LAN. BIOS set to power on after AC loss. Built-in Home Assistant backups, copied off the device.
+**Cottage (H2.1):** HAOS on the HP MP9 G4, wired to the Archer BE230; the NE200-Outdoor provides the 5G uplink (carrier NAT is fine for Tailscale). Local IPv6 and mDNS on a non-isolated LAN. BIOS set to power on after AC loss. Built-in Home Assistant backups, copied off the device.
 
-**Mini-PC minimum:** 64-bit x86/UEFI, wired Ethernet, SSD, power on after AC loss, measured idle power, 8 GB RAM (16 GB preferred at home), non-condensing environment. Installing Debian or HAOS erases the machine's previous system.
+**Before wiping Windows on either machine:** boot a Debian live USB (home) or the HAOS installer (cottage) and check that networking, storage and the power-on settings work. Installing Debian or HAOS erases the previous system.
+
+**Home laptop as a server:**
+- **Network:** prefer wired Ethernet, through a USB-C adapter if the laptop has no RJ45 port; Wi-Fi works but is less dependable for a server.
+- **Lid closed:** set `HandleLidSwitch=ignore` (and the docked/external-power variants) in `/etc/systemd/logind.conf`, so closing the lid does not suspend the machine. Disable suspend and hibernate.
+- **Battery:** the battery bridges short power cuts like a small UPS. If the BIOS offers a charge limit or battery-health mode, turn it on, since the laptop stays plugged in all the time. Check now and then that the battery is not swelling.
+- **Kernel:** the Ryzen AI 300 series is recent hardware; if Debian's stock kernel misses the Wi-Fi or graphics driver, use the Debian backports kernel.
+- **Restart after power loss:** a laptop does not usually power on by itself after the battery runs flat. Check for a BIOS option (for example power-on when AC is connected) and otherwise accept that a long outage needs a button press.
+
+**Cottage HP MP9 G4:** set the HP BIOS to power on after AC loss, wire it to the BE230, and keep it somewhere dry; the cottage stays at about 5 °C in winter, which is within normal operating range, but avoid condensation when warming up from cold.
 
 ## Remote access and security
 
-Phones and the desktop reach Villa Kuppis through [Tailscale](https://tailscale.com/pricing) with Serve; nothing is exposed to the public internet. The cottage Home Assistant is reachable only from the home mini-PC over the tailnet, ideally limited by Tailscale access rules.
+Phones and the desktop reach Villa Kuppis through [Tailscale](https://tailscale.com/pricing) with Serve; nothing is exposed to the public internet. The cottage Home Assistant is reachable only from the home server over the tailnet, ideally limited by Tailscale access rules.
 
 - Each Home Assistant is a separate controller with its own credentials. Villa Kuppis uses a site-specific long-lived access token, stored outside Git and outside user-visible backups, with rotation and revocation documented.
 - Identity: today's Tailscale `Tailscale-User-*` header trust was designed for Windows localhost; after the move to a container it must be re-checked (Host, Origin, proxy trust, CSRF) before it is relied on.

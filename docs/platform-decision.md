@@ -8,13 +8,13 @@ Status: decided by the owner, 20 October 2026, revision 6 (two-site Home Assista
 - **Pumps:** Home Assistant's [MELCloud Home integration](https://www.home-assistant.io/integrations/melcloud_home) on the home Home Assistant Container, after a parity test against today's `aiomelcloudhome` client (H1.3). If Home Assistant cannot keep the cooling-only, never-change-mode semantics, the direct client stays for the pumps while home Home Assistant takes future devices.
 - **Cottage:** Mill Gen 4 heaters and ALPSTUGA sensors on the cottage Home Assistant OS through its [Matter Server](https://www.home-assistant.io/integrations/matter). Devices are commissioned into Google Home and shared to Home Assistant (Matter multi-admin), so the Google speaker provides Thread; Home Assistant uses third-party border routers only to reach the Thread network.
 - **Clients:** the Villa Kuppis web app in a browser, optionally as a PWA. No Kotlin app, APK, Google Cloud project or OAuth test users.
-- **Between sites:** Tailscale from the home mini-PC to the cottage Home Assistant API. No cross-site Matter fabric, routed multicast or forwarded ports.
+- **Between sites:** Tailscale from the home server to the cottage Home Assistant API. No cross-site Matter fabric, routed multicast or forwarded ports.
 
 ## How each device is reached
 
 | Job | Where |
 | --- | --- |
-| Prices, forecast, learning, optimizer, plans, history, settings | Villa Kuppis on the home mini-PC |
+| Prices, forecast, learning, optimizer, plans, history, settings | Villa Kuppis on the home server |
 | Reading and commanding the pumps | Home Home Assistant (direct client until H1.5) |
 | Reading and commanding the cottage | Cottage Home Assistant, through its API over Tailscale |
 | Keeping the cottage safe when the link is down | Cottage Home Assistant's local controller and watchdog |

@@ -4,7 +4,7 @@ Answers go into the relevant design doc; then remove the question here. Never se
 
 Two-site Home Assistant (20 October 2026), none blocking the documentation or the mocked gateway:
 
-1. **Mini-PC models** for home and cottage (refurbished business mini-PCs; see the [minimum](architecture.md#deployment)).
+1. ~~Hardware~~ Settled 20 October 2026: HP MP9 G4 mini-PC at the cottage (HAOS), HP OmniBook laptop at home (Debian + Docker). See [deployment](architecture.md#deployment).
 2. **`Automaatio` and the cottage's safe fallback:** proposed rule: switching `Automaatio` off stops economic control, while the cottage's local frost and safe-maintenance fallback keeps running. Confirm, and the UI wording.
 3. **Safe fallback setpoint** per cottage room, once the heaters' real minimum over Matter is known (H2.1).
 4. **The partly work-managed phone:** does its VPN policy allow Tailscale? Test before H3.1.
@@ -13,7 +13,7 @@ Two-site Home Assistant (20 October 2026), none blocking the documentation or th
 
 - Name Villa Kuppis; public repository [Vkuparin/villa-kuppis](https://github.com/Vkuparin/villa-kuppis) under Apache License 2.0. Finnish UI; technical docs in English.
 - The goal is one app instead of many; take the simplest working route to each device, cloud included.
-- Two-site Home Assistant (20 October 2026): Villa Kuppis and Home Assistant Container on an always-on home mini-PC (Debian + Compose), Home Assistant OS on a cottage mini-PC. Browser/PWA, no Android app. Tailscale between browsers, the home server and the cottage Home Assistant (free plan). Until the cutover, the service runs on the home Windows 11 PC.
+- Two-site Home Assistant (20 October 2026): Villa Kuppis and Home Assistant Container on an always-on home server (Debian + Compose), Home Assistant OS on a cottage mini-PC. Browser/PWA, no Android app. Tailscale between browsers, the home server and the cottage Home Assistant (free plan). Until the cutover, the service runs on the home Windows 11 PC.
 - Household members use the app with full control, signed in to Tailscale with their own Google accounts. No separate app login. Site health and stale data shown in the web app.
 - One Home Assistant per site on its own mini-PC (replaces "no Home Assistant or cottage computer"). No Premium.
 - Home: three indoor units (LN25 on outdoor unit 1; LN35 and LN25 on outdoor unit 2), all in MELCloud Home and controlled through its cloud. Summer cooling matters most; radiators are geothermal and outside our control.

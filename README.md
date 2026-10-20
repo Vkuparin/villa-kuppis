@@ -2,7 +2,7 @@
 
 A personal Finnish-language home automation app that brings the home and cottage devices into one app.
 
-**Status: the home pump service and Finnish web app run unattended on the owner's Windows PC**, with controls, cooling automation and its optimizer, an event log and pump, outdoor-temperature and spot-price history. **Next: the two-site Home Assistant design** (decided 20 October 2026): Villa Kuppis moves to an always-on home mini-PC next to a Home Assistant Container, and a cottage mini-PC runs Home Assistant OS for the Matter heaters and sensors; there will be no Android app. Start with the [architecture](docs/architecture.md), the [cottage plan](docs/cottage.md), [spot-price automation](docs/spot-price.md) and the [0.3.0 cards](docs/tasks/0.3.0.md).
+**Status: the home pump service and Finnish web app run unattended on the owner's Windows PC**, with controls, cooling automation and its optimizer, an event log and pump, outdoor-temperature and spot-price history. **Next: the two-site Home Assistant design** (decided 20 October 2026): Villa Kuppis moves to an always-on home server next to a Home Assistant Container, and a cottage mini-PC runs Home Assistant OS for the Matter heaters and sensors; there will be no Android app. Start with the [architecture](docs/architecture.md), the [cottage plan](docs/cottage.md), [spot-price automation](docs/spot-price.md) and the [0.3.0 cards](docs/tasks/0.3.0.md).
 
 Repository: [Vkuparin/villa-kuppis](https://github.com/Vkuparin/villa-kuppis). The project is based on the owner's template and contains no private template history. See the [setup record](docs/setup.md) for verification and environment limitations.
 

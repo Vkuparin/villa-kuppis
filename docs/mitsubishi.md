@@ -18,7 +18,7 @@ Supplied identifiers, one per indoor unit: `LN25VGHZ2LU`, `LN35VG2WLU`, `LN25VG2
 
 ## Routes
 
-One route for every unit: the MELCloud Home cloud. All three units are in the owner's MELCloud Home app. Today Villa Kuppis uses its own `aiomelcloudhome` client; the planned route is Home Assistant's MELCloud Home integration on the home mini-PC, with the direct client kept as rollback.
+One route for every unit: the MELCloud Home cloud. All three units are in the owner's MELCloud Home app. Today Villa Kuppis uses its own `aiomelcloudhome` client; the planned route is Home Assistant's MELCloud Home integration on the home server, with the direct client kept as rollback.
 
 **MAC-597IFB-E (LN25 upstairs):** MELCloud Home's current adapter. Mitsubishi says it needs continuous internet; there is no known local API, and `pymitsubishi` does not support it. Cloud only.
 

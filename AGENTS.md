@@ -4,7 +4,7 @@ Project: Villa Kuppis.
 
 Purpose: A personal Finnish-language home automation app that brings the home and cottage devices into one app.
 
-Stack: Python 3.13 and SQLite for the PC service, a Finnish web app served by the standard-library HTTP server, aiomelcloudhome 0.3.1 for pumps, and tzdata for Europe/Helsinki on Windows. FMI observations use the standard-library HTTP/XML client. Planned (decided 2026-10-20): one Home Assistant per site as device gateway, on two always-on mini-PCs: home Debian + Docker Compose with Villa Kuppis and Home Assistant Container (MELCloud Home), cottage Home Assistant OS with the Matter Server; Tailscale between browsers, the home server and the cottage Home Assistant; browser/PWA only, no Android app. Update this line when the runtime, framework or key libraries change.
+Stack: Python 3.13 and SQLite for the PC service, a Finnish web app served by the standard-library HTTP server, aiomelcloudhome 0.3.1 for pumps, and tzdata for Europe/Helsinki on Windows. FMI observations use the standard-library HTTP/XML client. Planned (decided 2026-10-20): one Home Assistant per site as device gateway, on two always-on machines: home HP OmniBook laptop with Debian + Docker Compose with Villa Kuppis and Home Assistant Container (MELCloud Home), cottage HP MP9 G4 mini-PC with Home Assistant OS and the Matter Server; Tailscale between browsers, the home server and the cottage Home Assistant; browser/PWA only, no Android app. Update this line when the runtime, framework or key libraries change.
 
 Codex, Hermes and Claude Code (through `CLAUDE.md`) all read this file. This is a hobby project: move quickly, keep process small, and ask the owner only about real product choices.
 
