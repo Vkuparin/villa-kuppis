@@ -1111,6 +1111,11 @@ class PumpService:
         self._weather_thread: threading.Thread | None = None
         # The cottage site (card H2.3): built from the data directory.
         self.cottage = cottage_factory(self._data_dir) if cottage_factory else None
+        if self.cottage is not None:
+            settings_store = SettingsStore(self.store.path)
+            self.cottage.configure_targets(
+                prices_db=self._prices_db, overrides=settings_store.overrides,
+                automation_on=self.automation.automation_on)
         self._closed = False
 
     # -- lifecycle --

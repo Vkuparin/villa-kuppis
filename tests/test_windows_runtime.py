@@ -8,6 +8,7 @@ import runpy
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 import xml.etree.ElementTree as ET
@@ -322,6 +323,10 @@ class RuntimeTests(unittest.TestCase):
                 run(config, stop_event=stop, server_factory=lambda *a, **k: server,
                     backup_factory=lambda *a: mock.Mock(), price_factory=prices)
             self.assertEqual(live.call_args.kwargs["automation_interval"], 60.0)
+            # The price loop runs in its own thread, which may start late.
+            deadline = time.monotonic() + 5
+            while not prices.called and time.monotonic() < deadline:
+                time.sleep(0.01)
             prices.assert_called_once()
             demo_prices = mock.Mock()
             run(Config(Path(temp)/"d2", Path(temp)/"b2"), demo=True, stop_event=threading.Event(),

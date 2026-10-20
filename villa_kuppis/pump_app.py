@@ -12,6 +12,8 @@ fully offline) plus a small JSON API on top of PumpService:
 * GET  /api/plan      today's cooling plan (card F4.1)
 * GET  /api/rooms     learned room rates and the FMI forecast (card F5.1)
 * GET  /api/cottage   cottage rooms, readings and connection (card H2.3, read-only)
+* GET/POST /api/visit  cottage visit: state and plan; start {"arrival", "target", "rooms"} (card F4.3)
+* POST /api/visit/end  end the active visit
 * GET  /api/sites     connection health of each Home Assistant site
 * POST /api/settings  {"scope", "key", "value" | "reset"} (card F3.5)
 * GET/POST /api/away  home-away button, {"away": bool} (card F6.1)
@@ -56,6 +58,7 @@ from .pump_probe import FakeClient, _unit_payload
 from . import settings as app_settings
 from . import cottage as cottage_ui
 from .cottage import CottageSite, FakeSiteGateway
+from .visit import VisitError
 from .pump_service import MAX_ACTOR_LENGTH, PumpService, make_live_service
 from .plan_ui import SCRIPT as _PLAN_SCRIPT
 from .plan_ui import SECTION_HTML as _PLAN_HTML
@@ -87,7 +90,8 @@ DEMO_UNITS = (
 
 def _demo_cottage(data_dir) -> CottageSite:
     gateway = FakeSiteGateway()
-    return CottageSite(data_dir, gateway, gateway.bindings, sample_interval=5.0)
+    return CottageSite(data_dir, gateway, gateway.bindings, sample_interval=5.0,
+                       target_interval=5.0)
 
 
 def make_demo_service(data_dir, *, poll_interval: float = 5.0,
@@ -504,6 +508,7 @@ function changeText(action, requested) {
   switch (action) {
     case "setpoint": return "Tavoitelämpötila → " + fmtTemp(requested);
     case "mode": return "Toimintatila → " + modeName(requested);
+    case "target": return "Mökin tavoite → " + fmtTemp(parseFloat(requested));
     case "fan": return "Puhallus → " + fanName(requested);
     case "power": return requested ? "Laitteen päälle" : "Laitteen pois päältä";
     default: return action;
@@ -1429,11 +1434,15 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             self._json(200, self.app.service.cottage_view())
         elif parts.path == "/api/sites":
             self._json(200, self.app.service.sites_health())
+        elif parts.path == "/api/visit":
+            cottage = self._cottage_or_error()
+            if cottage is not None:
+                self._json(200, cottage.visit_view())
         elif parts.path == "/api/identity":
             self._json(200, {"actor": identity["actor"],
                              "display_name": identity["display_name"],
                              "source": identity["source"]})
-        elif parts.path in ("/api/command", "/api/prices/refresh"):
+        elif parts.path in ("/api/command", "/api/prices/refresh", "/api/visit/end"):
             self._json(405, {"error": "method_not_allowed",
                              "detail": "use POST for this path"})
         elif parts.path.startswith("/api/"):
@@ -1474,6 +1483,12 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
                 return
             self._json(200, self.app.service.set_automation(body["on"],
                                                             identity["actor"]))
+        elif parts.path == "/api/visit":
+            self._post_visit(identity)
+        elif parts.path == "/api/visit/end":
+            cottage = self._cottage_or_error()
+            if cottage is not None:
+                self._json(200, cottage.end_visit())
         elif parts.path in ("/", "/api/view", "/api/events", "/api/history",
                             "/api/identity", "/api/plan", "/api/rooms",
                             "/api/cottage", "/api/sites"):
@@ -1486,6 +1501,28 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
                              "detail": "unknown API path"})
         else:
             self._send(404, b"not found", "text/plain; charset=utf-8")
+
+    def _cottage_or_error(self):
+        cottage = self.app.service.cottage
+        if cottage is None:
+            self._json(404, {"error": "not_configured",
+                             "detail": "Mökkiä ei ole otettu käyttöön."})
+        return cottage
+
+    def _post_visit(self, identity) -> None:
+        cottage = self._cottage_or_error()
+        if cottage is None:
+            return
+        body = self._read_json_object()
+        if body is None:
+            return
+        try:
+            result = cottage.start_visit(body.get("arrival"), body.get("target"),
+                                         body.get("rooms"), identity["actor"])
+        except VisitError as error:
+            self._json(400, {"error": "bad_body", "detail": str(error)})
+            return
+        self._json(200, result)
 
     def _read_json_object(self) -> dict | None:
         """Parse the JSON object body, or answer the error and return None."""

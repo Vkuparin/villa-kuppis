@@ -30,17 +30,21 @@ import logging
 import math
 import sqlite3
 import threading
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 from urllib.parse import urlsplit
 
+from .cottage_targets import ACTOR as PLAN_ACTOR
+from .cottage_targets import CottageTargetSender
 from .credential_file import read_token_file
 from .ha_gateway import (DEFAULT_ENTITY_STALE_AFTER, Binding, BindingStore,
                          HomeAssistantGateway)
 from .pump_service import (DB_FILENAME, HISTORY_INTERVAL_SECONDS, _iso,
                            _to_epoch)
+from .visit import MAX_TARGET, MIN_TARGET, VisitError, VisitPlan, VisitStore
 
 SITE_ID = "cottage"
 SITE_LABEL = "Mökki"
@@ -52,6 +56,17 @@ _ROLE_BY_CLASS = {"temperature": "temperature", "humidity": "humidity",
 ACTOR_CONTROLLER = "Mökin ohjain"
 ACTOR_MANUAL = "käsin"
 DEFAULT_SAMPLE_INTERVAL = 15.0
+DEFAULT_TARGET_INTERVAL = 60.0     # price targets are sent at most this often
+VISITS_DB = "visits.db"
+PLAN_REASONS = {"base": "Perustaso", "threshold": "Hintaraja", "noprice": "Ei hintaa",
+                "visit": "Vierailu"}
+VISIT_ERRORS = (
+    ("arrival time needs", "Saapumisajalla on oltava aikavyöhyke."),
+    ("arrival time must be in the future", "Saapumisajan on oltava tulevaisuudessa."),
+    ("arrival time must be within", "Saapumisaika saa olla enintään 14 päivän päässä."),
+    ("target must be", f"Tavoitteen on oltava {MIN_TARGET:g}–{MAX_TARGET:g} °C."),
+    ("choose at least one room", "Valitse vähintään yksi huone."),
+)
 # Worst first: the state shown for a room is its worst reading.
 _STATUS_ORDER = ("missing", "unavailable", "stale", "unknown", "ok")
 _CONNECTION = {"ok": "ok", "stale": "stale", "auth_failed": "auth_failed"}
@@ -270,7 +285,8 @@ class CottageSite:
 
     def __init__(self, data_dir, gateway, bindings: Callable[[], list], *,
                  now=utc_now, sample_interval: float = DEFAULT_SAMPLE_INTERVAL,
-                 on_close: Callable[[], None] | None = None):
+                 on_close: Callable[[], None] | None = None,
+                 target_interval: float = DEFAULT_TARGET_INTERVAL):
         self.site_id = SITE_ID
         self._gateway = gateway
         self._bindings = bindings
@@ -278,11 +294,21 @@ class CottageSite:
         self._sample_interval = sample_interval
         self._on_close = on_close
         self._store = CottageStore(Path(data_dir) / DB_FILENAME)
+        self._visits = VisitStore(Path(data_dir) / VISITS_DB)
+        self._target_interval = float(target_interval)
+        self._targets_cfg: dict | None = None
+        self._sender: CottageTargetSender | None = None
+        self._sender_map: dict | None = None
+        self._tracked: dict[str, tuple] = {}     # room -> (request_id, target, revision)
+        self._acked: dict[str, str] = {}         # room -> time of the last acknowledgement
+        self._logged: set = set()
+        self._target_lock = threading.Lock()
         self._known: frozenset = frozenset()
         self._roles: dict[str, str] = {}   # device id -> role seen with a reading
         self._sample_lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._target_thread: threading.Thread | None = None
 
     # -- lifecycle --
 
@@ -294,16 +320,24 @@ class CottageSite:
         self._thread = threading.Thread(target=self._loop, name="cottage-sampler",
                                         daemon=True)
         self._thread.start()
+        if self._targets_cfg is not None:
+            self._target_thread = threading.Thread(target=self._target_loop,
+                                                   name="cottage-targets", daemon=True)
+            self._target_thread.start()
 
     def stop(self) -> None:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=10.0)
             self._thread = None
+        if self._target_thread is not None:
+            self._target_thread.join(timeout=10.0)
+            self._target_thread = None
         try:
             self._gateway.stop()
         finally:
             self._store.close()
+            self._visits.close()
             if self._on_close is not None:
                 self._on_close()
 
@@ -314,6 +348,140 @@ class CottageSite:
             except Exception as error:
                 logging.error("Cottage sampling failed: %s", type(error).__name__)
             self._stop.wait(self._sample_interval)
+
+    # -- price targets and visits (cards H2.4, F4.3) --
+
+    def configure_targets(self, *, prices_db, overrides: Callable[[], dict],
+                          automation_on: Callable[[], bool]) -> None:
+        """Enable the price target sender; call before ``start``."""
+        self._targets_cfg = {"prices_db": Path(prices_db), "overrides": overrides,
+                             "automation_on": automation_on}
+
+    def _target_loop(self) -> None:
+        while not self._stop.wait(self._target_interval):
+            try:
+                self.tick_targets()
+            except Exception as error:
+                logging.error("Cottage target tick failed: %s", type(error).__name__)
+
+    def _ensure_sender(self) -> CottageTargetSender | None:
+        """The sender for the rooms whose status sensor is bound (rebuilt when that changes)."""
+        if self._targets_cfg is None:
+            return None
+        mapping = {b.room: b.device_id for b in self._bindings()
+                   if b.room in ROOMS and role_of(b) == "status"}
+        if mapping != self._sender_map:
+            missing = sorted(set(ROOMS) - set(mapping))
+            if missing:
+                logging.warning("Cottage price targets skipped for rooms without a "
+                                "status sensor binding: %s", ", ".join(missing))
+            self._sender_map = mapping
+            self._sender = (CottageTargetSender(
+                self._gateway, mapping, now=self._now, visits=self._visits,
+                **self._targets_cfg) if mapping else None)
+        return self._sender
+
+    def tick_targets(self) -> list[dict]:
+        """Send the due targets and log failed writes; returns the commands sent."""
+        with self._target_lock:
+            sender = self._ensure_sender()
+            if sender is None:
+                return []
+            sent = sender.tick()
+            for room, cmd in zip(self._rooms_of(sender, sent), sent):
+                self._tracked[room] = (cmd["request_id"], cmd["value"]["target"],
+                                       cmd["value"]["revision"])
+            self._collect()
+            return sent
+
+    @staticmethod
+    def _rooms_of(sender, sent) -> list:
+        return [cmd["value"]["room"] for cmd in sent]
+
+    def _collect(self) -> None:
+        """Note acknowledgements; failed or unknown writes go to the event log.
+
+        Confirmed writes are not logged (a heartbeat every period would flood it).
+        """
+        for room, (request_id, target, revision) in list(self._tracked.items()):
+            cmd = self._gateway.command(request_id)
+            if cmd is None:
+                del self._tracked[room]
+            elif cmd["state"] == "confirmed":
+                self._acked[room] = cmd.get("finished_at") or self._now().isoformat()
+                del self._tracked[room]
+            elif cmd["state"] in ("failed", "unknown"):
+                del self._tracked[room]
+                key = (room, revision, cmd["state"])
+                if key in self._logged:
+                    continue
+                self._logged.add(key)
+                if len(self._logged) > 200:
+                    self._logged.clear()
+                text = ("Tavoitteen kirjoitus epäonnistui" if cmd["state"] == "failed"
+                        else "Tavoitteen kirjoitusta ei voitu varmistaa")
+                self._store.add_event(int(self._now().timestamp()), SITE_ID, room,
+                                      PLAN_ACTOR, "target", None, f"{target:g}",
+                                      f"{text}: {cmd.get('detail') or '-'}")
+
+    def _refresh_plan(self) -> None:
+        with self._target_lock:
+            sender = self._ensure_sender()
+            if sender is not None:
+                sender.preview()
+
+    def visit_view(self) -> dict:
+        visit = self._visits.active()
+        if visit is None:
+            return {"visit": None, "plan": None}
+        plan = self._sender.visit_plan if self._sender is not None else None
+        if plan is None and visit.heat_start is not None:
+            plan = VisitPlan(visit.heat_start, "started", None)
+        return {
+            "visit": {"arrival": visit.arrival.isoformat(), "target": visit.target_c,
+                      "rooms": list(visit.rooms), "created_by": visit.created_by,
+                      "heat_start": visit.heat_start.isoformat() if visit.heat_start else None},
+            "plan": ({"start": plan.start.isoformat(), "reason": plan.reason}
+                     if plan is not None else None)}
+
+    def start_visit(self, arrival, target, rooms, actor: str) -> dict:
+        """Start a visit from request values; raises ``VisitError`` (Finnish message)."""
+        if not isinstance(arrival, str):
+            raise VisitError("Saapumisaika puuttuu.")
+        try:
+            arrival_dt = datetime.fromisoformat(arrival)
+        except ValueError:
+            raise VisitError("Saapumisaika ei ole kelvollinen.") from None
+        if isinstance(target, bool) or not isinstance(target, (int, float)) \
+                or not math.isfinite(target):
+            raise VisitError("Tavoitteen on oltava luku.")
+        if not isinstance(rooms, list) or not all(isinstance(r, str) for r in rooms) \
+                or not set(rooms) <= set(ROOMS):
+            raise VisitError("Tuntematon huone.")
+        try:
+            self._visits.start(arrival_dt, float(target), [r for r in ROOMS if r in rooms],
+                               actor, self._now())
+        except VisitError as error:
+            message = str(error)
+            raise VisitError(next((fi for key, fi in VISIT_ERRORS if message.startswith(key)),
+                                  "Vierailua ei voitu aloittaa.")) from None
+        self._refresh_plan()
+        return self.visit_view()
+
+    def end_visit(self) -> dict:
+        self._visits.end(self._now())
+        self._refresh_plan()
+        return self.visit_view()
+
+    def _plan_view(self, room_id: str) -> dict | None:
+        sender = self._sender
+        target = sender.last.get(room_id) if sender is not None else None
+        if target is None:
+            return None
+        return {"target": target.target_c, "reason": target.reason,
+                "reason_text": PLAN_REASONS.get(target.reason, target.reason),
+                "price": float(target.price_c_kwh) if target.price_c_kwh is not None else None,
+                "acked_at": self._acked.get(room_id)}
 
     def _role(self, binding: Binding, state: dict | None = None) -> str | None:
         role = role_of(binding, state) or self._roles.get(binding.device_id)
@@ -401,8 +569,11 @@ class CottageSite:
         bindings = [b for b in self._bindings() if b.room in ROOMS]
         snapshot = self._gateway.snapshot()
         rooms = []
+        with self._target_lock:
+            self._collect()
         for room_id, name in ROOMS.items():
             room = {"id": room_id, "name": name, "heaters": [], "status": None,
+                    "plan": self._plan_view(room_id),
                     **{role: None for role in SENSOR_ROLES}}
             statuses = []
             for binding in sorted((b for b in bindings if b.room == room_id),
@@ -432,7 +603,9 @@ class CottageSite:
                             "valid_until", "manual_until", "manual_by")}}
             room["state"] = _worst(statuses) if statuses else "unbound"
             rooms.append(room)
-        return {"configured": True, "site": self.health(), "rooms": rooms}
+        automation = self._targets_cfg["automation_on"]() if self._targets_cfg else False
+        return {"configured": True, "site": self.health(), "rooms": rooms,
+                "automation_on": bool(automation)}
 
     def history(self, room_id: str, start, end, max_points: int) -> dict:
         """Series for one room: ALPSTUGA temperature, target in force, heaters."""
@@ -500,6 +673,35 @@ class FakeSiteGateway:
     def __init__(self, *, now=utc_now):
         self._now = now
         self._started = False
+        self._lock = threading.Lock()
+        self._written: dict[str, dict] = {}     # room -> the integration's last accepted write
+        self._commands: dict[str, dict] = {}
+
+    def submit_service(self, device_id, domain, service, data, actor, confirm, *,
+                       target_entity: bool = False) -> dict:
+        """Act like the cottage integration: accept a set_target and report it back."""
+        now = self._now()
+        cmd = {"request_id": uuid.uuid4().hex, "site_id": SITE_ID, "device_id": device_id,
+               "action": f"{domain}.{service}", "value": dict(data), "actor": actor,
+               "state": "confirmed", "detail": "", "created_at": now.isoformat(),
+               "finished_at": now.isoformat()}
+        with self._lock:
+            if not self._started:
+                cmd.update(state="failed", detail="Home Assistant is not connected")
+            else:
+                until = now + timedelta(minutes=float(data.get("valid_minutes", 45)))
+                self._written[data["room"]] = {
+                    "target": float(data["target"]), "revision": data["revision"],
+                    "valid_until": until}
+            self._commands[cmd["request_id"]] = cmd
+            while len(self._commands) > 50:
+                self._commands.pop(next(iter(self._commands)))
+        return dict(cmd)
+
+    def command(self, request_id: str) -> dict | None:
+        with self._lock:
+            cmd = self._commands.get(request_id)
+            return dict(cmd) if cmd else None
 
     def bindings(self) -> list:
         return list(DEMO_BINDINGS)
@@ -537,6 +739,18 @@ class FakeSiteGateway:
                 "drive": None, "revision": None, "requested_target": None,
                 "valid_until": None, "manual_until": None, "manual_by": None}),
         }
+        with self._lock:
+            for room, write in self._written.items():
+                if write["valid_until"] <= now:
+                    continue
+                sensor = f"{room}-status"
+                temp = large_temp if room == "large" else small_temp
+                status[sensor] = (max(write["target"], 7.0), {
+                    "mode": "follow", "reason": f"room {temp:g} °C, target {write['target']:g} °C",
+                    "drive": "boost" if temp < write["target"] else "low",
+                    "revision": write["revision"], "requested_target": write["target"],
+                    "valid_until": write["valid_until"].isoformat(),
+                    "manual_until": None, "manual_by": None})
         out = {}
         for binding in DEMO_BINDINGS:
             state = {"device_id": binding.device_id, "site_id": SITE_ID,
@@ -569,6 +783,24 @@ SECTION_HTML = r"""
     <h2>Mökki <span id="cottage-conn" class="badge info"></span></h2>
     <p id="cottage-note" class="detail"></p>
     <div id="cottage-rooms" class="cottage-rooms"></div>
+    <article class="card visit" id="cottage-visit">
+      <header class="card-head"><h3>Vierailu</h3></header>
+      <div id="visit-state"></div>
+      <div class="visit-form">
+        <label title="Milloin saavut mökille (Suomen aika). Ei oletusta.">Saapuminen
+          <input type="datetime-local" id="visit-arrival"></label>
+        <label title="Huoneiden tavoitelämpötila vierailun ajaksi. Oletus 21 °C, sallittu 5–25 °C.">Tavoite (°C)
+          <input type="number" id="visit-target" value="21" min="5" max="25" step="0.5"></label>
+        <fieldset title="Huoneet, jotka lämmitetään vierailua varten. Oletuksena molemmat.">
+          <legend>Huoneet</legend>
+          <label><input type="checkbox" id="visit-large" checked> Iso huone</label>
+          <label><input type="checkbox" id="visit-small" checked> Pieni huone</label>
+        </fieldset>
+        <button type="button" id="visit-start"
+          title="Aloittaa vierailun. Uusi vierailu korvaa käynnissä olevan.">Aloita vierailu</button>
+      </div>
+      <p id="visit-msg" class="detail" role="status"></p>
+    </article>
   </section>
 """
 
@@ -582,6 +814,17 @@ section.cottage h2 { margin: 0 0 .6rem; font-size: 1.15rem; }
 .cottage-rooms .card.offline { border-color: var(--err); }
 .cottage-rooms .heater { display: flex; justify-content: space-between; gap: .6rem;
                          padding: .15rem 0; font-size: .92rem; color: var(--text2); }
+section.cottage .visit { margin-top: 1rem; }
+.visit-form { display: flex; flex-wrap: wrap; gap: .8rem 1.2rem; align-items: flex-end; }
+.visit-form label, .visit-form fieldset { display: flex; flex-direction: column; gap: .2rem;
+                                          font-size: .92rem; color: var(--text2); }
+.visit-form fieldset { border: 0; padding: 0; margin: 0; flex-direction: row; flex-wrap: wrap;
+                       gap: .2rem .8rem; }
+.visit-form fieldset legend { padding: 0; margin-bottom: .2rem; }
+.visit-form fieldset label { flex-direction: row; align-items: center; gap: .3rem; }
+#visit-state { margin-bottom: .6rem; }
+#visit-state .visit-line { margin: .15rem 0; }
+#visit-state button { margin-top: .4rem; }
 .cottage-rooms .value.old { color: var(--text3); text-decoration: line-through; }
 """
 
@@ -613,6 +856,9 @@ SCRIPT = r"""
   var $conn = document.getElementById("cottage-conn");
   var $note = document.getElementById("cottage-note");
   var $rooms = document.getElementById("cottage-rooms");
+  var AUTOMATION_ON = true;
+  var ROOM_NAMES = { large: "Iso huone", small: "Pieni huone" };
+  var LATEST = null;
   var num = new Intl.NumberFormat("fi-FI", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
   var clock = new Intl.DateTimeFormat("fi-FI", { timeZone: "Europe/Helsinki",
     hour: "2-digit", minute: "2-digit" });
@@ -670,6 +916,16 @@ SCRIPT = r"""
         st.reason || "", "Lämpötila, johon mökin ohjain pyrkii juuri nyt."));
       c.appendChild(row("Tila", mode, ok, (st.reason || "") + (st.mode && MODE_HELP[st.mode] ?
         (st.reason ? " – " : "") + MODE_HELP[st.mode] : ""), "Mökin ohjaimen toimintatila."));
+      var plan = room.plan;
+      if (plan) {
+        c.appendChild(row("Suunniteltu tavoite", temp(plan.target) + " · " + plan.reason_text, true,
+          (plan.price === null ? "Jakson hintaa ei ole tiedossa." : "Jakson hinta " + num.format(plan.price) + " c/kWh (alv mukana).") +
+          (AUTOMATION_ON ? "" : " Automaatio on pois päältä, joten tavoitetta ei lähetetä mökille."),
+          "Hinnan ja vierailun perusteella suunniteltu tavoite tälle jaksolle."));
+        c.appendChild(row("Mökki kuitannut", plan.acked_at ? when(plan.acked_at) : "ei vielä", !!plan.acked_at,
+          plan.acked_at ? clock.format(new Date(plan.acked_at)) : "Mökki ei ole vielä kuitannut tämän käynnistyksen jälkeen yhtään tavoitetta.",
+          "Milloin mökin ohjain viimeksi vahvisti saaneensa tavoitteen."));
+      }
       if (st.mode === "manual" && st.manual_until)
         c.appendChild(el("p", "detail", "Käsiohjaus päättyy klo " + clock.format(new Date(st.manual_until)) + "."));
       else if (st.valid_until && st.mode !== "fallback")
@@ -692,6 +948,8 @@ SCRIPT = r"""
   function render(data) {
     if (!data.configured) { $section.hidden = true; return; }
     $section.hidden = false;
+    AUTOMATION_ON = data.automation_on !== false;
+    LATEST = data;
     var conn = CONNECTION[data.site.connection] || CONNECTION.offline;
     $conn.className = "badge " + conn[0];
     $conn.textContent = "Yhteys mökkiin: " + conn[1];
@@ -705,9 +963,100 @@ SCRIPT = r"""
       setExtraHistUnits(data.rooms.map(function (r) {
         return { id: "cottage:" + r.id, name: "Mökki: " + r.name }; }));
   }
+  // --- visit card (card F4.3): the form is built once so refreshes never reset it ---
+  var $vState = document.getElementById("visit-state");
+  var $vMsg = document.getElementById("visit-msg");
+  var $vArrival = document.getElementById("visit-arrival");
+  var VISIT = null;
+  var stamp = new Intl.DateTimeFormat("fi-FI", { timeZone: "Europe/Helsinki", weekday: "short",
+    day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit" });
+  var HEAT_HELP = "Lämmitykseen oletetaan 12 tuntia, kunnes huoneiden lämpenemisnopeudet on opittu. " +
+    "Aloitus valitaan edullisimmaksi muutaman tunnin ikkunasta tunnettujen hintojen mukaan.";
+  var PLAN_HELP = { cheapest: "Edullisin aloitus hintojen mukaan.",
+    fixed: "Aloitus 12 tuntia ennen saapumista (hintoja ei ollut koko ikkunalle).",
+    started: "Lämmitys on jo aloitettu." };
+  function pad(n) { return n < 10 ? "0" + n : "" + n; }
+  // A "datetime-local" value is Helsinki wall-clock time; return an ISO instant.
+  function helsinkiOffsetMs(ms) {
+    var parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Helsinki", hourCycle: "h23",
+      year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric"
+    }).formatToParts(new Date(ms));
+    var v = {};
+    parts.forEach(function (p) { v[p.type] = parseInt(p.value, 10); });
+    return Date.UTC(v.year, v.month - 1, v.day, v.hour, v.minute) - Math.floor(ms / 60000) * 60000;
+  }
+  function helsinkiToIso(text) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(text || "");
+    if (!m) return null;
+    var guess = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]);
+    var utc = guess - helsinkiOffsetMs(guess);
+    utc = guess - helsinkiOffsetMs(utc);
+    return new Date(utc).toISOString();
+  }
+  function roomReached(roomId, target) {
+    var room = LATEST && LATEST.rooms.filter(function (r) { return r.id === roomId; })[0];
+    var t = room && room.temperature;
+    if (!t) return null;
+    var fresh = t.status === "ok" && t.value !== null;
+    return { value: t.value, fresh: fresh, reached: fresh && t.value >= target - 0.5 };
+  }
+  function renderVisit() {
+    $vState.textContent = "";
+    if (!VISIT || !VISIT.visit) {
+      $vState.appendChild(el("p", "detail", "Ei käynnissä olevaa vierailua."));
+      return;
+    }
+    var v = VISIT.visit, plan = VISIT.plan;
+    if (plan) {
+      var started = plan.reason === "started" || new Date(plan.start).getTime() <= Date.now();
+      $vState.appendChild(el("p", "visit-line",
+        (started ? "Lämmitys alkoi " : "Lämmitys alkaa ") + stamp.format(new Date(plan.start)),
+        HEAT_HELP + " " + (PLAN_HELP[plan.reason] || "")));
+    }
+    $vState.appendChild(el("p", "visit-line", "Saapuminen " + stamp.format(new Date(v.arrival))));
+    $vState.appendChild(el("p", "visit-line", "Tavoite " + temp(v.target) + " · " +
+      v.rooms.map(function (r) { return ROOM_NAMES[r] || r; }).join(", "),
+      "Vierailun aloittanut: " + v.created_by));
+    var heating = v.heat_start !== null || (plan && plan.reason === "started");
+    v.rooms.forEach(function (r) {
+      var info = roomReached(r, v.target);
+      if (!heating || !info) return;
+      var text = ROOM_NAMES[r] + ": " + (info.fresh ? temp(info.value) : "lukema vanhentunut");
+      if (info.reached) text += " · Tavoite saavutettu";
+      $vState.appendChild(el("p", "visit-line", text,
+        "Tavoite katsotaan saavutetuksi vasta, kun huoneanturin tuore lukema on enintään 0,5 °C alle tavoitteen."));
+    });
+    var end = el("button", "", "Lopeta vierailu", "Lopettaa vierailun; huoneet palaavat hintaohjaukseen.");
+    end.type = "button";
+    end.addEventListener("click", function () { visitCall("/api/visit/end", {}); });
+    $vState.appendChild(end);
+  }
+  function visitCall(url, body) {
+    $vMsg.textContent = "";
+    fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body) })
+      .then(function (r) { return r.json().then(function (j) { return [r.ok, j]; }); })
+      .then(function (res) {
+        if (!res[0]) { $vMsg.textContent = res[1].detail || "Pyyntö epäonnistui."; return; }
+        VISIT = res[1];
+        renderVisit();
+      }).catch(function () { $vMsg.textContent = "Yhteys palveluun katkesi."; });
+  }
+  document.getElementById("visit-start").addEventListener("click", function () {
+    var arrival = helsinkiToIso($vArrival.value);
+    if (!arrival) { $vMsg.textContent = "Valitse saapumisaika."; return; }
+    var rooms = ["large", "small"].filter(function (r) {
+      return document.getElementById("visit-" + r).checked; });
+    visitCall("/api/visit", { arrival: arrival, target: parseFloat(document.getElementById("visit-target").value),
+      rooms: rooms });
+  });
+  function loadVisit() {
+    fetch("/api/visit").then(function (r) { return r.json(); })
+      .then(function (j) { VISIT = j; renderVisit(); }).catch(function () {});
+  }
   function load() {
     fetch("/api/cottage").then(function (r) { return r.json(); })
-      .then(render).catch(function () {});
+      .then(function (d) { render(d); if (d.configured) loadVisit(); }).catch(function () {});
   }
   load();
   setInterval(load, 10000);

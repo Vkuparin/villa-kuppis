@@ -143,9 +143,15 @@ class CottageTargetSender:
                 out[room] = RoomTarget(room, target.period_ts, value, target.price_c_kwh, "visit")
         return out
 
+    def preview(self) -> dict[str, RoomTarget]:
+        """Refresh ``last`` and ``visit_plan`` without sending anything."""
+        self.last = self.targets()
+        return self.last
+
     def tick(self) -> list[dict]:
         """Send what is due; returns the commands submitted this tick."""
         if not self._automation_on():
+            self.preview()
             return []
         if self._gateway.health()["state"] not in ("ok", "stale"):
             return []   # retried on the first tick after the reconnect
