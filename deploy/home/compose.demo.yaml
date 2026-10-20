@@ -1,0 +1,10 @@
+# Offline test of the Villa Kuppis image: demo devices, no credentials, no
+# Home Assistant. Use with compose.yaml; see README.md ("Try it offline").
+services:
+  villa-kuppis:
+    command: ["--demo"]
+    secrets: !reset []
+  homeassistant:
+    profiles: ["never"]
+
+secrets: !reset {}

@@ -44,7 +44,9 @@ expected to honour the stop event the same way.
 
 from __future__ import annotations
 
+import argparse
 import os
+import shutil
 import sqlite3
 import threading
 import time
@@ -379,3 +381,89 @@ class BackupLoop:
             if remaining <= 0.0:
                 return  # the clock jumped ahead of the target midnight
             self._wait(min(remaining, MAX_WAIT_CHUNK))
+
+
+# -- verify and restore (card H1.4) --
+
+def _integrity(path: Path) -> str:
+    """PRAGMA integrity_check of one database file: "ok" or the first problem."""
+    try:
+        conn = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=1)
+        try:
+            return str(conn.execute("PRAGMA integrity_check").fetchone()[0])
+        finally:
+            conn.close()
+    except sqlite3.Error as err:
+        return f"error: {err}"
+
+
+def verify_backup(day_dir: str | Path) -> dict:
+    """Integrity-check every .db file in a backup day (or data) directory.
+
+    Returns {file name: "ok" or a problem text}. A missing pumps.db is
+    reported under its name, since a restore without it is useless.
+    """
+    folder = Path(day_dir)
+    results = {path.name: _integrity(path) for path in sorted(folder.glob("*.db"))}
+    if PUMPS_DB not in results:
+        results[PUMPS_DB] = "missing"
+    return results
+
+
+def restore_backup(day_dir: str | Path, data_dir: str | Path, *,
+                   force: bool = False) -> dict:
+    """Copy a verified backup day into the data directory and verify the copy.
+
+    Stop the service first. Refuses a backup that fails verification, and
+    existing database files unless ``force``. Returns the verify results of
+    the restored files; raises ValueError on refusal.
+    """
+    source, target = Path(day_dir), Path(data_dir)
+    before = verify_backup(source)
+    if any(result != "ok" for result in before.values()):
+        raise ValueError("The backup failed verification: " + ", ".join(
+            f"{name}: {result}" for name, result in before.items() if result != "ok"))
+    names = [name for name in before]
+    target.mkdir(parents=True, exist_ok=True)
+    existing = [name for name in names if any(
+        (target / (name + suffix)).exists() for suffix in ("", "-wal", "-shm"))]
+    if existing and not force:
+        raise ValueError("The data directory already has " + ", ".join(existing)
+                         + "; use --force to replace it")
+    for name in names:
+        # A stale WAL from the old database would corrupt the restored one.
+        for suffix in ("-wal", "-shm"):
+            (target / (name + suffix)).unlink(missing_ok=True)
+        tmp = target / (name + TMP_SUFFIX)
+        shutil.copyfile(source / name, tmp)
+        os.replace(tmp, target / name)
+    return verify_backup(target)
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Verify or restore a Villa Kuppis backup day.")
+    commands = parser.add_subparsers(dest="command", required=True)
+    verify = commands.add_parser("verify", help="run PRAGMA integrity_check on a folder")
+    verify.add_argument("folder")
+    restore = commands.add_parser("restore", help="copy a backup day into a data folder")
+    restore.add_argument("backup_day_dir")
+    restore.add_argument("data_dir")
+    restore.add_argument("--force", action="store_true",
+                         help="replace existing database files")
+    args = parser.parse_args(argv)
+    try:
+        if args.command == "verify":
+            results = verify_backup(args.folder)
+        else:
+            results = restore_backup(args.backup_day_dir, args.data_dir, force=args.force)
+    except ValueError as err:
+        print(err)
+        return 1
+    for name, result in results.items():
+        print(f"{name}: {result}")
+    return 0 if all(result == "ok" for result in results.values()) else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

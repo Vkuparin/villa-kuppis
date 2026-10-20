@@ -1,0 +1,11 @@
+.git
+.venv
+scratch/
+tests/
+docs/
+deploy/
+__pycache__/
+*.py[cod]
+data/
+*.db*
+*.log

@@ -21,7 +21,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from villa_kuppis.backup import (COMPLETE_MARKER, HELSENKI_TZ, BackupLoop,
-                                 BackupResult, backup_once, helsinki_day)
+                                 BackupResult, backup_once, helsinki_day,
+                                 restore_backup, verify_backup)
+from villa_kuppis.backup import main as backup_main
 
 START = datetime(2026, 10, 19, 20, 30, 0, tzinfo=timezone.utc)
 # Helsinki time of START is 23:30; midnight is 30 minutes away (21:00 UTC).
@@ -465,6 +467,52 @@ class TestRestartSkip(TempDirTest):
         self.assertTrue(third.skipped)
         self.assertEqual(row_count(self.backup_dir / "2026-10-19"
                                    / "pumps.db"), 100)
+
+
+class VerifyRestoreTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name)
+        self.data_dir, self.backup_dir, self.target = (
+            root / "data", root / "backups", root / "restored")
+        self.data_dir.mkdir()
+        make_db(self.data_dir / "pumps.db", 50)
+        make_db(self.data_dir / "prices.db", 5)
+        backup_once(self.data_dir, self.backup_dir, now=START)
+        self.day = self.backup_dir / "2026-10-19"
+
+    def test_verify_reports_ok_and_detects_damage_or_missing_file(self):
+        self.assertEqual(verify_backup(self.day),
+                         {"pumps.db": "ok", "prices.db": "ok"})
+        (self.day / "prices.db").write_bytes(b"x" * 4096)
+        self.assertNotEqual(verify_backup(self.day)["prices.db"], "ok")
+        (self.day / "pumps.db").unlink()
+        self.assertEqual(verify_backup(self.day)["pumps.db"], "missing")
+
+    def test_restore_copies_and_verifies_and_refuses_to_overwrite(self):
+        results = restore_backup(self.day, self.target)
+        self.assertEqual(results, {"pumps.db": "ok", "prices.db": "ok"})
+        self.assertEqual(row_count(self.target / "pumps.db"), 50)
+        with self.assertRaises(ValueError):
+            restore_backup(self.day, self.target)
+        (self.target / "pumps.db-wal").write_bytes(b"stale")
+        restore_backup(self.day, self.target, force=True)
+        self.assertFalse((self.target / "pumps.db-wal").exists())
+
+    def test_restore_refuses_a_damaged_backup(self):
+        (self.day / "pumps.db").write_bytes(b"x" * 4096)
+        with self.assertRaises(ValueError):
+            restore_backup(self.day, self.target)
+        self.assertFalse((self.target / "pumps.db").exists())
+
+    @patch("sys.stdout", new_callable=__import__("io").StringIO)
+    def test_cli(self, _out):
+        self.assertEqual(backup_main(["verify", str(self.day)]), 0)
+        self.assertEqual(backup_main(["restore", str(self.day), str(self.target)]), 0)
+        self.assertEqual(backup_main(["restore", str(self.day), str(self.target)]), 1)
+        self.assertEqual(backup_main(["restore", str(self.day), str(self.target),
+                                      "--force"]), 0)
 
 
 if __name__ == "__main__":

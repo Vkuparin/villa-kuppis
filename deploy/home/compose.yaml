@@ -1,0 +1,33 @@
+# Home server: Villa Kuppis and Home Assistant as independent services.
+# Both use the host network so host Tailscale Serve reaches Villa Kuppis on
+# 127.0.0.1:8377 and Villa Kuppis reaches Home Assistant on 127.0.0.1:8123.
+# No ports are published. Paths come from .env (see README.md).
+name: villa-kuppis
+
+services:
+  villa-kuppis:
+    build:
+      context: ../..
+    image: villa-kuppis:local
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ${KUPPIS_CONFIG_DIR:-/srv/villa-kuppis/config}:/config:ro
+      - ${KUPPIS_DATA_DIR:-/srv/villa-kuppis/data}:/data
+      # Put this on a different disk than the data directory.
+      - ${KUPPIS_BACKUP_DIR:-/mnt/backup/villa-kuppis}:/backups
+    secrets:
+      - melcloud
+
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:2026.10.2
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      TZ: Europe/Helsinki
+    volumes:
+      - ${HA_CONFIG_DIR:-/srv/homeassistant/config}:/config
+
+secrets:
+  melcloud:
+    file: ${KUPPIS_SECRET_FILE:-/srv/villa-kuppis/secrets/melcloud.json}

@@ -12,6 +12,7 @@ import threading
 from .pump_app import DEFAULT_PLAN_INTERVAL, PumpAppServer, make_demo_service
 from .pump_service import make_live_service
 from .service import SpotPriceService
+from .credential_file import read_credentials_file
 from .weather import parse_coord_spec
 from .windows_credentials import DEFAULT_TARGET, read_credentials
 
@@ -27,13 +28,15 @@ class Config:
     weather: tuple = ()
     # Apply the price-threshold cooling plan to the pumps (off: only shown).
     plan: bool = False
+    # Absolute path of a JSON credential file; replaces Windows Credential Manager.
+    credential_file: Path | None = None
 
     @classmethod
     def load(cls, path):
         raw = json.loads(Path(path).read_text(encoding="utf-8-sig"))
         if not isinstance(raw, dict) or set(raw) - {
                 "data_dir", "backup_dir", "public_origin", "port", "credential_target",
-                "weather", "plan"}:
+                "weather", "plan", "credential_file"}:
             raise ValueError("Invalid service configuration fields")
         weather = raw.get("weather", {})
         if not isinstance(weather, dict) or set(weather) - {"home", "cottage"}:
@@ -45,10 +48,15 @@ class Config:
             raise ValueError("Invalid weather coordinates") from None
         if type(raw.get("plan", False)) is not bool:
             raise ValueError("Invalid plan setting")
+        credential_file = raw.get("credential_file")
+        if credential_file is not None and (
+                not isinstance(credential_file, str) or not Path(credential_file).is_absolute()):
+            raise ValueError("Credential file path must be absolute")
         config = cls(Path(raw["data_dir"]), Path(raw["backup_dir"]),
                      raw.get("public_origin"), raw.get("port", 8377),
                      raw.get("credential_target", DEFAULT_TARGET), sites,
-                     raw.get("plan", False))
+                     raw.get("plan", False),
+                     Path(credential_file) if credential_file else None)
         if not config.data_dir.is_absolute() or not config.backup_dir.is_absolute():
             raise ValueError("Service data and backup paths must be absolute")
         if config.data_dir.resolve() == config.backup_dir.resolve():
@@ -86,7 +94,9 @@ def run(config: Config, *, demo=False, stop_event=None, service_factory=None,
         if demo:
             service_factory = make_demo_service
         else:
-            credentials = read_credentials(config.credential_target)
+            credentials = (read_credentials_file(config.credential_file)
+                           if config.credential_file
+                           else read_credentials(config.credential_target))
             service_factory = lambda data: make_live_service(
                 data, credentials=credentials, weather_sites=dict(config.weather),
                 automation_interval=DEFAULT_PLAN_INTERVAL,
