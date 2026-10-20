@@ -24,10 +24,21 @@ Defaults are below. To use other paths, copy the names into `deploy/home/.env`
 | --- | --- |
 | `/srv/villa-kuppis/config/villa-kuppis.json` | Service config (read-only in the container) |
 | `/srv/villa-kuppis/data` | SQLite databases and service log |
-| `/mnt/backup/villa-kuppis` | Daily backups. **Mount a different disk here**, not the laptop SSD |
+| `/mnt/backup/villa-kuppis` | Daily backups. **Mount a different disk here**, not the laptop SSD: the 5 TB WD My Passport USB drive |
 | `/srv/villa-kuppis/secrets/melcloud.json` | MELCloud login |
 | `/srv/villa-kuppis/secrets/cottage-token` | Cottage Home Assistant access token |
 | `/srv/homeassistant/config` | Home Assistant config |
+
+Backup drive: the WD My Passport comes formatted for Windows/macOS. Reformat it
+as ext4 (this erases it), label it `kuppis-backup`, and mount it by label with
+`nofail` so the server still boots without it:
+
+```
+sudo mkfs.ext4 -L kuppis-backup /dev/sdX1   # check the device with lsblk first
+sudo mkdir -p /mnt/backup
+echo 'LABEL=kuppis-backup /mnt/backup ext4 defaults,nofail,x-systemd.device-timeout=10 0 2' | sudo tee -a /etc/fstab
+sudo mount /mnt/backup && sudo mkdir -p /mnt/backup/villa-kuppis
+```
 
 The container runs as UID 1000. The data and backup folders must be writable by
 that UID:

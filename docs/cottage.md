@@ -7,6 +7,7 @@
 | TP-Link NE200-Outdoor | 1 | 5G connection |
 | TP-Link Archer BE230 | 1 | Wi-Fi router; the HP MP9 is wired to it |
 | HP MP9 G4 mini-PC (Core i3-8100T, 8 GB, 256 GB NVMe) | 1 | Home Assistant OS with the Matter Server and Tailscale apps; bought 20 October 2026, not yet arrived (see [architecture](architecture.md#deployment)) |
+| Seagate 5 TB portable USB drive (STGX5000400) | 1 | Home Assistant backups, off the mini-PC's SSD; arrives 27 October 2026 |
 | Mill Invisible Gen 4 Wi-Fi heaters | 4 | Matter over Wi-Fi ([CSA-certified](https://csa-iot.org/csa_product/mill-wi-fi-panel-heater-gen4-40/)), controlled by the cottage Home Assistant |
 | IKEA ALPSTUGA | 2 | Matter-over-Thread air-quality sensors with temperature |
 | Google Home Speaker (2026) | 1 | Thread border router, voice and secondary controller ([specs](https://store.google.com/product/google_home_speaker_specs?hl=en-US)) |
