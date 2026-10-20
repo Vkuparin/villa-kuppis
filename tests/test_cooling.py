@@ -69,6 +69,14 @@ class CoolingTests(ServiceTestCase):
         self.run_plan(service)
         self.assertEqual(self._unit(service, "unit-1")["setpoint"], 21.0)
 
+    def test_precooling_switch_off_keeps_the_maximum_when_cheap(self):
+        service, _ = self.start()
+        self.set_prices(30)                       # 3 c/kWh: would precool
+        SettingsStore(f"{self.tmp}/pumps.db").set(
+            "site:home", "precool_enabled", False, "Ville")
+        self.run_plan(service)
+        self.assertEqual(self._unit(service, "unit-1")["setpoint"], 25.0)
+
     def test_expensive_switches_off_and_min_off_time_holds(self):
         service, clock = self.start()
         self.set_prices(200)                      # 20 c/kWh: above 15

@@ -330,7 +330,9 @@ class CoolingAutomation:
             models, (_observed, future), _ahead = self._service.learned_models(SITE)
             model = models.get(unit_id)
             limits = optimizer.Limits(
-                float(values["cool_max_c"]), float(values["precool_c"]),
+                float(values["cool_max_c"]),
+                float(values["precool_c"] if values["precool_enabled"]
+                      else values["cool_max_c"]),
                 float(values["low_price_c_kwh"]), float(values["high_price_c_kwh"]),
                 bool(values["cool_off_when_expensive"]), need)
             result = None if model is None else optimizer.optimize(

@@ -70,6 +70,9 @@ DEFINITIONS: tuple[Definition, ...] = (
                "%", 0, 100, help="Sähkön ALV-prosentti, jota käytetään, kun ALV-kytkin on päällä."),
     Definition("cool_max_c", "Enimmäislämpötila", "Jäähdytys", "number", 25.0,
                "°C", 15, 35, help="Lämpötila, johon huone saa nousta. Tavoite, kun hinta ei ole halpa; jäähdytys pitää huoneen tässä tai alle.", kinds=("cool",)),
+    Definition("precool_enabled", "Esijäähdytys käytössä", "Jäähdytys", "bool",
+               True, help="Kun päällä, huone jäähdytetään halpana aikana esijäähdytyslämpötilaan. Kun pois, tavoite on aina enimmäislämpötila: pumppu jäähdyttää vain, jos huone nousee sitä korkeammaksi (sopii lämmityskaudelle, jotta jäähdytys ei kilpaile pattereiden kanssa). Optimoija ei myöskään esijäähdytä.",
+               kinds=("cool",)),
     Definition("precool_c", "Esijäähdytyslämpötila", "Jäähdytys", "number",
                21.0, "°C", 15, 30, help="Tavoite halpana aikana: huone jäähdytetään etukäteen näin viileäksi, jotta pumppu voi olla kalliina aikana pidempään sammuksissa. Ei voi ylittää enimmäislämpötilaa.", kinds=("cool",)),
     Definition("cool_off_when_expensive", "Sammuta kalliilla hinnalla",
@@ -193,7 +196,8 @@ def plan_settings(overrides: Mapping[str, Mapping[str, object]], site: str,
             return {"base_temperature_c": values["cool_max_c"],
                     "rules": [{"kind": "cool",
                                "threshold_c_kwh": values["low_price_c_kwh"],
-                               "target_c": values["precool_c"]}]}
+                               "target_c": values["precool_c"]}]
+                    if values["precool_enabled"] else []}
         return {"base_temperature_c": values["heat_base_c"],
                 "rules": [
                     {"kind": "heat",
