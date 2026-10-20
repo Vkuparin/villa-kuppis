@@ -28,6 +28,8 @@ Codex, Hermes and Claude Code (through `CLAUDE.md`) all read this file. This is 
 | Learned room rates tests (synthetic rooms, fake forecast, localhost HTTP) | .venv\Scripts\python -m unittest discover -s tests -p "test_learning.py" -v |
 | Cooling optimizer tests (recorded price days, synthetic room, mock devices) | .venv\Scripts\python -m unittest discover -s tests -p "test_optimizer.py" -v |
 | Home Assistant gateway tests (fake HA WebSocket server on localhost) | .venv\Scripts\python -m unittest discover -s tests -p "test_ha_gateway.py" -v |
+| Cottage controller simulations (no Home Assistant) | .venv\Scripts\python -m unittest discover -s tests -p "test_cottage_control.py" -v |
+| Cottage integration in Home Assistant core (separate venv: pip install -r tests_ha/requirements.txt; Linux/WSL) | python -m pytest -c tests_ha/pytest.ini tests_ha |
 | Pump app tests (mock devices and localhost HTTP) | .venv\Scripts\python -m unittest discover -s tests -p "test_pump_app.py" -v |
 | Startup, credential and backup tests (mock Windows/network boundaries; temporary data) | .venv\Scripts\python -m unittest discover -s tests -p "test_windows_runtime.py" -v; .venv\Scripts\python -m unittest discover -s tests -p "test_backup.py" -v |
 | Credential file tests (temporary data) | .venv\Scripts\python -m unittest discover -s tests -p "test_credential_file.py" -v |

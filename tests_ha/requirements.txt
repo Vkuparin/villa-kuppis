@@ -1,0 +1,3 @@
+# Separate environment for the Home Assistant integration tests (card H2.2).
+# Brings Home Assistant core 2026.2.3 and pytest.
+pytest-homeassistant-custom-component==0.13.316

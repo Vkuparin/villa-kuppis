@@ -1,0 +1,36 @@
+# Villa Kuppis cottage controller (card H2.2). Copy to /config/packages/ on
+# the cottage Home Assistant and include packages in configuration.yaml:
+#
+#   homeassistant:
+#     packages: !include_dir_named packages
+#
+# Entity ids below are placeholders until the devices are commissioned
+# (H2.1); replace them with the ones Home Assistant shows.
+villa_kuppis_cottage:
+  # Heater setpoint when there is no valid target from Villa Kuppis, and the
+  # lowest room target accepted. Open owner question: confirm after H2.1.
+  safe_setpoint: 7
+  # Heater setpoint when the room is warm enough (driven low).
+  low_setpoint: 5
+  max_target: 25
+  # Heater setpoint when the room needs heat: target + boost.
+  boost: 3
+  hysteresis: 0.3
+  min_dwell_minutes: 10
+  sensor_max_age_minutes: 30
+  # A change made by hand (heater, Google Home, HA UI) pauses the room.
+  manual_hold_minutes: 240
+  max_commands_per_hour: 12
+  rooms:
+    large:
+      name: Iso huone
+      sensor: sensor.alpstuga_iso_huone_temperature
+      heaters:
+        - climate.mill_iso_huone_1
+        - climate.mill_iso_huone_2
+        - climate.mill_iso_huone_500
+    small:
+      name: Pieni huone
+      sensor: sensor.alpstuga_pieni_huone_temperature
+      heaters:
+        - climate.mill_pieni_huone

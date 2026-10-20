@@ -84,6 +84,8 @@ The cottage Home Assistant runs one local controller per room (card H2.2):
 - **watchdog:** a missing heartbeat, a stale target or a stale/implausible sensor falls back to the safe maintenance setpoint on the heaters' own thermostats; the same applies after a Home Assistant restart before a fresh target arrives;
 - keeps working when the WAN, Tailscale, the home server or every phone is down.
 
+It is implemented as a small custom integration, `custom_components/villa_kuppis_cottage` (configuration in `deploy/cottage/packages/`, setup in [deploy/cottage/README.md](../deploy/cottage/README.md)). Villa Kuppis writes a room's target with the `set_target` service (target, increasing revision, validity window); the room's `sensor.villa_kuppis_<room>_target` shows the target in force, the mode (follow, thermostat, fallback, manual) and the revision for read-back. A change made by hand at a heater, in Google Home or in the Home Assistant UI pauses that room for four hours (configurable) or until Villa Kuppis clears it.
+
 Mill heaters also have built-in frost protection. There are no water pipes. A cached whole-day plan at the cottage is not part of the first version (later card H3.3).
 
 **`Automaatio` switch:** off stops economic control (prices, optimizer). The cottage's local safe fallback keeps running. The exact wording is an open owner question.
