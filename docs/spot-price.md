@@ -20,6 +20,8 @@ Every setting can apply to a whole site or to a single room; a room setting over
 
 A base temperature and thresholds: "when the spot price is below X c/kWh, use T". For heating, the highest matching temperature wins, never below the base. For cooling (the pumps), the lowest wins, never above the base; a rule may also switch a unit off.
 
+The cottage gets the current period's target per room through its Home Assistant (`villa_kuppis/cottage_targets.py`): the period start is the revision, each write is valid for 45 minutes, and the room's status sensor confirms it. With `Automaatio` off nothing is sent and the cottage drops to its local safe setpoint when the last target expires. Without a price for the period the base applies.
+
 Example for the cottage:
 
 | Rule | Target |
@@ -70,7 +72,9 @@ The pumps matter mostly for summer cooling, and they can be tested before the co
 The owner enters an arrival time and a target temperature, e.g. Friday 18:00 and 22 °C. The planner picks the cheapest periods that still reach the target by arrival:
 
 - Until each room's heat-up rate is learned, it assumes the heat-up from maintenance temperature takes 12 hours.
+- The start is chosen from up to 4 hours before `arrival − 12 h` so that the heat-up plus holding the warm room until arrival costs least (holding is assumed to take 30 % of full heating). Without prices for the whole window it starts at `arrival − 12 h`. A start that has happened is kept (`villa_kuppis/visit.py`).
 - If arrival is beyond the published prices, it plans with the prices it has and recalculates when the next day's prices arrive.
+- The 12-hour lead is only an assumption: in a hard frost the heaters may not reach the target at all, and the app must not show a visit as on time unless the room temperature shows it.
 - Villa Kuppis sends the room targets to the cottage Home Assistant as they change, including after each recalculation.
 - The end-visit button returns the cottage to maintenance heating.
 - A notification warns if the plan cannot reach the target in time.
