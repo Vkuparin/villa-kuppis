@@ -89,7 +89,8 @@ def run(config: Config, *, demo=False, stop_event=None, service_factory=None,
             credentials = read_credentials(config.credential_target)
             service_factory = lambda data: make_live_service(
                 data, credentials=credentials, weather_sites=dict(config.weather),
-                automation_interval=DEFAULT_PLAN_INTERVAL if config.plan else None)
+                automation_interval=DEFAULT_PLAN_INTERVAL,
+                automation_default_on=config.plan)
     service = service_factory(config.data_dir)
     server = backups = None
     try:

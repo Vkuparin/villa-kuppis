@@ -84,7 +84,8 @@ def make_demo_service(data_dir, *, poll_interval: float = 5.0,
                       stale_after: float = 60.0,
                       readback_polls: int = 2, readback_delay: float = 1.0,
                       command_timeout: float = 10.0,
-                      automation_interval: float | None = None) -> PumpService:
+                      automation_interval: float | None = None,
+                      automation_default_on: bool = True) -> PumpService:
     """Offline service: the real pipeline against the in-memory FakeClient."""
     client = FakeClient([dict(p) for p in DEMO_UNITS])
     return PumpService(
@@ -92,6 +93,7 @@ def make_demo_service(data_dir, *, poll_interval: float = 5.0,
         stale_after=stale_after, readback_polls=readback_polls,
         readback_delay=readback_delay, command_timeout=command_timeout,
         automation_interval=automation_interval,
+        automation_default_on=automation_default_on,
     )
 
 
@@ -225,6 +227,8 @@ _PAGE = """<!doctype html>
 :root[data-theme="dark"][data-accent="pink"] { --accent: #f2709f; }
 :root[data-theme="dark"][data-accent="orange"] { --accent: #f09040; }
 header.top { border-bottom: 3px solid var(--accent) !important; }
+header.top .auto-switch { margin-left: auto; align-self: center; }
+button.auto-switch[hidden] { display: none; }
 h1 { color: var(--accent); }
 * { box-sizing: border-box; }
 body { margin: 0; font: 16px/1.45 system-ui, "Segoe UI", sans-serif;
@@ -360,6 +364,8 @@ td.result-pending { color: var(--info); }
   <span id="identity" class="identity" title="Kirjautunut käyttäjä"></span>
   <span id="service-status" role="status"><span class="badge info">Yhteyttä muodostetaan…</span></span>
   <span id="last-updated"></span>
+  <button type="button" class="switch auto-switch" role="switch" aria-checked="false"
+          id="auto-btn" title="Hinta- ja lämpötilaohjattu automaatio. Pois päältä se ei lähetä pumpuille komentoja; pumput jäävät siihen tilaan, jossa ne ovat."><span class="track"></span><span>Automaatio</span></button>
 </header>
 <div id="demo-banner">Esittelytila: näytetyt arvot ovat keksittyjä ja toiminnot
 ohjaavat vain esittelyyksiköitä.</div>
@@ -1108,6 +1114,30 @@ $cards.addEventListener("change", onControl);
 $cards.addEventListener("focusout", () => {
   setTimeout(() => { if (lastView) renderView(lastView); }, 0);
 });
+// Master switch of the automation, in the page header.
+const $auto = document.getElementById("auto-btn");
+function showAutomation(state) {
+  $auto.hidden = !state.available;
+  $auto.setAttribute("aria-checked", state.on ? "true" : "false");
+}
+async function loadAutomation() {
+  try { showAutomation(await fetch("/api/automation").then((r) => r.json())); }
+  catch (err) { /* the status badge already shows lost connection */ }
+}
+$auto.addEventListener("click", async () => {
+  const on = $auto.getAttribute("aria-checked") !== "true";
+  $auto.disabled = true;
+  try {
+    const r = await fetch("/api/automation", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ on: on }) });
+    if (r.ok) showAutomation(await r.json());
+  } catch (err) { /* keep the old state */ }
+  $auto.disabled = false;
+  if (typeof loadPlan === "function") loadPlan();
+});
+loadAutomation();
+setInterval(loadAutomation, 15000);
 $histUnit.addEventListener("change", loadHistory);
 $histRange.addEventListener("change", () => { histEnd = null; loadHistory(); });
 function shiftHistory(dir) {
@@ -1346,6 +1376,8 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             self._json(200, self.app.service.plan_view())
         elif parts.path == "/api/away":
             self._json(200, {"away": self.app.service.automation.away()})
+        elif parts.path == "/api/automation":
+            self._json(200, self.app.service.automation_state())
         elif parts.path == "/api/rooms":
             self._json(200, self.app.service.room_rates())
         elif parts.path == "/api/identity":
@@ -1380,6 +1412,16 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
                 return
             self._json(200, self.app.service.set_away(body["away"],
                                                       identity["actor"]))
+        elif parts.path == "/api/automation":
+            body = self._read_json_object()
+            if body is None:
+                return
+            if not isinstance(body.get("on"), bool):
+                self._json(400, {"error": "bad_body",
+                                 "detail": "on must be true or false"})
+                return
+            self._json(200, self.app.service.set_automation(body["on"],
+                                                            identity["actor"]))
         elif parts.path in ("/", "/api/view", "/api/events", "/api/history",
                             "/api/identity", "/api/plan", "/api/rooms"):
             # Known paths with the wrong method: 405, mirroring how
@@ -1564,15 +1606,18 @@ def _cmd_serve(args, print_fn=print) -> int:
     if args.host not in ("127.0.0.1", "localhost"):
         print_fn("error: the pump app must listen on localhost", file=sys.stderr)
         return 1
-    interval = DEFAULT_PLAN_INTERVAL if args.plan else None
+    # The plan loop always runs; --plan only makes the master switch start on.
+    interval = DEFAULT_PLAN_INTERVAL
     if args.demo:
         service = make_demo_service(args.data_dir,
-                                    automation_interval=interval)
+                                    automation_interval=interval,
+                                    automation_default_on=args.plan)
         mode = " (esittelytila: keksityt yksiköt)"
     else:
         try:
             service = make_live_service(args.data_dir,
-                                        automation_interval=interval)
+                                        automation_interval=interval,
+                                        automation_default_on=args.plan)
         except RuntimeError as err:
             print_fn(f"error: {err}", file=sys.stderr)
             return 1

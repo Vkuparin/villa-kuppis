@@ -32,6 +32,12 @@ applies them to the pumps:
   applied with the same rules as above, and it is planned again at each
   new period from the room's current temperature.
 
+* ``cool_start_when_hot`` (off by default) also switches on a unit in
+  cooling mode that is off, when its room is above the maximum and the
+  price is not high. It stops such a unit again once the room is
+  ``START_BAND_C`` below the maximum and the minimum time has passed. A
+  unit the household switched off again is left alone.
+
 * Night mode (card F6.2) is separate from the prices: in rooms with
   ``night_enabled`` the fan is set to its quietest speed between
   ``night_start`` and ``night_end`` (Helsinki time, may cross midnight) and
@@ -58,6 +64,7 @@ from .planning import Period, plan_day
 from .prices import HELSINKI, INTERVAL_SECONDS, helsinki_day_bounds
 from .storage import PriceStore
 
+START_BAND_C = 1.0   # a unit started for overheating stops this far below the maximum
 ACTOR = "Suunnitelma"
 SITE = "home"
 DEFAULT_INTERVAL = 60.0
@@ -144,12 +151,13 @@ class CoolingAutomation:
     """Plans and applies the fixed-threshold cooling for the home pumps."""
 
     def __init__(self, service, settings_store, prices_db, *, now,
-                 interval: float | None = None):
+                 interval: float | None = None, default_on: bool = True):
         self._service = service
         self._settings = settings_store
         self._prices_db = Path(prices_db)
         self._now = now
         self.interval = interval
+        self._default_on = default_on
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._path = service.store.path
@@ -170,6 +178,13 @@ class CoolingAutomation:
                 "id INTEGER PRIMARY KEY CHECK (id = 1), away INTEGER NOT NULL, "
                 "changed_utc TEXT, actor TEXT)")
             conn.execute(
+                "CREATE TABLE IF NOT EXISTS automation_state ("
+                "id INTEGER PRIMARY KEY CHECK (id = 1), on_ INTEGER NOT NULL, "
+                "changed_utc TEXT, actor TEXT)")
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS start_state ("
+                "unit_id TEXT PRIMARY KEY, started_utc TEXT)")
+            conn.execute(
                 "CREATE TABLE IF NOT EXISTS night_state ("
                 "unit_id TEXT PRIMARY KEY, saved_fan TEXT)")
         finally:
@@ -178,11 +193,48 @@ class CoolingAutomation:
     # -- lifecycle --
 
     @property
-    def enabled(self) -> bool:
+    def available(self) -> bool:
+        """The plan loop exists (it may still be switched off)."""
         return self.interval is not None
 
+    @property
+    def enabled(self) -> bool:
+        """The automation is switched on and so acts on the pumps."""
+        return self.available and self.automation_on()
+
+    def automation_on(self) -> bool:
+        """The master switch; until it is first used it takes the default."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT on_ FROM automation_state WHERE id = 1").fetchone()
+        finally:
+            conn.close()
+        return bool(row[0]) if row else self._default_on
+
+    def set_automation(self, on: bool, actor: str = ACTOR) -> bool:
+        """Switch the whole automation on or off; on applies the plan at once.
+
+        Switching off only stops further commands: pumps stay as they are.
+        """
+        conn = self._connect()
+        try:
+            conn.execute(
+                "INSERT INTO automation_state (id, on_, changed_utc, actor) "
+                "VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+                "on_ = excluded.on_, changed_utc = excluded.changed_utc, "
+                "actor = excluded.actor", (int(on), self._now().isoformat(), actor))
+        finally:
+            conn.close()
+        if on and self.available:
+            try:
+                self.run_once()
+            except Exception:
+                logging.exception("Cooling plan pass after switching on failed")
+        return bool(on)
+
     def start(self) -> None:
-        if not self.enabled or self._thread is not None:
+        if not self.available or self._thread is not None:
             return
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, name="pump-plan",
@@ -198,7 +250,8 @@ class CoolingAutomation:
     def _loop(self) -> None:
         while not self._stop.is_set():
             try:
-                self.run_once()
+                if self.automation_on():
+                    self.run_once()
             except Exception:
                 logging.exception("Cooling plan pass failed")
             self._stop.wait(self.interval)
@@ -368,7 +421,8 @@ class CoolingAutomation:
                     "over_max_c_h": round(result.over_max_c_h, 2),
                     "fixed_over_max_c_h": round(result.fixed_over_max_c_h, 2)},
             })
-        return {"enabled": self.enabled, "actor": ACTOR,
+        return {"enabled": self.enabled, "available": self.available,
+                "actor": ACTOR,
                 "day": now.astimezone(HELSINKI).date().isoformat(),
                 "has_prices": bool(plan), "away": self.away(),
                 "cool_kw": optimizer.COOL_KW, "units": shown}
@@ -381,6 +435,8 @@ class CoolingAutomation:
         Returns the commands it tried, as dicts with unit, action, value
         and the HTTP-style status of the request.
         """
+        if not self.automation_on():
+            return []
         now = self._now()
         units, plan, _results = self._plan(now)
         fresh = {u["id"]: u["fresh"] for u in self._service.view()["units"]}
@@ -468,6 +524,32 @@ class CoolingAutomation:
             off_since = None
             self._save(unit_id, None, last_target, hold)
 
+        started = self._started(unit_id)
+        if started is not None and (not state["power"]
+                                    or not values["cool_start_when_hot"]):
+            # Switched off by the household, or the setting was turned off:
+            # the unit is no longer ours to stop.
+            self._set_started(unit_id, None)
+            started = None
+        if values["cool_start_when_hot"] and not current.off:
+            room = state["room_temp"]
+            limit = float(values["cool_max_c"])
+            if (not state["power"] and off_since is None
+                    and room is not None and room > limit):
+                result = self._command(state, "power", True)
+                if result["status"] == 202:
+                    self._set_started(unit_id, now.isoformat())
+                return [result]
+            if (state["power"] and started is not None and room is not None
+                    and room <= limit - START_BAND_C
+                    and self._off_time_over(started, values, now)):
+                # We started it because the room overheated; stop it again
+                # once the room is clearly below the maximum.
+                result = self._command(state, "power", False)
+                if result["status"] == 202:
+                    self._set_started(unit_id, None)
+                return [result]
+
         if current.off and not (hold and state["power"]):
             if state["power"]:
                 result = self._command(state, "power", False)
@@ -499,6 +581,28 @@ class CoolingAutomation:
             if result["status"] == 202:
                 self._save(unit_id, None, current.target_c, hold)
         return sent
+
+    def _started(self, unit_id: str) -> str | None:
+        conn = self._connect()
+        try:
+            row = conn.execute("SELECT started_utc FROM start_state "
+                               "WHERE unit_id = ?", (unit_id,)).fetchone()
+        finally:
+            conn.close()
+        return row[0] if row else None
+
+    def _set_started(self, unit_id: str, when: str | None) -> None:
+        conn = self._connect()
+        try:
+            if when is None:
+                conn.execute("DELETE FROM start_state WHERE unit_id = ?",
+                             (unit_id,))
+            else:
+                conn.execute("INSERT OR REPLACE INTO start_state "
+                             "(unit_id, started_utc) VALUES (?, ?)",
+                             (unit_id, when))
+        finally:
+            conn.close()
 
     def _power_on(self, state, last_target, hold: bool = False) -> dict:
         result = self._command(state, "power", True)

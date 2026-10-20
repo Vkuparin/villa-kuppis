@@ -69,6 +69,30 @@ class CoolingTests(ServiceTestCase):
         self.run_plan(service)
         self.assertEqual(self._unit(service, "unit-1")["setpoint"], 21.0)
 
+    def test_master_switch_off_sends_nothing_and_on_applies_at_once(self):
+        service, _ = self.start()
+        self.set_prices(100)
+        service.automation.set_automation(False, "Ville")
+        self.assertEqual(self.run_plan(service), [])
+        self.assertEqual(self._unit(service, "unit-1")["setpoint"], 23.5)
+        self.assertFalse(service.automation_state()["on"])
+        service.automation.set_automation(True, "Ville")
+        self.assertTrue(service.automation_state()["on"])
+        self.run_plan(service)
+        self.assertEqual(self._unit(service, "unit-1")["setpoint"], 25.0)
+
+    def test_hot_room_starts_a_household_off_cooling_unit_only_when_enabled(self):
+        service, _ = self.start()
+        self.set_prices(100)
+        sent = self.run_plan(service)             # off by default
+        self.assertNotIn(("unit-2", "power", True), self.brief(sent))
+        self.assertFalse(self._unit(service, "unit-2")["power"])
+        SettingsStore(f"{self.tmp}/pumps.db").set(
+            "site:home", "cool_start_when_hot", True, "Ville")
+        sent = self.run_plan(service)             # room 27 > maximum 25
+        self.assertIn(("unit-2", "power", True), self.brief(sent))
+        self.assertTrue(self._unit(service, "unit-2")["power"])
+
     def test_precooling_switch_off_keeps_the_maximum_when_cheap(self):
         service, _ = self.start()
         self.set_prices(30)                       # 3 c/kWh: would precool

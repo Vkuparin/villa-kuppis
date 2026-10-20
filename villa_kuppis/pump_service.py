@@ -1052,7 +1052,8 @@ class PumpService:
                  weather_backfill_hours: float = WEATHER_BACKFILL_HOURS,
                  forecast_fetcher=None,
                  prices_db=None,
-                 automation_interval: float | None = None):
+                 automation_interval: float | None = None,
+                 automation_default_on: bool = True):
         self._data_dir = Path(data_dir)
         self._now = now
         self._stale_after = stale_after
@@ -1083,7 +1084,7 @@ class PumpService:
                            else self._data_dir / PRICE_DB_FILENAME)
         self.automation = CoolingAutomation(
             self, SettingsStore(self.store.path), self._prices_db, now=now,
-            interval=automation_interval)
+            interval=automation_interval, default_on=automation_default_on)
         self._weather_stop = threading.Event()
         self._weather_write_lock = threading.Lock()
         self._weather_thread: threading.Thread | None = None
@@ -1162,6 +1163,15 @@ class PumpService:
         """Home-away button (card F6.1)."""
         self.automation.set_away(away, actor)
         return self.plan_view()
+
+    def automation_state(self) -> dict:
+        return {"on": self.automation.automation_on(),
+                "available": self.automation.available}
+
+    def set_automation(self, on: bool, actor: str) -> dict:
+        """Master switch of the price and temperature automation."""
+        self.automation.set_automation(on, actor)
+        return self.automation_state()
 
     # -- history (card F3.3) ---------------------------------------------------
 
@@ -1408,7 +1418,8 @@ def make_live_service(data_dir, *, credentials=None, weather_sites=None,
                       readback_polls=DEFAULT_READBACK_POLLS,
                       readback_delay=DEFAULT_READBACK_DELAY,
                       command_timeout=DEFAULT_COMMAND_TIMEOUT,
-                      automation_interval=None) -> PumpService:
+                      automation_interval=None,
+                      automation_default_on=True) -> PumpService:
     """Live service with explicit credentials, or development environment values.
 
     The unattended runner supplies credentials from Windows Credential Manager.
@@ -1447,4 +1458,5 @@ def make_live_service(data_dir, *, credentials=None, weather_sites=None,
                        if weather_sites is None else weather_sites),
         forecast_fetcher=weather.fetch_forecast_temperature,
         automation_interval=automation_interval,
+        automation_default_on=automation_default_on,
     )
