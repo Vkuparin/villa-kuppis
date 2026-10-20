@@ -211,12 +211,13 @@ class HAConnection:
                                   "event_type": "state_changed"})
         await asyncio.wait_for(fut, timeout)
 
-    async def call_service(self, domain: str, service: str, entity_id: str,
+    async def call_service(self, domain: str, service: str, entity_id: str | None,
                            data: dict, timeout: float | None = None) -> Any:
-        return await self.request({
-            "type": "call_service", "domain": domain, "service": service,
-            "service_data": data, "target": {"entity_id": entity_id},
-        }, timeout)
+        payload = {"type": "call_service", "domain": domain, "service": service,
+                   "service_data": data}
+        if entity_id is not None:
+            payload["target"] = {"entity_id": entity_id}
+        return await self.request(payload, timeout)
 
     async def wait_closed(self) -> None:
         await self._closed.wait()
@@ -238,6 +239,7 @@ class Binding:
     entity_id: str
     kind: str
     label: str = ""
+    room: str | None = None
 
 
 class BindingError(ValueError):
@@ -252,6 +254,7 @@ CREATE TABLE IF NOT EXISTS device_binding (
     kind TEXT NOT NULL CHECK (kind IN ('climate','sensor','number')),
     label TEXT NOT NULL DEFAULT '',
     bound_at_utc TEXT NOT NULL,
+    room TEXT,
     PRIMARY KEY (site_id, device_id),
     UNIQUE (site_id, entity_id)
 );
@@ -274,25 +277,30 @@ class BindingStore:
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(self._path, check_same_thread=False)
         self._conn.executescript(_BINDING_SCHEMA)
+        columns = [r[1] for r in self._conn.execute("PRAGMA table_info(device_binding)")]
+        if "room" not in columns:
+            self._conn.execute("ALTER TABLE device_binding ADD COLUMN room TEXT")
         self._conn.commit()
 
     def bind(self, site_id: str, device_id: str, entity_id: str, kind: str,
-             label: str = "", *, now=utc_now) -> Binding:
+             label: str = "", room: str | None = None, *, now=utc_now) -> Binding:
         check_binding(entity_id, kind)
         with self._lock:
             try:
                 self._conn.execute(
-                    "INSERT INTO device_binding VALUES (?, ?, ?, ?, ?, ?) "
+                    "INSERT INTO device_binding (site_id, device_id, entity_id, kind, "
+                    "label, bound_at_utc, room) VALUES (?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT (site_id, device_id) DO UPDATE SET "
                     "entity_id = excluded.entity_id, kind = excluded.kind, "
-                    "label = excluded.label, bound_at_utc = excluded.bound_at_utc",
-                    (site_id, device_id, entity_id, kind, label, now().isoformat()),
+                    "label = excluded.label, bound_at_utc = excluded.bound_at_utc, "
+                    "room = excluded.room",
+                    (site_id, device_id, entity_id, kind, label, now().isoformat(), room),
                 )
                 self._conn.commit()
             except sqlite3.IntegrityError as err:
                 self._conn.rollback()
                 raise BindingError(f"{entity_id} is already bound to another device") from err
-        return Binding(site_id, device_id, entity_id, kind, label)
+        return Binding(site_id, device_id, entity_id, kind, label, room)
 
     def unbind(self, site_id: str, device_id: str) -> bool:
         with self._lock:
@@ -305,7 +313,7 @@ class BindingStore:
     def bindings(self, site_id: str) -> list[Binding]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT site_id, device_id, entity_id, kind, label FROM device_binding "
+                "SELECT site_id, device_id, entity_id, kind, label, room FROM device_binding "
                 "WHERE site_id = ? ORDER BY device_id", (site_id,)).fetchall()
         return [Binding(*row) for row in rows]
 
@@ -391,6 +399,8 @@ def reading(binding: Binding, ha_state: dict) -> dict:
         })
     else:
         out["value"] = _number(raw) if available else None
+        if binding.kind == "sensor":
+            out["attributes"] = dict(attrs)
     return out
 
 
@@ -479,6 +489,15 @@ class Command:
     created_at: str = ""
     finished_at: str | None = None
     _done: asyncio.Event | None = field(default=None, repr=False, compare=False)
+    # A service command: (domain, service, entity target or None) and a
+    # read-back check on the bound device's reading.
+    _service: tuple | None = field(default=None, repr=False, compare=False)
+    _confirm: Callable[[dict], bool] | None = field(default=None, repr=False, compare=False)
+
+    def confirmed_by(self, state: dict | None) -> bool:
+        if self._confirm is not None:
+            return state is not None and bool(self._confirm(state))
+        return matches(state, self.action, self.value)
 
     def public(self) -> dict:
         return {k: v for k, v in self.__dict__.items() if not k.startswith("_")}
@@ -657,7 +676,7 @@ class HomeAssistantGateway:
             return cmd.public() if cmd else None
 
     def submit(self, device_id: str, action: str, value, actor: str) -> dict:
-        """Validate and queue a command; thread-safe. Returns the command.
+        """Validate and queue a device command; thread-safe. Returns the command.
 
         An identical command already pending is returned instead of a new
         one; a different command while one is pending fails at once, so two
@@ -665,6 +684,31 @@ class HomeAssistantGateway:
         """
         cmd = Command(uuid.uuid4().hex, self.site_id, device_id, action, value,
                       actor, created_at=self._now().isoformat())
+
+        def check(state):
+            ok, normalized, detail = validate(state, action, value)
+            if ok:
+                cmd.value = normalized
+            return ok, detail
+        return self._submit(cmd, check)
+
+    def submit_service(self, device_id: str, domain: str, service: str, data: dict,
+                       actor: str, confirm: Callable[[dict], bool], *,
+                       target_entity: bool = False) -> dict:
+        """Queue a Home Assistant service call tracked through a bound device.
+
+        ``confirm`` receives the device's reading (with ``attributes`` for a
+        sensor) and returns True once the call has taken effect. The call
+        targets the device's entity only with ``target_entity``.
+        """
+        cmd = Command(uuid.uuid4().hex, self.site_id, device_id, f"{domain}.{service}",
+                      dict(data), actor, created_at=self._now().isoformat())
+        cmd._confirm = confirm
+        cmd._service = (domain, service, target_entity)
+        return self._submit(cmd, lambda state: (True, ""))
+
+    def _submit(self, cmd: Command, check) -> dict:
+        device_id = cmd.device_id
         with self._lock:
             binding = self._bindings.get(device_id)
             active = self._active.get(device_id)
@@ -674,19 +718,17 @@ class HomeAssistantGateway:
                 return self._finish_locked(
                     cmd, "failed", f"{binding.entity_id} is missing in Home Assistant; check the binding")
             if active is not None:
-                if active.action == action and active.value == value:
+                if active.action == cmd.action and active.value == cmd.value:
                     return active.public()
                 return self._finish_locked(cmd, "failed", "another command for this device is pending")
             loop = self._loop
             if not self._connected or loop is None or loop.is_closed():
                 return self._finish_locked(cmd, "failed", "Home Assistant is not connected")
             state = self._states.get(device_id)
-            ok, normalized, detail = validate(state, action, value) if state else (
-                False, None, "the device has not reported its state")
+            ok, detail = check(state) if state else (False, "the device has not reported its state")
             if not ok:
                 return self._finish_locked(cmd, "failed", detail)
-            cmd.value = normalized
-            if matches(state, action, normalized):
+            if cmd.confirmed_by(state):
                 return self._finish_locked(cmd, "confirmed", "already at the requested value")
             self._active[device_id] = cmd
             self._commands[cmd.request_id] = cmd
@@ -732,7 +774,12 @@ class HomeAssistantGateway:
         return self.command(request_id)
 
     async def _execute(self, cmd: Command, binding: Binding) -> None:
-        domain, service, data = service_call(binding, cmd.action, cmd.value)
+        if cmd._service is not None:
+            domain, service, target_entity = cmd._service
+            data, entity_id = cmd.value, binding.entity_id if target_entity else None
+        else:
+            domain, service, data = service_call(binding, cmd.action, cmd.value)
+            entity_id = binding.entity_id
         with self._lock:
             conn = self._conn
             if cmd._done is None:
@@ -741,7 +788,7 @@ class HomeAssistantGateway:
         try:
             if conn is None:
                 raise HAConnectionClosed("not connected")
-            await conn.call_service(domain, service, binding.entity_id, data,
+            await conn.call_service(domain, service, entity_id, data,
                                     timeout=self._command_timeout)
         except HAError as err:
             with self._lock:
@@ -755,7 +802,7 @@ class HomeAssistantGateway:
         with self._lock:
             if cmd.state != "pending":
                 return
-            if matches(self._states.get(cmd.device_id), cmd.action, cmd.value):
+            if cmd.confirmed_by(self._states.get(cmd.device_id)):
                 self._finish_locked(cmd, "confirmed", "")
                 return
         try:
@@ -772,7 +819,7 @@ class HomeAssistantGateway:
         cmd = self._active.get(device_id) or self._latest.get(device_id)
         if cmd is None or cmd.state not in ("pending", "unknown"):
             return
-        if matches(self._states.get(device_id), cmd.action, cmd.value):
+        if cmd.confirmed_by(self._states.get(device_id)):
             was_unknown = cmd.state == "unknown"
             if was_unknown:
                 cmd._done = None

@@ -18,6 +18,7 @@ services:
       - ${KUPPIS_BACKUP_DIR:-/mnt/backup/villa-kuppis}:/backups
     secrets:
       - melcloud
+      - cottage_token
 
   homeassistant:
     image: ghcr.io/home-assistant/home-assistant:2026.10.2
@@ -31,3 +32,6 @@ services:
 secrets:
   melcloud:
     file: ${KUPPIS_SECRET_FILE:-/srv/villa-kuppis/secrets/melcloud.json}
+  # Long-lived access token of the cottage Home Assistant user (plain text).
+  cottage_token:
+    file: ${KUPPIS_COTTAGE_TOKEN_FILE:-/srv/villa-kuppis/secrets/cottage-token}

@@ -31,3 +31,22 @@ def read_credentials_file(path) -> Credentials:
             or not username.strip() or not password):
         raise CredentialError("Credential file username and password must be non-empty text")
     return Credentials(username, password)
+
+
+def read_token_file(path) -> str:
+    """Read a plain-text access token; errors never include file contents."""
+    path = Path(path)
+    if not path.is_absolute():
+        raise CredentialError("Token file path must be absolute")
+    try:
+        if os.name != "nt" and path.stat().st_mode & 0o077:
+            raise CredentialError(
+                "Token file must not be group or world accessible (chmod 600)")
+        token = path.read_text(encoding="utf-8-sig").strip()
+    except CredentialError:
+        raise
+    except (OSError, UnicodeDecodeError):
+        raise CredentialError("Token file cannot be read") from None
+    if not token or any(c.isspace() for c in token):
+        raise CredentialError("Token file must hold one token on a single line")
+    return token

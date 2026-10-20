@@ -31,6 +31,8 @@ Codex, Hermes and Claude Code (through `CLAUDE.md`) all read this file. This is 
 | Cottage controller simulations (no Home Assistant) | .venv\Scripts\python -m unittest discover -s tests -p "test_cottage_control.py" -v |
 | Cottage integration in Home Assistant core (separate venv: pip install -r tests_ha/requirements.txt; Linux/WSL) | python -m pytest -c tests_ha/pytest.ini tests_ha |
 | Pump app tests (mock devices and localhost HTTP) | .venv\Scripts\python -m unittest discover -s tests -p "test_pump_app.py" -v |
+| Cottage readings, history and events tests (fake Home Assistant on localhost, injected clocks) | .venv\Scripts\python -m unittest discover -s tests -p "test_cottage_view.py" -v |
+| Bind cottage devices (needs `sites` in the config; discover reads the cottage Home Assistant, owner approval for live) | .venv\Scripts\python -m villa_kuppis.sites --config CONFIG_FILE discover; .venv\Scripts\python -m villa_kuppis.sites --config CONFIG_FILE bind cottage DEVICE_ID ENTITY_ID KIND --room large; .venv\Scripts\python -m villa_kuppis.sites --config CONFIG_FILE list |
 | Startup, credential and backup tests (mock Windows/network boundaries; temporary data) | .venv\Scripts\python -m unittest discover -s tests -p "test_windows_runtime.py" -v; .venv\Scripts\python -m unittest discover -s tests -p "test_backup.py" -v |
 | Credential file tests (temporary data) | .venv\Scripts\python -m unittest discover -s tests -p "test_credential_file.py" -v |
 | Home server image, demo only (Linux/Docker; temporary folders, see deploy/home/README.md "Try it offline") | docker compose -f deploy/home/compose.yaml -f deploy/home/compose.demo.yaml config; docker compose -f deploy/home/compose.yaml -f deploy/home/compose.demo.yaml up -d --build |

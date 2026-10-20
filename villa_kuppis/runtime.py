@@ -9,6 +9,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 import threading
 
+from .cottage import parse_sites
 from .pump_app import DEFAULT_PLAN_INTERVAL, PumpAppServer, make_demo_service
 from .pump_service import make_live_service
 from .service import SpotPriceService
@@ -30,13 +31,15 @@ class Config:
     plan: bool = False
     # Absolute path of a JSON credential file; replaces Windows Credential Manager.
     credential_file: Path | None = None
+    # ((site_id, cottage.SiteConfig), ...): Home Assistant gateways (card H2.3).
+    sites: tuple = ()
 
     @classmethod
     def load(cls, path):
         raw = json.loads(Path(path).read_text(encoding="utf-8-sig"))
         if not isinstance(raw, dict) or set(raw) - {
                 "data_dir", "backup_dir", "public_origin", "port", "credential_target",
-                "weather", "plan", "credential_file"}:
+                "weather", "plan", "credential_file", "sites"}:
             raise ValueError("Invalid service configuration fields")
         weather = raw.get("weather", {})
         if not isinstance(weather, dict) or set(weather) - {"home", "cottage"}:
@@ -56,7 +59,8 @@ class Config:
                      raw.get("public_origin"), raw.get("port", 8377),
                      raw.get("credential_target", DEFAULT_TARGET), sites,
                      raw.get("plan", False),
-                     Path(credential_file) if credential_file else None)
+                     Path(credential_file) if credential_file else None,
+                     parse_sites(raw.get("sites", {})))
         if not config.data_dir.is_absolute() or not config.backup_dir.is_absolute():
             raise ValueError("Service data and backup paths must be absolute")
         if config.data_dir.resolve() == config.backup_dir.resolve():
@@ -97,10 +101,11 @@ def run(config: Config, *, demo=False, stop_event=None, service_factory=None,
             credentials = (read_credentials_file(config.credential_file)
                            if config.credential_file
                            else read_credentials(config.credential_target))
+            extra = {"sites": dict(config.sites)} if config.sites else {}
             service_factory = lambda data: make_live_service(
                 data, credentials=credentials, weather_sites=dict(config.weather),
                 automation_interval=DEFAULT_PLAN_INTERVAL,
-                automation_default_on=config.plan)
+                automation_default_on=config.plan, **extra)
     service = service_factory(config.data_dir)
     server = backups = None
     try:

@@ -11,6 +11,8 @@ fully offline) plus a small JSON API on top of PumpService:
 * GET  /api/settings  setting definitions, overrides and effective values
 * GET  /api/plan      today's cooling plan (card F4.1)
 * GET  /api/rooms     learned room rates and the FMI forecast (card F5.1)
+* GET  /api/cottage   cottage rooms, readings and connection (card H2.3, read-only)
+* GET  /api/sites     connection health of each Home Assistant site
 * POST /api/settings  {"scope", "key", "value" | "reset"} (card F3.5)
 * GET/POST /api/away  home-away button, {"away": bool} (card F6.1)
 * POST /api/prices/refresh  fetch today's and tomorrow's prices if missing
@@ -52,6 +54,8 @@ from urllib.parse import parse_qs, urlsplit
 
 from .pump_probe import FakeClient, _unit_payload
 from . import settings as app_settings
+from . import cottage as cottage_ui
+from .cottage import CottageSite, FakeSiteGateway
 from .pump_service import MAX_ACTOR_LENGTH, PumpService, make_live_service
 from .plan_ui import SCRIPT as _PLAN_SCRIPT
 from .plan_ui import SECTION_HTML as _PLAN_HTML
@@ -81,6 +85,11 @@ DEMO_UNITS = (
 )
 
 
+def _demo_cottage(data_dir) -> CottageSite:
+    gateway = FakeSiteGateway()
+    return CottageSite(data_dir, gateway, gateway.bindings, sample_interval=5.0)
+
+
 def make_demo_service(data_dir, *, poll_interval: float = 5.0,
                       stale_after: float = 60.0,
                       readback_polls: int = 2, readback_delay: float = 1.0,
@@ -96,6 +105,7 @@ def make_demo_service(data_dir, *, poll_interval: float = 5.0,
         automation_interval=automation_interval,
         automation_default_on=automation_default_on,
         price_fetch_enabled=False,
+        cottage_factory=_demo_cottage,
     )
 
 
@@ -339,6 +349,8 @@ td.result-pending { color: var(--info); }
 /*SETTINGS_STYLE*/
 /*PLAN_STYLE*/
 /*ROOMS_STYLE*/
+/*COTTAGE_STYLE*/
+td.result-observed { color: var(--text2); }
 @media (max-width: 560px) {
   .row { flex-direction: column; align-items: stretch; gap: .35rem; }
   .row .label { order: 1; }
@@ -408,6 +420,7 @@ ohjaavat vain esittelyyksiköitä.</div>
       <a href="https://en.ilmatieteenlaitos.fi/open-data-licence">avoin data (CC BY 4.0)</a>.
       Sähkönhinta: Elering. Käyrät on harvennettu näytölle.</p>
   </section>
+<!--COTTAGE_SECTION-->
 <!--PLAN_SECTION-->
 <!--ROOMS_SECTION-->
 <!--SETTINGS_SECTION-->
@@ -425,13 +438,15 @@ ohjaavat vain esittelyyksiköitä.</div>
 <script>
 "use strict";
 const MODE_NAMES = { Cool: "Jäähdytys", Heat: "Lämmitys", Dry: "Kuivaus",
-                     Fan: "Puhallus", Automatic: "Automaattinen" };
+                     Fan: "Puhallus", Automatic: "Automaattinen",
+                     follow: "Seuraa anturia", thermostat: "Patterien termostaatti",
+                     fallback: "Turvalämpö", manual: "Käsiohjaus" };
 const FAN_NAMES = { Auto: "Automaattinen", One: "1", Two: "2", Three: "3",
                     Four: "4", Five: "5" };
 const MODES = ["Cool", "Heat", "Dry", "Fan", "Automatic"];
 const FAN_SPEEDS = ["Auto", "One", "Two", "Three", "Four", "Five"];
 const RESULT_TEXT = { pending: "Lähetetään…", confirmed: "Vahvistettu",
-                      failed: "Muutos epäonnistui" };
+                      failed: "Muutos epäonnistui", observed: "Havaittu" };
 const POLL_MS = 5000;
 
 const $cards = document.getElementById("cards");
@@ -692,6 +707,8 @@ const HIST_SERIES = [
   { key: "forecast", label: "Sääennuste", color: "var(--info)",
     scale: "temp", dash: "8 3" },
 ];
+// Cottage heaters and similar: the server sends them as data.extra.
+const EXTRA_COLORS = ["var(--accent)", "var(--purple)", "var(--warn)"];
 const PRICE_SERIES = { key: "price", label: "Sähkön hinta (snt/kWh)", vat: null,
                        color: "var(--warn)", scale: "price", dash: "1 4" };
 
@@ -763,10 +780,17 @@ function fmtTimeTick(ms, range) {
 
 function drawHistory(data) {
   $histChart.textContent = "";
+  const labels = data.labels || {};
   const series = HIST_SERIES
     .map((s) => Object.assign({}, s, {
+      label: labels[s.key] || s.label,
       pts: (data[s.key] || []).map(([iso, v]) => [new Date(iso).getTime(), v])
     }))
+    .concat((data.extra || []).map((e, i) => ({
+      key: e.key, label: e.label, color: EXTRA_COLORS[i % EXTRA_COLORS.length],
+      scale: "temp", dash: "6 3",
+      pts: e.points.map(([iso, v]) => [new Date(iso).getTime(), v])
+    })))
     .filter((s) => s.pts.length > 0);
   const pricePts = (data.price || [])
     .map(([iso, v]) => [new Date(iso).getTime(), v]);
@@ -1007,11 +1031,22 @@ async function loadHistory() {
   }
 }
 
+// Extra history choices (the cottage rooms) come from the cottage section.
+let extraHistUnits = [];
+function setExtraHistUnits(units) {
+  extraHistUnits = units;
+  populateUnits(lastView ? lastView.units || [] : []);
+}
+// Rebuilt only when the choices change, so an open list is not closed.
 function populateUnits(units) {
-  const current = $histUnit.value;
-  $histUnit.innerHTML = units.map((u) =>
+  const all = units.concat(extraHistUnits);
+  const html = all.map((u) =>
     '<option value="' + esc(u.id) + '">' + esc(u.name) + "</option>").join("");
-  if (current && units.some((u) => u.id === current)) $histUnit.value = current;
+  if (html === $histUnit.dataset.options) return;
+  const current = $histUnit.value;
+  $histUnit.innerHTML = html;
+  $histUnit.dataset.options = html;
+  if (current && all.some((u) => u.id === current)) $histUnit.value = current;
 }
 
 async function refresh() {
@@ -1140,7 +1175,11 @@ $auto.addEventListener("click", async () => {
 });
 loadAutomation();
 setInterval(loadAutomation, 15000);
-$histUnit.addEventListener("change", loadHistory);
+$histUnit.addEventListener("change", () => {
+  // Cottage rooms use the cottage's outdoor temperature; pumps the home's.
+  $histSite.value = $histUnit.value.startsWith("cottage:") ? "cottage" : "home";
+  loadHistory();
+});
 $histRange.addEventListener("change", () => { histEnd = null; loadHistory(); });
 function shiftHistory(dir) {
   const span = RANGE_MS[$histRange.value] || RANGE_MS.day;
@@ -1167,6 +1206,7 @@ setInterval(loadIdentity, 60000);
 <script>/*SETTINGS_SCRIPT*/</script>
 <script>/*PLAN_SCRIPT*/</script>
 <script>/*ROOMS_SCRIPT*/</script>
+<script>/*COTTAGE_SCRIPT*/</script>
 </body>
 </html>
 """
@@ -1177,6 +1217,9 @@ def render_page(demo: bool) -> str:
             .replace("/*PLAN_STYLE*/", _PLAN_STYLE)
             .replace("<!--PLAN_SECTION-->", _PLAN_HTML)
             .replace("/*PLAN_SCRIPT*/", _PLAN_SCRIPT)
+            .replace("/*COTTAGE_STYLE*/", cottage_ui.STYLE)
+            .replace("<!--COTTAGE_SECTION-->", cottage_ui.SECTION_HTML)
+            .replace("/*COTTAGE_SCRIPT*/", cottage_ui.SCRIPT)
             .replace("/*ROOMS_STYLE*/", _ROOMS_STYLE)
             .replace("<!--ROOMS_SECTION-->", _ROOMS_HTML)
             .replace("/*ROOMS_SCRIPT*/", _ROOMS_SCRIPT)
@@ -1382,6 +1425,10 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             self._json(200, self.app.service.automation_state())
         elif parts.path == "/api/rooms":
             self._json(200, self.app.service.room_rates())
+        elif parts.path == "/api/cottage":
+            self._json(200, self.app.service.cottage_view())
+        elif parts.path == "/api/sites":
+            self._json(200, self.app.service.sites_health())
         elif parts.path == "/api/identity":
             self._json(200, {"actor": identity["actor"],
                              "display_name": identity["display_name"],
@@ -1428,7 +1475,8 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             self._json(200, self.app.service.set_automation(body["on"],
                                                             identity["actor"]))
         elif parts.path in ("/", "/api/view", "/api/events", "/api/history",
-                            "/api/identity", "/api/plan", "/api/rooms"):
+                            "/api/identity", "/api/plan", "/api/rooms",
+                            "/api/cottage", "/api/sites"):
             # Known paths with the wrong method: 405, mirroring how
             # do_GET answers /api/command.
             self._json(405, {"error": "method_not_allowed",

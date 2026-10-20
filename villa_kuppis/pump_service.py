@@ -1069,7 +1069,8 @@ class PumpService:
                  automation_interval: float | None = None,
                  automation_default_on: bool = True,
                  price_transport=None,
-                 price_fetch_enabled: bool = True):
+                 price_fetch_enabled: bool = True,
+                 cottage_factory=None):
         self._data_dir = Path(data_dir)
         self._now = now
         self._stale_after = stale_after
@@ -1108,6 +1109,8 @@ class PumpService:
         self._weather_stop = threading.Event()
         self._weather_write_lock = threading.Lock()
         self._weather_thread: threading.Thread | None = None
+        # The cottage site (card H2.3): built from the data directory.
+        self.cottage = cottage_factory(self._data_dir) if cottage_factory else None
         self._closed = False
 
     # -- lifecycle --
@@ -1128,6 +1131,8 @@ class PumpService:
             self._weather_thread.start()
         self.gateway.start()
         self.automation.start()
+        if self.cottage is not None:
+            self.cottage.start()
 
     def close(self) -> None:
         if self._closed:
@@ -1140,6 +1145,8 @@ class PumpService:
             self._weather_thread = None
         self.automation.stop()
         self.gateway.stop()
+        if self.cottage is not None:
+            self.cottage.stop()
         self.store.close()
 
     # -- reads --
@@ -1173,7 +1180,21 @@ class PumpService:
         return {"service": self.gateway.status(), "units": units}
 
     def events(self, limit: int = 100) -> list[dict]:
-        return self.store.events(limit)
+        """Pump commands, plus cottage mode changes when a cottage is set up."""
+        events = self.store.events(limit)
+        if self.cottage is None:
+            return events
+        merged = [{**e, "site": "home"} for e in events] + self.cottage.events(limit)
+        merged.sort(key=lambda e: _to_epoch(e["ts"]), reverse=True)
+        return merged[:limit]
+
+    def cottage_view(self) -> dict:
+        if self.cottage is None:
+            return {"configured": False, "site": None, "rooms": []}
+        return self.cottage.view()
+
+    def sites_health(self) -> list[dict]:
+        return [] if self.cottage is None else [self.cottage.health()]
 
     def plan_view(self) -> dict:
         """Today's cooling plan (card F4.1)."""
@@ -1234,14 +1255,20 @@ class PumpService:
             raise ValueError(
                 "range must be one of: " + ", ".join(sorted(HISTORY_RANGES)))
         span_seconds, max_points = HISTORY_RANGES[range_name]
-        site = site or "home"
+        cottage_room = unit.partition("cottage:")[2] if unit.startswith("cottage:") else None
+        if cottage_room is not None and self.cottage is None:
+            raise ValueError("no cottage is set up")
+        site = site or ("cottage" if cottage_room is not None else "home")
         now = self._now()
         if end is None:
             end = now
         else:
             end = min(end, now + timedelta(seconds=HISTORY_AHEAD))
         start = end - timedelta(seconds=span_seconds)
-        unit_rows = self.store.pump_history(unit, start, end, max_points)
+        cottage = (self.cottage.history(cottage_room, start, end, max_points)
+                   if cottage_room is not None else None)
+        unit_rows = ([] if cottage is not None
+                     else self.store.pump_history(unit, start, end, max_points))
         outdoor = self.store.outdoor_series(site, start, end, max_points)
         factor = vat_factor(SettingsStore(self.store.path).overrides(), site)
         price = self.store.price_series(self._prices_db, start, end,
@@ -1252,7 +1279,7 @@ class PumpService:
                                          factor)
         forecast = self.store.forecast_rows(
             site, max(start, now - timedelta(hours=1)), end)
-        return {
+        payload = {
             "now": _iso(_to_epoch(now)),
             "vat_percent": round((factor - 1) * 100, 2) if factor != 1 else None,
             "max_end": _iso(_to_epoch(now + timedelta(seconds=HISTORY_AHEAD))),
@@ -1272,6 +1299,9 @@ class PumpService:
             "commands": commands,
             "energy": energy,
         }
+        if cottage is not None:
+            payload.update(cottage)
+        return payload
 
     # -- outdoor temperature (card F3.3) ---------------------------------------
 
@@ -1465,7 +1495,8 @@ def make_live_service(data_dir, *, credentials=None, weather_sites=None,
                       readback_delay=DEFAULT_READBACK_DELAY,
                       command_timeout=DEFAULT_COMMAND_TIMEOUT,
                       automation_interval=None,
-                      automation_default_on=True) -> PumpService:
+                      automation_default_on=True,
+                      sites=None) -> PumpService:
     """Live service with explicit credentials, or development environment values.
 
     The unattended runner supplies credentials from Windows Credential Manager.
@@ -1482,6 +1513,11 @@ def make_live_service(data_dir, *, credentials=None, weather_sites=None,
             "live mode requires the VILLA_KUPPIS_MELCLOUD_USERNAME and "
             "VILLA_KUPPIS_MELCLOUD_PASSWORD environment variables"
         )
+    cottage_factory = None
+    if sites and "cottage" in sites:
+        from .cottage import make_cottage_site
+        cottage_factory = lambda data: make_cottage_site(data, sites["cottage"])
+
     def client_factory():
         client, close_session = _default_client_factory(username, password)
 
@@ -1505,4 +1541,5 @@ def make_live_service(data_dir, *, credentials=None, weather_sites=None,
         forecast_fetcher=weather.fetch_forecast_temperature,
         automation_interval=automation_interval,
         automation_default_on=automation_default_on,
+        cottage_factory=cottage_factory,
     )
