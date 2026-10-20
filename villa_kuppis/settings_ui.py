@@ -127,7 +127,10 @@ SCRIPT = r"""
     var group = null;
     // A value set at this very level needs no label; only inherited ones do.
     var level = scope.indexOf("room:") === 0 ? "room" : "site";
+    var kind = eff.kind.value;
     data.definitions.forEach(function (d, i) {
+      // Settings of the other control kind do nothing, so they are hidden.
+      if (d.kinds.indexOf(kind) < 0) return;
       if (d.group !== group) {
         group = d.group;
         $body.appendChild(make("h3", { textContent: group }));
@@ -135,7 +138,7 @@ SCRIPT = r"""
       var row = make("div", { className: "set-row" });
       var id = "set-" + d.key;
       var label = make("label", { htmlFor: id,
-        textContent: d.label + unitLabel(d), title: "Oletus: " + fmtDefault(d) });
+        textContent: d.label + unitLabel(d), title: d.help });
       var ctl = controlFor(d, eff[d.key], id);
       ctl.title = "Oletus: " + fmtDefault(d);
       var src = make("span", { className: "set-src",
