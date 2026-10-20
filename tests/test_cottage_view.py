@@ -88,7 +88,7 @@ class SitesConfigTests(unittest.TestCase):
             self.assertEqual(parse_sites({"cottage": {**good, "url": "wss://ha.example.invalid/api/websocket"}})[0][0],
                              "cottage")
             bad = [
-                {"home": good},
+                {"sauna": good},
                 {"cottage": {**good, "url": "http://100.64.0.5:8123"}},
                 {"cottage": {**good, "url": "ws://"}},
                 {"cottage": {**good, "url": 5}},

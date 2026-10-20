@@ -299,8 +299,9 @@ class RuntimeTests(unittest.TestCase):
             server.handle_request.side_effect = stop.set
             with mock.patch("villa_kuppis.runtime.read_credentials") as read, \
                     mock.patch("villa_kuppis.runtime.make_live_service") as live:
+                # A mocked price loop: the real one would fetch from Elering.
                 run(config, stop_event=stop, server_factory=lambda *a, **k: server,
-                    backup_factory=lambda *a: mock.Mock())
+                    backup_factory=lambda *a: mock.Mock(), price_factory=mock.Mock())
             self.assertEqual(live.call_args.kwargs["weather_sites"], {"home":(60.2,24.9)})
             read.assert_called_once()
 
