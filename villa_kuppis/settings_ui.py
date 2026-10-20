@@ -47,7 +47,9 @@ section.settings h3 { margin: 1rem 0 .3rem; font-size: 1rem; color: var(--text2)
 .set-row { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .8rem;
            padding: .35rem 0; border-bottom: 1px solid var(--line2); }
 .set-row { max-width: 40rem; }
-.set-row label { flex: 1 1 14rem; }
+.set-label { flex: 1 1 14rem; cursor: help; }
+.set-help { flex: 1 1 100%; margin: 0 0 .2rem; }
+.set-help[hidden] { display: none; }
 .set-src:empty { display: none; }
 .set-reset { min-width: 44px; padding: 0; font-size: 1.2rem; }
 .set-row input[type=number], .set-row input[type=time] {
@@ -137,10 +139,24 @@ SCRIPT = r"""
       }
       var row = make("div", { className: "set-row" });
       var id = "set-" + d.key;
-      var label = make("label", { htmlFor: id,
-        textContent: d.label + unitLabel(d), title: d.help });
+      // Not a <label for>: tapping the text must explain, not toggle the control.
+      var label = make("span", { className: "set-label", textContent: d.label + unitLabel(d),
+                                 title: d.help, tabIndex: 0 });
+      label.setAttribute("role", "button");
+      label.setAttribute("aria-expanded", "false");
+      var help = make("p", { className: "detail set-help", textContent: d.help });
+      help.hidden = true;
+      var toggleHelp = function () {
+        help.hidden = !help.hidden;
+        label.setAttribute("aria-expanded", help.hidden ? "false" : "true");
+      };
+      label.addEventListener("click", toggleHelp);
+      label.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleHelp(); }
+      });
       var ctl = controlFor(d, eff[d.key], id);
       ctl.title = "Oletus: " + fmtDefault(d);
+      ctl.setAttribute("aria-label", d.label + unitLabel(d));
       var src = make("span", { className: "set-src",
         textContent: eff[d.key].source === "default" || eff[d.key].source === level
           ? "" : SRC[eff[d.key].source] });
@@ -169,6 +185,7 @@ SCRIPT = r"""
         });
         row.appendChild(reset);
       }
+      row.appendChild(help);
       $body.appendChild(row);
     });
   }
