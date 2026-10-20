@@ -33,4 +33,4 @@ sdkmanager --sdk_root="$env:ANDROID_HOME" --list_installed
 tailscale version
 ```
 
-Android Studio and the SDK were installed for the Android app planned at the time. That app was dropped on 20 October 2026 (two-site Home Assistant), so they are no longer needed for this project. Matter commissioning uses the Home Assistant Companion or Google Home app on a phone or tablet. Mini-PC setup (Debian + Docker Compose at home, Home Assistant OS at the cottage) will be recorded here when it happens (H1.4, H2.1).
+Android Studio and the SDK were installed for the Android app planned at the time. That app was dropped on 20 October 2026 (two-site Home Assistant), so they are no longer needed for this project. Matter commissioning uses the Home Assistant Companion or Google Home app on a phone or tablet. Server setup (Debian 13 hosts with a Home Assistant OS virtual machine at both sites, Villa Kuppis in Docker Compose at home) is in [deploy/haos-vm.md](../deploy/haos-vm.md) and [deploy/home/README.md](../deploy/home/README.md) (H1.4, H2.1).

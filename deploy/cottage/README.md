@@ -1,6 +1,6 @@
 # Cottage Home Assistant
 
-The cottage HP MP9 G4 runs Home Assistant OS. Villa Kuppis (at home) sends each room's target over Tailscale; the `villa_kuppis_cottage` custom integration in this repository follows the room's ALPSTUGA locally and falls back to a safe setpoint on its own. Device setup and commissioning: [docs/cottage.md](../../docs/cottage.md).
+The cottage HP MP9 G4 (`cottage-server`) runs Debian 13 with Home Assistant OS as a virtual machine ([deploy/haos-vm.md](../haos-vm.md)); everything below happens inside that VM. Villa Kuppis (at home) sends each room's target over Tailscale; the `villa_kuppis_cottage` custom integration in this repository follows the room's ALPSTUGA locally and falls back to a safe setpoint on its own. Device setup and commissioning: [docs/cottage.md](../../docs/cottage.md).
 
 ## What the integration does
 
@@ -22,7 +22,7 @@ The integration has no cloud or network access of its own. Without the home serv
 1. Copy `custom_components/villa_kuppis_cottage/` from this repository to `/config/custom_components/` on the cottage Home Assistant (Samba share or the File editor / Studio Code Server app). HACS should also work (add this repository as a custom integration repository; not tried yet).
 2. Copy [packages/villa_kuppis.yaml](packages/villa_kuppis.yaml) to `/config/packages/`, enable packages in `configuration.yaml` (see the file's header) and replace the placeholder entity ids with the real ones.
 3. Restart Home Assistant. Each room gets `sensor.villa_kuppis_<room>_target`; its attributes show the mode, the reason, the target's revision and expiry.
-4. Create a long-lived access token for a dedicated, non-admin Home Assistant user `villa-kuppis` and store it on the home server outside Git (H2.3).
+4. Create a long-lived access token for a dedicated, non-admin Home Assistant user `villa-kuppis` and store it on the home server outside Git (H2.3). The home server reaches this VM through a Tailscale subnet route on `cottage-server` ([deploy/home/README.md](../home/README.md#cottage-connection)).
 
 ## Services
 

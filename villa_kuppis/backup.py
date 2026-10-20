@@ -45,6 +45,7 @@ expected to honour the stop event the same way.
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import shutil
 import sqlite3
@@ -55,6 +56,8 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Union
 from zoneinfo import ZoneInfo
+
+log = logging.getLogger(__name__)
 
 HELSENKI_TZ = ZoneInfo("Europe/Helsinki")
 
@@ -339,7 +342,12 @@ class BackupLoop:
                     None, False, False, (),
                     f"the backup attempt crashed: {err}")
             with self._lock:
-                self._last_result = result
+                previous, self._last_result = self._last_result, result
+            # A missing backup drive fails every retry: log each new error once.
+            if result.error and (previous is None or previous.error != result.error):
+                log.warning("Backup %s failed: %s", result.day, result.error)
+            elif result.backed_up:
+                log.info("Backup %s written: %s", result.day, ", ".join(result.files))
             if result.ok:
                 self._wait_until_next_day(result.day)
             else:

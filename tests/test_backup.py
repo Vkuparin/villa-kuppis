@@ -276,7 +276,12 @@ class TestBackupLoopFake(TempDirTest):
 
         loop = BackupLoop(self.data_dir, self.backup_dir, now=clock,
                           wait=wait, retry_interval=300.0, backup_fn=fake)
-        loop.start()
+        with self.assertLogs("villa_kuppis.backup") as logs:
+            loop.start()
+            wait_for(lambda: loop.last_result is not None and loop.last_result.ok)
+        # The repeated error is logged once, then the success.
+        self.assertEqual([r.levelname for r in logs.records], ["WARNING", "INFO"])
+        self.assertIn("simulated failure", logs.records[0].getMessage())
         try:
             wait_for(lambda: len(calls) >= 3)
             last = loop.last_result

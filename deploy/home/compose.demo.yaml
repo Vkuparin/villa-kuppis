@@ -4,7 +4,5 @@ services:
   villa-kuppis:
     command: ["--demo"]
     secrets: !reset []
-  homeassistant:
-    profiles: ["never"]
 
 secrets: !reset {}

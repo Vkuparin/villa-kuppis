@@ -1,6 +1,6 @@
 {
   "data_dir": "/data",
-  "backup_dir": "/backups",
+  "backup_dir": "/archive/villa-kuppis",
   "credential_file": "/run/secrets/melcloud",
   "public_origin": "https://HOSTNAME.TAILNET.ts.net",
   "port": 8377,

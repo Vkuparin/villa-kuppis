@@ -1,6 +1,8 @@
-# Home server: Villa Kuppis and Home Assistant as independent services.
-# Both use the host network so host Tailscale Serve reaches Villa Kuppis on
-# 127.0.0.1:8377 and Villa Kuppis reaches Home Assistant on 127.0.0.1:8123.
+# Home server: Villa Kuppis on the Debian host. Home Assistant runs separately
+# as a Home Assistant OS virtual machine with its own LAN address (see
+# README.md), so it has its own lifecycle and nothing here touches it.
+# Host network: host Tailscale Serve reaches Villa Kuppis on 127.0.0.1:8377,
+# and Villa Kuppis reaches both Home Assistants by their addresses.
 # No ports are published. Paths come from .env (see README.md).
 name: villa-kuppis
 
@@ -14,24 +16,25 @@ services:
     volumes:
       - ${KUPPIS_CONFIG_DIR:-/srv/villa-kuppis/config}:/config:ro
       - ${KUPPIS_DATA_DIR:-/srv/villa-kuppis/data}:/data
-      # Put this on a different disk than the data directory.
-      - ${KUPPIS_BACKUP_DIR:-/mnt/backup/villa-kuppis}:/backups
+      # The USB backup drive's mount point. rslave: a drive that mounts after
+      # the container started still shows up here. Backups go to
+      # /archive/villa-kuppis; while the drive is missing the folder does not
+      # exist and backups fail instead of filling the internal SSD.
+      - type: bind
+        source: ${KUPPIS_ARCHIVE_DIR:-/srv/archive}
+        target: /archive
+        bind:
+          propagation: rslave
     secrets:
       - melcloud
       - cottage_token
-
-  homeassistant:
-    image: ghcr.io/home-assistant/home-assistant:2026.10.2
-    restart: unless-stopped
-    network_mode: host
-    environment:
-      TZ: Europe/Helsinki
-    volumes:
-      - ${HA_CONFIG_DIR:-/srv/homeassistant/config}:/config
+      - home_ha_token
 
 secrets:
   melcloud:
     file: ${KUPPIS_SECRET_FILE:-/srv/villa-kuppis/secrets/melcloud.json}
-  # Long-lived access token of the cottage Home Assistant user (plain text).
+  # Long-lived access tokens of the Home Assistant `villa-kuppis` users (plain text).
   cottage_token:
     file: ${KUPPIS_COTTAGE_TOKEN_FILE:-/srv/villa-kuppis/secrets/cottage-token}
+  home_ha_token:
+    file: ${KUPPIS_HOME_TOKEN_FILE:-/srv/villa-kuppis/secrets/home-ha-token}

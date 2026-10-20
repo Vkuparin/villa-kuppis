@@ -6,8 +6,8 @@
 | --- | --- | --- |
 | TP-Link NE200-Outdoor | 1 | 5G connection |
 | TP-Link Archer BE230 | 1 | Wi-Fi router; the HP MP9 is wired to it |
-| HP MP9 G4 mini-PC (Core i3-8100T, 8 GB, 256 GB NVMe) | 1 | Home Assistant OS with the Matter Server and Tailscale apps; bought 20 October 2026, not yet arrived (see [architecture](architecture.md#deployment)) |
-| Seagate 5 TB portable USB drive (STGX5000400) | 1 | Home Assistant backups, off the mini-PC's SSD; arrives 27 October 2026 |
+| HP MP9 G4 mini-PC (Core i3-8100T, 8 GB, 256 GB NVMe) | 1 | `cottage-server`: Debian 13 with Tailscale, and Home Assistant OS as a virtual machine with the Matter Server app; bought 20 October 2026, not yet arrived (see [architecture](architecture.md#deployment)) |
+| Seagate 5 TB portable USB drive (STGX5000400) | 1 | `/srv/archive` on the host: Home Assistant backups through a Samba share, plus the owner's offsite photo copy; arrives 27 October 2026 |
 | Mill Invisible Gen 4 Wi-Fi heaters | 4 | Matter over Wi-Fi ([CSA-certified](https://csa-iot.org/csa_product/mill-wi-fi-panel-heater-gen4-40/)), controlled by the cottage Home Assistant |
 | IKEA ALPSTUGA | 2 | Matter-over-Thread air-quality sensors with temperature |
 | Google Home Speaker (2026) | 1 | Thread border router, voice and secondary controller ([specs](https://store.google.com/product/google_home_speaker_specs?hl=en-US)) |
@@ -25,7 +25,7 @@ The heaters and sensors arrive early November 2026.
 
 Everything can be set up at home first: set the BE230 to the cottage's Wi-Fi name and password, so the devices reconnect on their own when moved.
 
-1. Install Home Assistant OS on the HP MP9, wire it to the BE230 and set the BIOS to power on after AC loss. Add the Matter Server and Tailscale apps.
+1. Install Debian 13 on the HP MP9, wire it to the BE230 and set the BIOS to power on after AC loss with virtualization on. Create the Home Assistant OS virtual machine on a wired bridge, add the Matter Server app in it, and route the VM's address to the tailnet from the host ([deploy/haos-vm.md](../deploy/haos-vm.md), [deploy/home/README.md](../deploy/home/README.md#cottage-connection)).
 2. Set up the Google Home Speaker. Commission **one** heater and **one** ALPSTUGA into Google Home over Matter (Matter mode on the heater, not Mill Cloud), then share both to Home Assistant from Google Home (linked Matter apps and services). The Home Assistant Companion app on a phone or tablet can do the commissioning; the Villa Kuppis web app cannot.
 3. Record what Home Assistant exposes: the heater's setpoint range (does it accept 5 °C?), modes and read-back, and the ALPSTUGA's temperature, humidity, CO2 and PM2.5.
 4. Unplug the internet uplink and check that local control and sensor readings continue.

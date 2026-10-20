@@ -1,51 +1,52 @@
-# Home server (Debian + Docker Compose)
+# Home server (Debian host + Docker Compose)
 
-Villa Kuppis and Home Assistant run as two separate Compose services. Each can
-be rebuilt, restarted or stopped without touching the other. Both use the host
-network: Villa Kuppis listens on `127.0.0.1:8377` only, and Home Assistant
-listens on `:8123` for Villa Kuppis to call at `http://127.0.0.1:8123`. No
-ports are published. Tailscale runs on the host, not in a container.
+The home server `home-server` runs Debian 13. Villa Kuppis is a Compose service
+on the host; the home Home Assistant is a separate Home Assistant OS virtual
+machine with its own LAN address `HOME_HA_IP` ([deploy/haos-vm.md](../haos-vm.md)).
+Each can be rebuilt, restarted or stopped without touching the other. Villa
+Kuppis uses the host network and listens on `127.0.0.1:8377` only; no ports are
+published. Tailscale runs on the host, not in a container.
 
 ## Install
 
-1. Install Debian, Docker Engine with the Compose plugin (from Docker's apt
-   repository) and Tailscale. Add your user to the `docker` group.
+1. Install Debian 13, Docker Engine with the Compose plugin (from Docker's apt
+   repository) and Tailscale. Run Docker with `sudo` (the `docker` group is
+   root-equivalent).
 2. Laptop-as-server settings (lid, suspend, battery, power loss) are in
    [docs/architecture.md](../../docs/architecture.md#deployment).
-3. Clone this repository, for example to `~/villa-kuppis`.
+3. Create the Home Assistant VM: [deploy/haos-vm.md](../haos-vm.md).
+4. Clone this repository, for example to `~/villa-kuppis`.
 
 ## Folders
 
 Defaults are below. To use other paths, copy the names into `deploy/home/.env`
-(`KUPPIS_CONFIG_DIR`, `KUPPIS_DATA_DIR`, `KUPPIS_BACKUP_DIR`, `KUPPIS_SECRET_FILE`,
-`HA_CONFIG_DIR`, `KUPPIS_COTTAGE_TOKEN_FILE`).
+(`KUPPIS_CONFIG_DIR`, `KUPPIS_DATA_DIR`, `KUPPIS_ARCHIVE_DIR`, `KUPPIS_SECRET_FILE`,
+`KUPPIS_COTTAGE_TOKEN_FILE`, `KUPPIS_HOME_TOKEN_FILE`).
 
 | Path | Purpose |
 | --- | --- |
 | `/srv/villa-kuppis/config/villa-kuppis.json` | Service config (read-only in the container) |
 | `/srv/villa-kuppis/data` | SQLite databases and service log |
-| `/mnt/backup/villa-kuppis` | Daily backups. **Mount a different disk here**, not the laptop SSD: the 5 TB WD My Passport USB drive |
+| `/srv/archive/villa-kuppis` | Daily backups, on the 5 TB WD My Passport USB drive (seen as `/archive/villa-kuppis` in the container) |
 | `/srv/villa-kuppis/secrets/melcloud.json` | MELCloud login |
 | `/srv/villa-kuppis/secrets/cottage-token` | Cottage Home Assistant access token |
-| `/srv/homeassistant/config` | Home Assistant config |
+| `/srv/villa-kuppis/secrets/home-ha-token` | Home Home Assistant access token |
 
-Backup drive: the WD My Passport comes formatted for Windows/macOS. Reformat it
-as ext4 (this erases it), label it `kuppis-backup`, and mount it by label with
-`nofail` so the server still boots without it:
-
-```
-sudo mkfs.ext4 -L kuppis-backup /dev/sdX1   # check the device with lsblk first
-sudo mkdir -p /mnt/backup
-echo 'LABEL=kuppis-backup /mnt/backup ext4 defaults,nofail,x-systemd.device-timeout=10 0 2' | sudo tee -a /etc/fstab
-sudo mount /mnt/backup && sudo mkdir -p /mnt/backup/villa-kuppis
-```
+Backup drive: the WD drive is ext4 with the label `HOME_BACKUP`, mounted by UUID
+at `/srv/archive` with `nofail,x-systemd.device-timeout=30s` (owner's server
+guide). Check it with `findmnt /srv/archive`. Compose mounts the whole
+`/srv/archive` so a drive that mounts late still reaches the container. Leave
+`/srv/archive` itself owned by root: with the drive missing, the container
+cannot create `villa-kuppis` on the internal SSD, and the backup fails and logs
+it instead.
 
 The container runs as UID 1000. The data and backup folders must be writable by
 that UID:
 
 ```
-sudo mkdir -p /srv/villa-kuppis/{config,data,secrets} /srv/homeassistant/config
-sudo chown 1000:1000 /srv/villa-kuppis/data /mnt/backup/villa-kuppis
+findmnt /srv/archive    # must show the HOME_BACKUP drive before you go on
+sudo mkdir -p /srv/villa-kuppis/{config,data,secrets} /srv/archive/villa-kuppis
+sudo chown 1000:1000 /srv/villa-kuppis/data /srv/archive/villa-kuppis
 cp deploy/home/villa-kuppis.example.json /srv/villa-kuppis/config/villa-kuppis.json
 ```
 
@@ -70,27 +71,53 @@ Credential Manager.
 
 ## Cottage connection
 
-Villa Kuppis reads the cottage rooms from the cottage Home Assistant over
-Tailscale (card H2.3; read-only, no commands yet). Compose mounts a second
-secret, `cottage_token`, at `/run/secrets/cottage_token`: a plain-text file with
-the long-lived access token of the cottage's `villa-kuppis` user (see
-[deploy/cottage/README.md](../cottage/README.md)). Same rules as above: owned by
-UID 1000, mode 0600, never in Git. Create an empty file before the first
-`docker compose up`, even if the cottage is not connected yet.
+Villa Kuppis reads the cottage rooms from the cottage Home Assistant and sends
+the room targets to it over Tailscale (cards H2.3, H2.4). Compose mounts two
+more secrets: `cottage_token` at `/run/secrets/cottage_token` and
+`home_ha_token` at `/run/secrets/home_ha_token`, plain-text files with the
+long-lived access tokens of each Home Assistant's `villa-kuppis` user. Same
+rules as above: owned by UID 1000, mode 0600, never in Git. Create both files,
+empty if need be, before the first `docker compose up`:
+
+```
+for f in cottage-token home-ha-token; do
+  sudo install -m 600 -o 1000 -g 1000 /dev/null /srv/villa-kuppis/secrets/$f
+done
+```
+
+The cottage Home Assistant is a VM behind `cottage-server` and is not on the
+tailnet itself. `cottage-server` routes just its address to the tailnet (a
+Tailscale subnet route for one address), and `home-server` accepts the route:
+
+```
+# on cottage-server
+echo 'net.ipv4.ip_forward = 1' | sudo tee /etc/sysctl.d/99-tailscale.conf
+sudo sysctl -p /etc/sysctl.d/99-tailscale.conf
+sudo tailscale set --advertise-routes=<COTTAGE_HA_IP>/32
+# approve the route: Tailscale admin console > Machines > cottage-server > Edit route settings
+# on home-server
+sudo tailscale set --accept-routes
+curl -sS -o /dev/null -w '%{http_code}\n' http://<COTTAGE_HA_IP>:8123/   # 200
+```
+
+Pick a cottage VM address that is not also used on the home LAN. Windows and
+phones with Tailscale accept the route by default, so the cottage Home
+Assistant UI also opens at `http://<COTTAGE_HA_IP>:8123` from anywhere on the
+tailnet; no SSH tunnel needed.
 
 Add a `sites` field to the config (JSON has no comments, so it is not in the
-example file). Use the cottage Home Assistant's Tailscale name or address:
+example file):
 
 ```
 "sites": {
   "cottage": {
-    "url": "ws://COTTAGE-HA.TAILNET.ts.net:8123/api/websocket",
+    "url": "ws://<COTTAGE_HA_IP>:8123/api/websocket",
     "token_file": "/run/secrets/cottage_token"
   }
 }
 ```
 
-Only `cottage` is a valid site id. `url` must be `ws://` or `wss://`;
+The site ids are `cottage` and `home`. `url` must be `ws://` or `wss://`;
 `token_file` must be an absolute path. The token is read again on every
 reconnect, so replacing the file rotates it without a restart.
 
@@ -117,17 +144,20 @@ stale, unavailable or missing; history and mode changes are recorded in
 
 ## Pumps through Home Assistant (H1.5)
 
-Off by default: the pumps use the direct MELCloud Home client. After the parity test (H1.3), add the home Home Assistant to `sites` and switch:
+Off by default: the pumps use the direct MELCloud Home client. After the parity test (H1.3), add the home Home Assistant VM to `sites` and switch:
 
 ```json
-"sites": {"home": {"url": "ws://127.0.0.1:8123/api/websocket", "token_file": "/run/secrets/home_ha_token"}},
+"sites": {
+  "cottage": {"url": "ws://<COTTAGE_HA_IP>:8123/api/websocket", "token_file": "/run/secrets/cottage_token"},
+  "home": {"url": "ws://<HOME_HA_IP>:8123/api/websocket", "token_file": "/run/secrets/home_ha_token"}
+},
 "pumps": "home_assistant"
 ```
 
 Bind each pump's climate entity with its existing MELCloud unit id as the device id, so history, settings and plans carry over (the unit ids are in the app's `/api/view`; `discover --site home` lists the entities):
 
 ```bash
-docker compose -f deploy/home/compose.yaml run --rm --entrypoint python villa-kuppis \
+docker compose -f deploy/home/compose.yaml run --rm --no-deps --entrypoint python villa-kuppis \
   -m villa_kuppis.sites --config /config/villa-kuppis.json bind home UNIT_ID climate.olohuone climate
 ```
 
@@ -142,7 +172,7 @@ sudo tailscale serve --bg --https=443 http://127.0.0.1:8377
 tailscale serve status
 ```
 
-Only Villa Kuppis is published. Do not serve port 8123.
+Only Villa Kuppis is published. Do not serve or forward port 8123.
 
 ## Update
 
@@ -151,8 +181,8 @@ scripts/update-home-server.sh
 ```
 
 It pulls `main`, rebuilds the image, restarts only `villa-kuppis` and waits for
-the health check. To update Home Assistant, change the pinned tag in
-`compose.yaml` and run `docker compose -f deploy/home/compose.yaml up -d homeassistant`.
+the health check. Home Assistant updates itself from its own UI (Settings >
+System > Updates) after a backup; it does not touch Villa Kuppis.
 
 ## Check and restore the database
 
@@ -161,8 +191,7 @@ Check the newest one (no service stop needed):
 
 ```
 docker compose -f deploy/home/compose.yaml run --rm --no-deps --entrypoint python \
-  -v /mnt/backup/villa-kuppis:/backups:ro villa-kuppis \
-  -m villa_kuppis.backup verify /backups/2026-10-20
+  villa-kuppis -m villa_kuppis.backup verify /archive/villa-kuppis/2026-10-20
 ```
 
 Every file should print `ok`. To restore after data loss or corruption:
@@ -172,8 +201,7 @@ docker compose -f deploy/home/compose.yaml stop villa-kuppis
 sudo mv /srv/villa-kuppis/data /srv/villa-kuppis/data.old    # keep the old files
 sudo mkdir /srv/villa-kuppis/data && sudo chown 1000:1000 /srv/villa-kuppis/data
 docker compose -f deploy/home/compose.yaml run --rm --no-deps --entrypoint python \
-  -v /mnt/backup/villa-kuppis:/backups:ro villa-kuppis \
-  -m villa_kuppis.backup restore /backups/2026-10-20 /data
+  villa-kuppis -m villa_kuppis.backup restore /archive/villa-kuppis/2026-10-20 /data
 docker compose -f deploy/home/compose.yaml up -d villa-kuppis
 ```
 
@@ -188,15 +216,20 @@ network, no Home Assistant. Use throw-away folders:
 
 ```
 export KUPPIS_CONFIG_DIR=/tmp/kuppis-demo/config KUPPIS_DATA_DIR=/tmp/kuppis-demo/data \
-  KUPPIS_BACKUP_DIR=/tmp/kuppis-demo/backups
-mkdir -p $KUPPIS_CONFIG_DIR $KUPPIS_DATA_DIR $KUPPIS_BACKUP_DIR
-echo '{"data_dir":"/data","backup_dir":"/backups"}' > $KUPPIS_CONFIG_DIR/villa-kuppis.json
-sudo chown 1000:1000 $KUPPIS_DATA_DIR $KUPPIS_BACKUP_DIR
+  KUPPIS_ARCHIVE_DIR=/tmp/kuppis-demo/archive
+mkdir -p $KUPPIS_CONFIG_DIR $KUPPIS_DATA_DIR $KUPPIS_ARCHIVE_DIR/villa-kuppis
+echo '{"data_dir":"/data","backup_dir":"/archive/villa-kuppis"}' > $KUPPIS_CONFIG_DIR/villa-kuppis.json
+sudo chown 1000:1000 $KUPPIS_DATA_DIR $KUPPIS_ARCHIVE_DIR/villa-kuppis
 docker compose -f deploy/home/compose.yaml -f deploy/home/compose.demo.yaml up -d --build
 docker compose -f deploy/home/compose.yaml -f deploy/home/compose.demo.yaml down
 ```
 
+If Docker says the folder "is not a shared or slave mount", the host's root mount
+is private (systemd makes it shared): `sudo mount --make-rshared /`.
+
 ## Still to check on the real machine
 
-Cold boot (both services come back on their own), `tailscale serve` from a
-phone, and Villa Kuppis reaching Home Assistant at `127.0.0.1:8123`.
+Cold boot (the drive mounts, the `haos` VM and `villa-kuppis` come back on their
+own), `tailscale serve` from a phone, Villa Kuppis reaching `HOME_HA_IP:8123`
+and, through the subnet route, `COTTAGE_HA_IP:8123`, and a backup with the
+drive unplugged failing without writing to the SSD.
