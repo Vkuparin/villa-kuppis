@@ -84,7 +84,7 @@ Each reading has a value, a timestamp and a fresh/stale flag. Each command recor
 
 ## Heating and cooling
 
-Devices remain their own thermostats; plans only change setpoints, on/off and fan, never the mode. Every automation acts on measured room temperatures, so idle seasons take care of themselves: the cottage heaters do nothing when the room is already warm, and pump automation is cooling-only and leaves alone any unit not in cooling mode. If the PC, phone or internet is down, the last uploaded automations and the devices' own setpoints keep working. The Mill heaters also have built-in frost protection.
+Devices remain their own thermostats; plans only change setpoints, on/off and fan, never the mode. Every automation acts on measured room temperatures, so idle seasons take care of themselves: the cottage heaters do nothing when the room is already warm, and pump automation is cooling-only and leaves alone any unit not in cooling mode. The installed service runs the plan loop and a daily spot-price fetch itself; a master switch (stored with the data, off unless configured otherwise) decides whether the plan acts on the pumps, and switching it off leaves the devices as they are. If the PC, phone or internet is down, the last uploaded automations and the devices' own setpoints keep working. The Mill heaters also have built-in frost protection.
 
 Plans use Europe/Helsinki local time; store timestamps in UTC.
 

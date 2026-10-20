@@ -29,7 +29,12 @@ No release is published yet. After publication, record the actual release link a
 - 2026-10-18: Pumps are used mainly for summer cooling; both sites are on spot-price contracts.
 - 2026-10-18: Home ships first, because the pumps are available now. Cooling defaults: maximum 25 °C, precooling 21 °C, switching off allowed with a minimum off time; separate home-away button; quiet night fan in chosen rooms. Every setting is changeable in the app.
 - 2026-10-18: No season mode: automations act on measured room temperatures; pump automation is cooling-only and never changes a mode. Cottage automations fit Google's limits: one per room, every 30 minutes, at most 12 time windows a day.
+- 2026-10-19: No pull requests: commit and merge directly to main in this small hobby project.
 - 2026-10-19: Design phase finished; implementation starts with the offline spot-price experiment. Live account and device tests still need the owner's go-ahead.
+- 2026-10-20: Home is installed as an unattended service with private Tailscale HTTPS access. UI preferences (dark theme, accent colour) are per browser. Settings save automatically and are explained in the app; settings of the other control kind are hidden.
+- 2026-10-20: A master `Automaatio` switch in the page header turns the whole automation on or off; it starts off unless `"plan": true`, and switching off does not restore device settings. The plan loop and the daily price fetch always run in the installed service.
+- 2026-10-20: VAT is an opt-in setting (25.5 %) that applies to the price curve, cost and the cooling plan's thresholds, so thresholds are entered with VAT while it is on.
+- 2026-10-20: Cooling in the heating season: `Esijäähdytys käytössä` can be turned off so the target stays at the maximum and cooling does not compete with radiators. Optional power management by room temperature starts a unit above the maximum and stops it 0.5 °C below, only in cooling mode and never changing a mode.
 
 ## Decisions still needed
 
