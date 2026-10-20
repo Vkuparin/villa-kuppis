@@ -276,7 +276,7 @@ assert.equal($histStatus.textContent, '');
         server, _ = self._start_app(FakeClient(make_unit_payloads()))
         _, _, raw = http("GET", self._url(server, "/"))
         page = raw.decode("utf-8")
-        for needle in ("src=", 'link rel', "@import", "fetch(\"http"):
+        for needle in ("src=", 'rel="stylesheet"', "@import", "fetch(\"http"):
             self.assertNotIn(needle, page)
 
     def test_page_script_source_intact(self):

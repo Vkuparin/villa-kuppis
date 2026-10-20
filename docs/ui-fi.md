@@ -59,3 +59,14 @@ Laitteen ilmoittama tila ja pyydetty muutos näytetään erikseen, kunnes laite 
 Esimerkki: `Mökki · Olohuone — 6,5 °C · Tavoite 12 °C · Hintasääntö: alle 5 c/kWh`. Yhteyskatkossa: `Viimeisin mittaus 6,5 °C, tänään klo 14.32. Ei yhteyttä.`
 
 Käytetään fi-FI-muotoilua (selain voi näyttää kellonajan syöttökentässä 12 tunnin muodossa; arvo tallentuu aina muodossa tt:mm), Celsius-asteita, 24 tunnin kelloa ja hinnoissa yksikköä c/kWh. Aikavyöhyke on Europe/Helsinki. Säätimissä on näppäimistötuki, näkyvä kohdistus ja riittävät kosketusalueet. Väri ei yksin välitä tilaa. Sovelluksen käyttö ei edellytä Matter- tai verkkotekniikan tuntemista.
+
+## Asennus puhelimeen ja offline-tila (PWA)
+
+- **Osoite:** sovellus asennetaan vain tailnetin HTTPS-osoitteesta (Tailscale Serve antaa kelvollisen varmenteen, jota PWA vaatii). Pelkkä `http://`-osoite tai IP-osoite ei kelpaa. Puhelimessa pitää olla Tailscale päällä ja kirjautuneena samaan tailnetiin; muita lupia ei tarvita.
+- **Android (Chrome):** avaa osoite, valitse valikosta `Asenna sovellus` tai `Lisää aloitusnäytölle`.
+- **iPhone/iPad (Safari):** avaa osoite, valitse jakopainikkeesta `Lisää Koti-valikkoon`.
+- **Työpuhelin:** työnantajan hallinta voi estää Tailscalen tai VPN-profiilin. Kokeile asennusta ja avaamista ennen kuin luotat siihen; jos Tailscale ei toimi, sovellus avautuu vain selaimessa verkon sisältä tai ei ollenkaan.
+- **Mitä tallentuu offline-käyttöön:** vain sovelluksen kuori (sivu, kuvakkeet ja manifesti), jotta sovellus avautuu ilman yhteyttä. Laitteiden tietoja (`/api/…`) ei tallenneta, joten offline-tilassa ei näytetä keksittyjä lukemia. Komentoja ei jonoteta eikä lähetetä myöhemmin: jos yhteyttä ei ole, komento ei lähde.
+- **Yläpalkin tilarivi:** `Koti: ok / vanhentunut / virhe / käynnistyy` ja `Mökki: ok / vanhentunut / ei yhteyttä / tunnus hylätty`. `Mökki: turvalämpö` näkyy, kun jokin huone on paikallisella turvalämmöllä. Napautus tai hiiren vienti näyttää selityksen. Jos selain on offline tai päivitys epäonnistui, rivillä lukee `ei tietoa`, arvot himmenevät ja varoitusrivi kertoo, kuinka vanhaa tieto on (`Ei yhteyttä Villa Kuppisiin – näytetään viimeisin tieto`).
+- **Odottaa vahvistusta:** pumpun komento näkyy kortilla tilassa `Odottaa vahvistusta`, ja uusi arvo näytetään vasta, kun laite ilmoittaa sen. Mökin tavoitteesta kertoo `Mökki kuitannut`.
+- **Päivitys:** palvelutyö (`/sw.js`) tarkistetaan aina verkosta; vanha välimuisti poistetaan, kun välimuistin versio vaihtuu.

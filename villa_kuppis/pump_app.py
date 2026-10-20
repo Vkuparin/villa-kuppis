@@ -4,6 +4,7 @@ Serves one self-contained page (inline CSS and JS, no external assets,
 fully offline) plus a small JSON API on top of PumpService:
 
 * GET  /              the Finnish app
+* GET  /manifest.webmanifest, /sw.js, /icon*.png, /icon.svg  installable PWA (card H3.1)
 * GET  /api/view      unit states, pending slots and service status
 * GET  /api/events    the event log (newest first)
 * GET  /api/history   downsampled time series (card F3.3)
@@ -50,6 +51,7 @@ import re
 import sys
 from datetime import datetime
 from email.header import decode_header
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
 from urllib.parse import parse_qs, urlsplit
@@ -189,6 +191,23 @@ def _has_control_chars(text: str) -> bool:
     return any(ord(c) < 0x20 or ord(c) == 0x7F for c in text)
 
 
+# --- PWA files (card H3.1) ----------------------------------------------------
+
+_STATIC_DIR = Path(__file__).parent / "static"
+# path -> (file, content type, Cache-Control). The service worker and the
+# manifest are always revalidated so an update reaches the phone quickly.
+_STATIC_FILES = {
+    "/manifest.webmanifest": ("manifest.webmanifest",
+                              "application/manifest+json; charset=utf-8", "no-cache"),
+    "/sw.js": ("sw.js", "text/javascript; charset=utf-8", "no-cache"),
+    "/icon.svg": ("icon.svg", "image/svg+xml", "public, max-age=86400"),
+    "/icon-192.png": ("icon-192.png", "image/png", "public, max-age=86400"),
+    "/icon-512.png": ("icon-512.png", "image/png", "public, max-age=86400"),
+    "/icon-maskable-512.png": ("icon-maskable-512.png", "image/png",
+                               "public, max-age=86400"),
+}
+
+
 # --- the page ---------------------------------------------------------------
 
 _PAGE = """<!doctype html>
@@ -197,6 +216,13 @@ _PAGE = """<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pumput</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#0b5fff">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Kuppis">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon-192.png">
 <script>
 (function () {
   var t = null, a = null;
@@ -264,6 +290,18 @@ h1 { font-size: 1.35rem; margin: 0; }
            background: var(--surface2); border: 1px solid var(--line);
            border-radius: .5rem; padding: .18rem .6rem; }
 #last-updated { font-size: .85rem; color: var(--text3); }
+.health { display: inline-flex; flex-wrap: wrap; gap: .4rem; }
+.health button.badge { min-height: 36px; min-width: 0; cursor: pointer; font: inherit;
+                       font-size: .85rem; }
+.health button.badge[hidden] { display: none; }
+.badge.mute { color: var(--text3); border-color: var(--ctl); background: var(--surface2); }
+.health-detail, .offline-banner { padding: .55rem 1.25rem; font-size: .92rem;
+                                  border-bottom: 1px solid var(--line); }
+.health-detail { background: var(--surface2); color: var(--text2); }
+.offline-banner { background: var(--warn-bg); border-color: var(--warn-line);
+                  color: var(--warn-text); }
+.health-detail[hidden], .offline-banner[hidden] { display: none; }
+body[data-conn="down"] #cards, body[data-conn="down"] .cottage-rooms { opacity: .55; }
 #demo-banner { display: none; padding: .6rem 1.25rem; background: var(--warn-bg);
                border-bottom: 1px solid var(--warn-line); color: var(--warn-text); }
 body[data-demo="1"] #demo-banner { display: block; }
@@ -380,11 +418,16 @@ td.result-observed { color: var(--text2); }
 <header class="top">
   <h1>Pumput</h1>
   <span id="identity" class="identity" title="Kirjautunut käyttäjä"></span>
-  <span id="service-status" role="status"><span class="badge info">Yhteyttä muodostetaan…</span></span>
+  <span id="health" class="health" role="status" aria-label="Kohteiden tila">
+    <button type="button" class="badge info" id="health-home" data-site="home">Koti: yhdistetään…</button>
+    <button type="button" class="badge info" id="health-cottage" data-site="cottage" hidden>Mökki: yhdistetään…</button>
+  </span>
   <span id="last-updated"></span>
   <button type="button" class="switch auto-switch" role="switch" aria-checked="false"
           id="auto-btn" title="Hinta- ja lämpötilaohjattu automaatio. Pois päältä se ei lähetä pumpuille komentoja; pumput jäävät siihen tilaan, jossa ne ovat."><span class="track"></span><span>Automaatio</span></button>
 </header>
+<div id="health-detail" class="health-detail" role="status" hidden></div>
+<div id="offline-banner" class="offline-banner" role="status" hidden></div>
 <div id="demo-banner">Esittelytila: näytetyt arvot ovat keksittyjä ja toiminnot
 ohjaavat vain esittelyyksiköitä.</div>
 <main>
@@ -439,6 +482,7 @@ ohjaavat vain esittelyyksiköitä.</div>
   </section>
 </main>
 <div id="alerts" role="alert" aria-live="assertive"></div>
+<script>/*HEALTH_SCRIPT*/</script>
 <script>
 "use strict";
 const MODE_NAMES = { Cool: "Jäähdytys", Heat: "Lämmitys", Dry: "Kuivaus",
@@ -454,8 +498,6 @@ const RESULT_TEXT = { pending: "Lähetetään…", confirmed: "Vahvistettu",
 const POLL_MS = 5000;
 
 const $cards = document.getElementById("cards");
-const $status = document.getElementById("service-status");
-const $updated = document.getElementById("last-updated");
 const $rows = document.getElementById("event-rows");
 const $alerts = document.getElementById("alerts");
 const $histUnit = document.getElementById("hist-unit");
@@ -641,9 +683,9 @@ function cardHtml(unit) {
     "</select></div>"
   );
   const pendingHtml = pending
-    ? '<div class="pending">Lähetetään: ' +
+    ? '<div class="pending"><b>Odottaa vahvistusta:</b> ' +
       esc(changeText(pending.action, pending.requested)) +
-      " &mdash; laite vahvistaa muutoksen</div>"
+      " &mdash; uusi arvo näytetään vasta, kun laite ilmoittaa sen</div>"
     : "";
   return (
     '<article class="card' + (unit.fresh ? "" : " stale") + '">' +
@@ -658,20 +700,8 @@ function cardHtml(unit) {
 
 function renderView(view) {
   const svc = view.service;
-  let cls = "info", text = "Yhteyttä muodostetaan…";
-  if (svc.state === "ok") { cls = "ok"; text = "Yhteydessä"; }
-  else if (svc.state === "stale") { cls = "warn"; text = "Mittaukset vanhentuneet"; }
-  else if (svc.state === "error") { cls = "err"; text = "Yhteysvirhe"; }
-  $status.innerHTML = '<span class="badge ' + cls + '">' + esc(text) + "</span>";
-  if (svc.state === "error" && svc.error) {
-    const d = document.createElement("span");
-    d.id = "service-error";
-    d.style.cssText = "font-size:.85rem;color:var(--err)";
-    d.textContent = svc.error;
-    $status.appendChild(document.createTextNode(" "));
-    $status.appendChild(d);
-  }
-  $updated.textContent = svc.last_ok ? "Päivitetty " + fmtWhen(svc.last_ok) : "";
+  vkHealth.viewOk(view);
+  const text = vkHealth.homeText(svc.state);
   document.title = svc.state === "ok" ? "Pumput" : "Pumput — " + text;
   // Rebuilding the cards would close a list the user is choosing from.
   const active = document.activeElement;
@@ -1057,13 +1087,13 @@ function populateUnits(units) {
 async function refresh() {
   try {
     const [view, events] = await Promise.all([
-      fetch("/api/view").then((r) => r.json()),
-      fetch("/api/events").then((r) => r.json())
+      fetch("/api/view").then((r) => { if (!r.ok) throw new Error("http " + r.status); return r.json(); }),
+      fetch("/api/events").then((r) => { if (!r.ok) throw new Error("http " + r.status); return r.json(); })
     ]);
     renderView(view);
     renderEvents(events);
   } catch (err) {
-    $status.innerHTML = '<span class="badge err">Palveluun ei ole yhteyttä</span>';
+    vkHealth.viewFailed();
   }
 }
 
@@ -1101,7 +1131,7 @@ async function sendCommand(unitId, action, value) {
       refresh();
     }
   } catch (err) {
-    alert("Yhteys palveluun epäonnistui.");
+    alert("Yhteys palveluun epäonnistui. Komentoa ei lähetetty eikä sitä lähetetä myöhemmin; yritä uudelleen, kun yhteys toimii.");
   } finally {
     sending = false;
   }
@@ -1207,6 +1237,12 @@ loadIdentity();
 setInterval(refresh, POLL_MS);
 setInterval(loadHistory, 60000);
 setInterval(loadIdentity, 60000);
+if ("serviceWorker" in navigator) {
+  // Offline start only; the worker never caches /api/ or touches commands.
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
+  });
+}
 </script>
 <script>/*SETTINGS_SCRIPT*/</script>
 <script>/*PLAN_SCRIPT*/</script>
@@ -1217,11 +1253,150 @@ setInterval(loadIdentity, 60000);
 """
 
 
+_HEALTH_SCRIPT = r"""
+// Site health row (card H3.1): Koti from /api/view, Mökki from /api/sites and
+// /api/cottage. When the browser is offline or the last refresh failed the
+// chips show that instead of an old "ok", and the values are greyed out.
+var vkHealth = (function () {
+  "use strict";
+  var S = { view: null, viewAt: null, viewFailed: false, sites: null,
+            cottage: null, sitesAt: null, sitesFailed: false, open: null };
+  var $home = document.getElementById("health-home");
+  var $cot = document.getElementById("health-cottage");
+  var $detail = document.getElementById("health-detail");
+  var $banner = document.getElementById("offline-banner");
+  var $upd = document.getElementById("last-updated");
+  var HOME = { ok: ["ok", "ok"], stale: ["warn", "vanhentunut"],
+               error: ["err", "virhe"], initializing: ["info", "käynnistyy"] };
+  var COT = { ok: ["ok", "ok"], stale: ["warn", "vanhentunut"],
+              offline: ["err", "ei yhteyttä"], auth_failed: ["err", "tunnus hylätty"] };
+  function ago(ms) {
+    if (!ms) return "ei tietoa";
+    var s = Math.max(0, (Date.now() - ms) / 1000);
+    if (s < 60) return "juuri nyt";
+    if (s < 3600) return Math.round(s / 60) + " min sitten";
+    if (s < 86400) return Math.round(s / 3600) + " h sitten";
+    return Math.round(s / 86400) + " pv sitten";
+  }
+  function whenIso(iso) { return iso ? ago(new Date(iso).getTime()) : "ei tiedossa"; }
+  function browserOffline() { return navigator.onLine === false; }
+  function down() { return browserOffline() || S.viewFailed; }
+  function set(chip, cls, text, detail) {
+    chip.className = "badge " + cls;
+    chip.textContent = text;
+    chip.title = detail;
+    chip.dataset.detail = detail;
+  }
+  function home() {
+    if (down() || !S.view) {
+      var known = S.viewAt ? "Viimeisin tieto saatu " + ago(S.viewAt) + "." : "Tietoa ei ole vielä saatu.";
+      set($home, "mute", S.view ? "Koti: ei tietoa" : "Koti: yhdistetään…",
+        down() ? "Villa Kuppisiin ei saada yhteyttä, joten kodin tilaa ei tiedetä. " + known : known);
+      return;
+    }
+    var svc = S.view.service, c = HOME[svc.state] || HOME.initializing;
+    var detail = {
+      ok: "Pumppujen tiedot ovat tuoreita (päivitetty " + whenIso(svc.last_ok) + ").",
+      stale: "Pumppujen lukemia ei ole saatu vähään aikaan; näytetyt arvot voivat olla vanhoja (viimeksi " +
+             whenIso(svc.last_ok) + ").",
+      error: "Pumppujen pilvipalvelun luku epäonnistui" + (svc.error ? ": " + svc.error : "") + ".",
+      initializing: "Palvelu käynnistyy ja hakee ensimmäisiä lukemia."
+    }[svc.state] || "";
+    set($home, c[0], "Koti: " + c[1], detail);
+  }
+  function fallbackRooms() {
+    var out = [];
+    if (S.cottage && S.cottage.configured) S.cottage.rooms.forEach(function (r) {
+      if (r.status && r.status.mode === "fallback") out.push(r.name);
+    });
+    return out;
+  }
+  function cottage() {
+    var site = S.sites && S.sites[0];
+    if (!site) { $cot.hidden = true; return; }
+    $cot.hidden = false;
+    if (down() || S.sitesFailed) {
+      set($cot, "mute", "Mökki: ei tietoa",
+        "Mökin tilaa ei tiedetä, koska Villa Kuppisiin ei saada yhteyttä. Viimeisin tieto saatu " +
+        ago(S.sitesAt) + ".");
+      return;
+    }
+    var conn = COT[site.connection] || COT.offline;
+    var last = "Viimeksi yhteydessä " + whenIso(site.last_contact) + ".";
+    var fb = fallbackRooms();
+    if (site.connection === "offline" || site.connection === "auth_failed") {
+      set($cot, conn[0], "Mökki: " + conn[1],
+        (site.connection === "auth_failed"
+          ? "Home Assistant hylkäsi tunnuksen; tunnus pitää uusia. "
+          : "Yhteys mökin Home Assistantiin on poikki. Mökin ohjain toimii omillaan ja siirtyy turvalämpöön, jos Villa Kuppiksen tavoite vanhenee. ") +
+        (site.error ? site.error + " " : "") + last);
+    } else if (fb.length) {
+      set($cot, "warn", "Mökki: turvalämpö",
+        "Villa Kuppiksen tavoite puuttuu tai on vanhentunut, ja patterit ovat turvalämmöllä: " +
+        fb.join(", ") + ". " + last);
+    } else if (site.connection === "stale") {
+      set($cot, "warn", "Mökki: vanhentunut",
+        "Mökiltä ei ole saatu tuoretta tietoa vähään aikaan; näytetyt arvot voivat olla vanhoja. " + last);
+    } else {
+      set($cot, "ok", "Mökki: ok", "Yhteys mökin Home Assistantiin toimii. " + last);
+    }
+  }
+  function render() {
+    var isDown = down();
+    document.body.dataset.conn = isDown ? "down" : "up";
+    home();
+    cottage();
+    if (isDown) {
+      $banner.hidden = false;
+      $banner.textContent = (browserOffline()
+        ? "Ei yhteyttä Villa Kuppisiin – näytetään viimeisin tieto"
+        : "Palveluun ei saada yhteyttä – näytetään viimeisin tieto") +
+        (S.viewAt ? " (päivitetty " + ago(S.viewAt) + ")." : " (tietoa ei ole vielä saatu).") +
+        " Komentoja ei voi lähettää.";
+      $upd.textContent = S.viewAt ? "Päivitetty " + ago(S.viewAt) : "";
+    } else {
+      $banner.hidden = true;
+      var ok = S.view && S.view.service.last_ok;
+      $upd.textContent = ok ? "Päivitetty " + whenIso(ok) : "";
+    }
+    var chip = S.open === "home" ? $home : S.open === "cottage" ? $cot : null;
+    if (chip && !chip.hidden) { $detail.textContent = chip.dataset.detail || ""; $detail.hidden = false; }
+    else { $detail.hidden = true; }
+  }
+  function toggle(name) { S.open = S.open === name ? null : name; render(); }
+  $home.addEventListener("click", function () { toggle("home"); });
+  $cot.addEventListener("click", function () { toggle("cottage"); });
+  function getJson(url) {
+    return fetch(url).then(function (r) {
+      if (!r.ok) throw new Error("http " + r.status);
+      return r.json();
+    });
+  }
+  function loadSites() {
+    Promise.all([getJson("/api/sites"), getJson("/api/cottage")]).then(function (res) {
+      S.sites = res[0]; S.cottage = res[1]; S.sitesAt = Date.now(); S.sitesFailed = false;
+      render();
+    }).catch(function () { S.sitesFailed = true; render(); });
+  }
+  window.addEventListener("online", render);
+  window.addEventListener("offline", render);
+  setInterval(render, 10000);
+  setInterval(loadSites, 10000);
+  loadSites();
+  return {
+    viewOk: function (view) { S.view = view; S.viewAt = Date.now(); S.viewFailed = false; render(); },
+    viewFailed: function () { S.viewFailed = true; render(); },
+    homeText: function (state) { return "Koti: " + (HOME[state] || HOME.initializing)[1]; }
+  };
+})();
+"""
+
 def render_page(demo: bool) -> str:
     page = (_PAGE.replace("/*SETTINGS_STYLE*/", _SETTINGS_STYLE)
             .replace("/*PLAN_STYLE*/", _PLAN_STYLE)
             .replace("<!--PLAN_SECTION-->", _PLAN_HTML)
             .replace("/*PLAN_SCRIPT*/", _PLAN_SCRIPT)
+            .replace("/*HEALTH_SCRIPT*/", _HEALTH_SCRIPT)
             .replace("/*COTTAGE_STYLE*/", cottage_ui.STYLE)
             .replace("<!--COTTAGE_SECTION-->", cottage_ui.SECTION_HTML)
             .replace("/*COTTAGE_SCRIPT*/", cottage_ui.SCRIPT)
@@ -1247,11 +1422,12 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):  # no per-request stderr noise
         pass
 
-    def _send(self, status: int, body: bytes, content_type: str) -> None:
+    def _send(self, status: int, body: bytes, content_type: str,
+              cache: str = "no-store") -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", cache)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(body)
@@ -1384,6 +1560,9 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
         if parts.path == "/":
             self._send(200, self.app.page_html.encode("utf-8"),
                        "text/html; charset=utf-8")
+        elif parts.path in _STATIC_FILES:
+            name, ctype, cache = _STATIC_FILES[parts.path]
+            self._send(200, (_STATIC_DIR / name).read_bytes(), ctype, cache)
         elif parts.path == "/api/view":
             self._json(200, self.app.service.view())
         elif parts.path == "/api/events":
