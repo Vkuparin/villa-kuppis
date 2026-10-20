@@ -59,7 +59,7 @@ class Config:
 
 
 def price_loop(data_dir, stop, *, service_factory=SpotPriceService, poll_seconds=300):
-    """Fetch tomorrow's spot prices once a day (after 14:25 Helsinki) into prices.db."""
+    """Fetch missing spot prices (today; tomorrow after 14:25 Helsinki) into prices.db."""
     service = service_factory(data_dir)
     try:
         while not stop.is_set():

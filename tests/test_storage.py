@@ -3,7 +3,7 @@
 import sqlite3
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import timedelta, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -128,6 +128,18 @@ class TestAttemptState(unittest.TestCase):
             assert stored_attempt(store, "2026-10-19") == "running"
             store.finish_attempt("2026-10-19", "ok")
             assert stored_attempt(store, "2026-10-19") == "ok"
+            store.close()
+
+    def test_new_attempt_replaces_the_previous_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = self._store(Path(tmp))
+            store.mark_attempt("2026-10-19", NOW)
+            store.finish_attempt("2026-10-19", "error")
+            later = NOW + timedelta(minutes=15)
+            store.mark_attempt("2026-10-19", later)
+            attempt = store.attempt("2026-10-19")
+            assert attempt.outcome == "running"
+            assert attempt.attempted_at_utc == later.isoformat()
             store.close()
 
     def test_interrupted_attempt_stays_visible(self):

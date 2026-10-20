@@ -5,12 +5,14 @@ HTTP transport and the clock. All three are injectable, so the whole flow
 (fixture import, refresh, plan recomputation, scheduling) is testable
 offline with a temporary SQLite file and a fake clock.
 
-Scheduling (docs/spot-price.md): the PC fetches tomorrow's prices once per
-local day at or after 14:25 Europe/Helsinki. Starting the loop late catches
-up. The scheduled-attempt date is saved BEFORE the HTTP request and the
-outcome AFTER it, so a failure or a crash cannot cause a request loop: an
-already-attempted date (ok, error or an interrupted 'running') is never
-retried automatically. Manual refresh is independent of this state.
+Scheduling (docs/spot-price.md): the PC fetches today's prices whenever
+they are missing and tomorrow's at or after 14:25 Europe/Helsinki when they
+are missing. A stored day is never refetched automatically. The attempt for
+a target day is saved BEFORE the HTTP request and the outcome AFTER it; a
+failed or interrupted ('running') attempt is retried, but never sooner than
+RETRY_SECONDS after the previous attempt for that same day, so a failure or
+a crash cannot cause a request loop. Manual refresh is independent of this
+state.
 """
 
 from __future__ import annotations
@@ -28,8 +30,10 @@ from .prices import (DEFAULT_TIMEOUT_SECONDS, HELSINKI, PriceFetchError,
                      validate_day)
 from .storage import DB_FILENAME, PriceStore, StoredInterval, utc_now
 
-#: Local time from which the once-per-day attempt is allowed.
+#: Local time from which tomorrow's prices are fetched.
 SCHEDULE_LOCAL_TIME = time(14, 25)
+#: Minimum time between automatic attempts for the same target day.
+RETRY_SECONDS = 15 * 60
 
 
 @dataclass(frozen=True)
@@ -51,17 +55,33 @@ class RefreshResult:
 
 
 @dataclass(frozen=True)
+class DayFetch:
+    """Result of one day in a manual fetch of the missing days.
+
+    status: stored (already there, not fetched) | fetched |
+    not_published (the source has no complete day yet) | error.
+    """
+
+    day: date
+    status: str
+    interval_count: int = 0
+    detail: str = ""
+
+
+@dataclass(frozen=True)
 class ScheduleOutcome:
     """Result of one scheduler check.
 
-    status: not_yet | ok | error | already_ok | already_error |
-    already_running. detail carries the human-readable error message for
-    'error'.
+    status: not_yet (tomorrow not due, nothing else missing) | stored
+    (nothing missing) | waiting (a failed attempt is inside the retry
+    delay) | ok | error. target_day is the day the attempt or wait is for.
+    detail carries the human-readable error message for 'error'.
     """
 
     local_date: date
     status: str
     detail: str = ""
+    target_day: date | None = None
 
 
 def fixture_day(payload: bytes) -> date:
@@ -141,6 +161,35 @@ class SpotPriceService:
         self.store.replace_day(day.isoformat(), intervals, retrieved)
         return RefreshResult(day, len(intervals), retrieved.isoformat())
 
+    def fetch_missing(self) -> list[DayFetch]:
+        """Fetch today's and tomorrow's prices when they are not stored.
+
+        The manual counterpart of the scheduler: no time-of-day gate and no
+        attempt record. A stored day is left alone. Tomorrow's prices are
+        normally published around 14:00, so an incomplete tomorrow is
+        reported as not_published instead of an error.
+        """
+        today = self.now().astimezone(HELSINKI).date()
+        results = []
+        for day in (today, today + timedelta(days=1)):
+            stored = self.stored_intervals(day)
+            if stored is not None:
+                results.append(DayFetch(day, "stored", len(stored)))
+                continue
+            try:
+                refreshed = self.refresh(day=day)
+            except PriceValidationError as exc:
+                if day > today and "missing interval" in str(exc):
+                    results.append(DayFetch(day, "not_published"))
+                else:
+                    results.append(DayFetch(day, "error", detail=str(exc)))
+            except (PriceFetchError, sqlite3.Error) as exc:
+                results.append(DayFetch(day, "error", detail=str(exc)))
+            else:
+                results.append(DayFetch(day, "fetched",
+                                        refreshed.interval_count))
+        return results
+
     # -- planning -----------------------------------------------------------
 
     def stored_intervals(self, day: date) -> list[StoredInterval] | None:
@@ -163,37 +212,52 @@ class SpotPriceService:
     def schedule_once(self) -> ScheduleOutcome:
         """One scheduler check against the injected clock.
 
-        Attempts tomorrow's prices once per local date at/after 14:25
-        Helsinki. The attempt date is recorded before the HTTP request and
-        the outcome after it; any date with an existing attempt record is
-        left alone (no automatic retry of failures or interrupted runs).
+        Fetches today's prices when missing, and tomorrow's when missing at
+        or after 14:25 Helsinki. At most one fetch per call. The attempt is
+        recorded before the HTTP request and the outcome after it; a failed
+        or interrupted attempt is retried after RETRY_SECONDS.
         """
-        local = self.now().astimezone(HELSINKI)
+        now = self.now()
+        local = now.astimezone(HELSINKI)
         local_date = local.date()
-        if local.time() < SCHEDULE_LOCAL_TIME:
-            return ScheduleOutcome(local_date, "not_yet")
-        existing = self.store.attempt(local_date.isoformat())
-        if existing is not None:
-            return ScheduleOutcome(
-                local_date, f"already_{existing.outcome}",
-                f"attempted at {existing.attempted_at_utc} UTC",
-            )
-        target_day = local_date + timedelta(days=1)
-        self.store.mark_attempt(local_date.isoformat(), self.now())
-        try:
-            result = self.refresh(day=target_day)
-        except (PriceFetchError, PriceValidationError,
-                sqlite3.Error) as exc:
+        targets = [local_date]
+        if local.time() >= SCHEDULE_LOCAL_TIME:
+            targets.append(local_date + timedelta(days=1))
+        waiting: ScheduleOutcome | None = None
+        for target_day in targets:
+            if self.store.stored_day(target_day.isoformat()) is not None:
+                continue
+            key = target_day.isoformat()
+            previous = self.store.attempt(key)
+            if previous is not None:
+                due = (datetime.fromisoformat(previous.attempted_at_utc)
+                       + timedelta(seconds=RETRY_SECONDS))
+                if now < due:
+                    waiting = waiting or ScheduleOutcome(
+                        local_date, "waiting",
+                        f"{key}: previous attempt {previous.outcome} at "
+                        f"{previous.attempted_at_utc} UTC", target_day)
+                    continue
+            self.store.mark_attempt(key, now)
             try:
-                self.store.finish_attempt(local_date.isoformat(), "error")
-            except sqlite3.Error:
-                # The store is too broken to record the outcome; the
-                # 'running' row stays, visible as an interrupted attempt.
-                pass
-            return ScheduleOutcome(local_date, "error", str(exc))
-        self.store.finish_attempt(local_date.isoformat(), "ok")
-        return ScheduleOutcome(
-            local_date, "ok",
-            f"{result.day.isoformat()}: {result.interval_count} periods "
-            f"stored (retrieved {result.retrieved_at_utc})",
-        )
+                result = self.refresh(day=target_day)
+            except (PriceFetchError, PriceValidationError,
+                    sqlite3.Error) as exc:
+                try:
+                    self.store.finish_attempt(key, "error")
+                except sqlite3.Error:
+                    # The store is too broken to record the outcome; the
+                    # 'running' row stays, visible as an interrupted attempt.
+                    pass
+                return ScheduleOutcome(local_date, "error", str(exc),
+                                       target_day)
+            self.store.finish_attempt(key, "ok")
+            return ScheduleOutcome(
+                local_date, "ok",
+                f"{result.day.isoformat()}: {result.interval_count} periods "
+                f"stored (retrieved {result.retrieved_at_utc})", target_day)
+        if waiting is not None:
+            return waiting
+        if len(targets) == 1:
+            return ScheduleOutcome(local_date, "not_yet")
+        return ScheduleOutcome(local_date, "stored")

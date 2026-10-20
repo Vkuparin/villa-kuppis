@@ -40,6 +40,12 @@ applies them to the pumps:
   automation started or stopped is switched the other way. Nothing is
   started when there is no need to cool.
 
+* Without a price for the current period (nothing stored, or a gap) a
+  cooling-mode unit is still handled: it targets the maximum (the away
+  maximum in away mode) with the same rules, so power management, away mode
+  and the return of a unit the automation switched off keep working.
+  Nothing is written to the stored plan for such periods.
+
 * Night mode (card F6.2) is separate from the prices: in rooms with
   ``night_enabled`` the fan is set to its quietest speed between
   ``night_start`` and ``night_end`` (Helsinki time, may cross midnight) and
@@ -94,7 +100,7 @@ class CoolPeriod:
     price_c_kwh: Decimal
     target_c: float
     off: bool
-    reason: str                    # "off" | "precool" | "max" | "away" | "optimizer"
+    reason: str                    # "off" | "precool" | "max" | "away" | "optimizer" | "noprice"
 
 
 def _setting_values(overrides, room: str) -> dict:
@@ -452,19 +458,29 @@ class CoolingAutomation:
         for state in units:
             unit_id = state["id"]
             rows = plan.get(unit_id)
-            if not rows:
+            values = _setting_values(overrides, unit_id)
+            if rows:
+                self._service.store.plan_upsert(
+                    unit_id, [(_iso(r.ts_utc), r.target_c)
+                              for r in rows if not r.off])
+            elif values["kind"] != "cool":
                 continue
-            self._service.store.plan_upsert(
-                unit_id, [(_iso(r.ts_utc), r.target_c) for r in rows if not r.off])
             if state["mode"] != "Cool" or not fresh.get(unit_id) \
                     or state["in_error"]:
                 continue
-            current = next((r for r in rows
+            current = next((r for r in rows or []
                             if r.ts_utc <= now_ts < r.ts_utc + INTERVAL_SECONDS),
                            None)
             if current is None:
-                continue
-            values = _setting_values(overrides, unit_id)
+                # No price for this period: keep cooling to the maximum (or
+                # the away maximum) so power management, away mode and the
+                # return of a unit switched off for a high price still work.
+                # Nothing is written to the stored plan.
+                away = self.away()
+                current = CoolPeriod(
+                    now_ts - now_ts % INTERVAL_SECONDS, Decimal(0),
+                    float(values["away_max_c" if away else "cool_max_c"]),
+                    False, "away" if away else "noprice")
             if current.reason in ("away", "off") and self.away():
                 values["cool_max_c"] = values["away_max_c"]
             sent.extend(self._apply(state, current, values, now))

@@ -154,8 +154,9 @@ class TestScheduleStorageFailure(TempServiceTest):
 
         from villa_kuppis.storage import PriceStore
         tomorrow = NORMAL_DAY
+        today = date(2026, 10, 19)
         transport = FakeTransport(elering_payload(tomorrow),
-                                  elering_payload(tomorrow))
+                                  elering_payload(today))
         service = self.make_service(transport)
         # 15:00 EEST: the scheduler is allowed to attempt.
         self.clock[0] = datetime(2026, 10, 19, 15, 0, 0, tzinfo=HELSINKI)
@@ -176,7 +177,7 @@ class TestScheduleStorageFailure(TempServiceTest):
         assert [(i.ts_utc, i.price_c_kwh) for i in before] == \
                [(i.ts_utc, i.price_c_kwh) for i in after], \
             "old complete day must survive a storage failure"
-        attempt = service.store.attempt("2026-10-19")
+        attempt = service.store.attempt("2026-10-19")   # today's attempt
         assert attempt is not None and attempt.outcome == "error"
-        assert service.schedule_once().status == "already_error", \
-            "no automatic retry after a recorded failure"
+        assert service.schedule_once().status == "waiting", \
+            "no retry inside the retry delay after a recorded failure"

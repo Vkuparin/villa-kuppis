@@ -15,9 +15,9 @@ Commands:
   fetch of one day (default: tomorrow) from Elering over HTTP; prints the
   plan afterwards when settings are given.
 * ``schedule [--settings FILE] [--poll-seconds N]``  opt-in foreground
-  loop; attempts tomorrow once per local day at/after 14:25 Helsinki and,
-  when settings are given, prints the next day's plan after a successful
-  attempt. Settings and --poll-seconds are validated before anything is
+  loop; fetches missing prices for today, and for tomorrow at/after 14:25
+  Helsinki (failed attempts retry after 15 minutes), and, when settings
+  are given, prints the fetched day's plan after a successful attempt. Settings and --poll-seconds are validated before anything is
   armed, so the command never arms against a broken settings file.
 """
 
@@ -99,8 +99,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser(
         "schedule",
-        help="opt-in foreground loop: attempt tomorrow once per local day "
-             "at/after 14:25 Europe/Helsinki",
+        help="opt-in foreground loop: fetch missing prices for today, and "
+             "for tomorrow at/after 14:25 Europe/Helsinki",
     )
     p.add_argument("--poll-seconds", type=float, default=60.0,
                    help="check interval in seconds (default: 60)")
@@ -229,8 +229,9 @@ def _cmd_schedule(args: argparse.Namespace) -> int:
         return 2
     service = SpotPriceService(args.data_dir)
     try:
-        print("Scheduler armed: one attempt per local day at/after "
-              "14:25 Europe/Helsinki; Ctrl+C to stop.")
+        print("Scheduler armed: missing prices for today, and for "
+              "tomorrow at/after 14:25 Europe/Helsinki; retry after 15 "
+              "minutes; Ctrl+C to stop.")
         last_status: str | None = None
         while True:
             try:
@@ -249,7 +250,7 @@ def _cmd_schedule(args: argparse.Namespace) -> int:
                 print(line)
                 last_status = outcome.status
             if outcome.status == "ok" and settings_obj is not None:
-                target = outcome.local_date + timedelta(days=1)
+                target = outcome.target_day
                 try:
                     plans = service.get_plan(target, settings_obj)
                     _print_plan(target, plans)

@@ -135,12 +135,15 @@ class PriceStore:
     def mark_attempt(self, local_date: str, attempted_at_utc: datetime) -> None:
         """Record an attempt BEFORE the HTTP request.
 
-        Raises sqlite3.IntegrityError if the date already has an attempt
-        (the caller must check first; the primary key is the backstop).
+        ``local_date`` is the target day being fetched. A retry replaces the
+        previous attempt record for that day.
         """
         self._conn.execute(
             "INSERT INTO scheduled_attempt "
-            "(local_date, attempted_at_utc, outcome) VALUES (?, ?, 'running')",
+            "(local_date, attempted_at_utc, outcome) VALUES (?, ?, 'running') "
+            "ON CONFLICT(local_date) DO UPDATE SET "
+            "attempted_at_utc = excluded.attempted_at_utc, "
+            "outcome = 'running'",
             (local_date, attempted_at_utc.isoformat()),
         )
 

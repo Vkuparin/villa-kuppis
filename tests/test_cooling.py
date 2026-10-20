@@ -193,8 +193,8 @@ class CoolingTests(ServiceTestCase):
         service, clock = self.start()
         store = SettingsStore(service.store.path)
         store.set("room:home/unit-1", "night_enabled", True, "test")
-        # 12:00 UTC = 15:00 Helsinki: outside 22:00-07:00, nothing happens.
-        self.assertEqual(self.run_plan(service), [])
+        # 12:00 UTC = 15:00 Helsinki: outside 22:00-07:00, no fan command.
+        self.assertNotIn("fan", [s["action"] for s in self.run_plan(service)])
         self.assertEqual(self._unit(service, "unit-1")["fan"], "Auto")
         # 19:30 UTC = 22:30 Helsinki.
         clock.advance(7.5 * 3600)
@@ -223,10 +223,53 @@ class CoolingTests(ServiceTestCase):
         self.assertNotIn("fan", [s["action"] for s in self.run_plan(service)])
         self.assertEqual(self._unit(service, "unit-1")["fan"], "Four")
 
-    def test_no_prices_means_no_commands(self):
+    def test_no_prices_keeps_cooling_to_the_maximum_and_plans_nothing(self):
         service, _ = self.start()
-        self.assertEqual(self.run_plan(service), [])
+        sent = self.run_plan(service)
+        self.assertEqual(self.brief(sent), [("unit-1", "setpoint", 25.0)])
+        self.assertEqual(self.run_plan(service), [])   # not repeated
+        self.assertFalse(service.plan_view()["has_prices"])
+        start, end = helsinki_day_bounds(DAY)
+        rows = service.store.plan_series(
+            "unit-1", datetime.fromtimestamp(start, timezone.utc).isoformat(),
+            datetime.fromtimestamp(end, timezone.utc).isoformat(), 1000)
+        self.assertEqual(rows, [])
 
+    def test_power_management_works_without_prices(self):
+        service, _ = self.start()
+        store = SettingsStore(f"{self.tmp}/pumps.db")
+        store.set("site:home", "cool_manage_power", True, "Ville")
+        sent = self.run_plan(service)             # rooms 26 and 27 > maximum 25
+        self.assertIn(("unit-2", "power", True), self.brief(sent))
+        self.assertTrue(self._unit(service, "unit-2")["power"])
+        store.set("site:home", "cool_max_c", 28.0, "Ville")
+        store.set("site:home", "away_max_c", 30.0, "Ville")
+        self.run_plan(service)                    # rooms <= 27.5: no need
+        self.assertFalse(self._unit(service, "unit-1")["power"])
+
+    def test_unit_switched_off_for_a_high_price_returns_without_prices(self):
+        service, clock = self.start()
+        self.set_prices(200)                      # 20 c/kWh: above 15
+        self.run_plan(service)
+        self.assertFalse(self._unit(service, "unit-1")["power"])
+        # The prices disappear (tomorrow, a new data directory ...).
+        PriceStore(f"{self.tmp}/prices.db").replace_day(
+            DAY.isoformat(), [], datetime(2026, 10, 18, tzinfo=timezone.utc))
+        clock.advance(600)
+        self.assertEqual(self.run_plan(service), [])   # minimum off time
+        clock.advance(21 * 60)
+        sent = self.run_plan(service)
+        self.assertEqual(self.brief(sent), [("unit-1", "power", True)])
+        sent = self.run_plan(service)
+        self.assertEqual(self.brief(sent), [("unit-1", "setpoint", 25.0)])
+
+    def test_away_uses_the_away_maximum_without_prices(self):
+        service, _ = self.start()
+        service.set_away(True, "Ville")
+        sent = self.run_plan(service)
+        self.assertEqual(self.brief(sent), [("unit-1", "setpoint", 28.0)])
+        self.assertTrue(service.plan_view()["away"])
+        self.assertFalse(service.plan_view()["has_prices"])
 
 if __name__ == "__main__":
     unittest.main()

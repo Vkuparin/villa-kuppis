@@ -13,6 +13,7 @@ fully offline) plus a small JSON API on top of PumpService:
 * GET  /api/rooms     learned room rates and the FMI forecast (card F5.1)
 * POST /api/settings  {"scope", "key", "value" | "reset"} (card F3.5)
 * GET/POST /api/away  home-away button, {"away": bool} (card F6.1)
+* POST /api/prices/refresh  fetch today's and tomorrow's prices if missing
 * POST /api/command   {"unit", "action", "value"} -> the service
 
 The page shows the cloud-reported state and the requested change
@@ -94,6 +95,7 @@ def make_demo_service(data_dir, *, poll_interval: float = 5.0,
         readback_delay=readback_delay, command_timeout=command_timeout,
         automation_interval=automation_interval,
         automation_default_on=automation_default_on,
+        price_fetch_enabled=False,
     )
 
 
@@ -1384,7 +1386,7 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             self._json(200, {"actor": identity["actor"],
                              "display_name": identity["display_name"],
                              "source": identity["source"]})
-        elif parts.path == "/api/command":
+        elif parts.path in ("/api/command", "/api/prices/refresh"):
             self._json(405, {"error": "method_not_allowed",
                              "detail": "use POST for this path"})
         elif parts.path.startswith("/api/"):
@@ -1402,6 +1404,9 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             self._post_command(identity)
         elif parts.path == "/api/settings":
             self._post_settings(identity)
+        elif parts.path == "/api/prices/refresh":
+            status, payload = self.app.service.refresh_prices()
+            self._json(status, payload)
         elif parts.path == "/api/away":
             body = self._read_json_object()
             if body is None:

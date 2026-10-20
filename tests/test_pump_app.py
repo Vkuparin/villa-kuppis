@@ -989,6 +989,111 @@ class IdentityTests(AppTestCase):
         self.assertNotIn('user: ""', page)
 
 
+class PriceRefreshTests(AppTestCase):
+    """POST /api/prices/refresh: injected transport, rate limit, routing."""
+
+    TODAY = datetime(2026, 10, 19).date()
+
+    def _transport(self, tomorrow_published=True):
+        from common import FakeTransport, elering_payload
+        from urllib.parse import parse_qs, urlparse
+
+        def respond(url):
+            start = parse_qs(urlparse(url).query)["start"][0]
+            utc = datetime.fromisoformat(start.replace("Z", "+00:00"))
+            day = (utc + timedelta(hours=3)).date()
+            if day > self.TODAY and not tomorrow_published:
+                return elering_payload(day, omit="fi_empty")
+            return elering_payload(day)
+
+        return FakeTransport(default=respond)
+
+    def _start_prices(self, transport):
+        client = FakeClient([_unit_payload("u1", "Yksikkö", mode="Cool")])
+        return self._start_app(client, price_transport=transport)
+
+    def _refresh(self, server):
+        return http_json("POST", self._url(server, "/api/prices/refresh"))
+
+    def test_fetches_missing_days_into_the_plan_database(self):
+        transport = self._transport()
+        server, _ = self._start_prices(transport)
+        status, body = self._refresh(server)
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            [(d["day"], d["status"], d["periods"]) for d in body["days"]],
+            [("2026-10-19", "fetched", 96), ("2026-10-20", "fetched", 96)])
+        self.assertEqual(len(transport.urls), 2)
+        status, plan = http_json("GET", self._url(server, "/api/plan"))
+        self.assertTrue(plan["has_prices"])
+
+    def test_tomorrow_not_yet_published_is_a_normal_result(self):
+        server, _ = self._start_prices(self._transport(tomorrow_published=False))
+        status, body = self._refresh(server)
+        self.assertEqual(status, 200)
+        self.assertEqual([(d["status"], d["periods"]) for d in body["days"]],
+                         [("fetched", 96), ("not_published", 0)])
+
+    def test_stored_days_are_not_fetched_again(self):
+        transport = self._transport()
+        server, clock = self._start_prices(transport)
+        self._refresh(server)
+        clock.advance(61)
+        status, body = self._refresh(server)
+        self.assertEqual(status, 200)
+        self.assertEqual([d["status"] for d in body["days"]],
+                         ["stored", "stored"])
+        self.assertEqual(len(transport.urls), 2)
+
+    def test_network_failure_is_reported_per_day(self):
+        from common import FakeTransport
+        server, _ = self._start_prices(
+            FakeTransport(urllib.error.URLError("boom"),
+                          urllib.error.URLError("boom")))
+        status, body = self._refresh(server)
+        self.assertEqual(status, 200)
+        self.assertEqual([d["status"] for d in body["days"]],
+                         ["error", "error"])
+        self.assertIn("boom", body["days"][0]["detail"])
+
+    def test_rate_limited_to_one_fetch_per_minute(self):
+        transport = self._transport(tomorrow_published=False)
+        server, clock = self._start_prices(transport)
+        self.assertEqual(self._refresh(server)[0], 200)
+        clock.advance(59)
+        status, body = self._refresh(server)
+        self.assertEqual(status, 429)
+        self.assertEqual(body["error"], "too_many_requests")
+        self.assertIn("Odota", body["detail"])
+        self.assertEqual(len(transport.urls), 2, "no fetch when limited")
+        clock.advance(2)
+        self.assertEqual(self._refresh(server)[0], 200)
+
+    def test_wrong_method_and_unknown_paths(self):
+        server, _ = self._start_prices(self._transport())
+        status, body = http_json("GET", self._url(server, "/api/prices/refresh"))
+        self.assertEqual((status, body["error"]), (405, "method_not_allowed"))
+        status, body = http_json("POST", self._url(server, "/api/prices/other"))
+        self.assertEqual((status, body["error"]), (404, "not_found"))
+
+    def test_demo_has_no_network_fetch(self):
+        service = make_demo_service(self._tmp.name)
+        self._services.append(service)
+        server = PumpAppServer(service, host="127.0.0.1", port=0, demo=True)
+        self._servers.append(server)
+        threading.Thread(target=server.serve_forever,
+                         kwargs={"poll_interval": 0.1}, daemon=True).start()
+        status, body = self._refresh(server)
+        self.assertEqual(status, 503)
+        self.assertIn("demotilassa", body["detail"])
+
+    def test_page_has_the_button(self):
+        server, _ = self._start_prices(self._transport())
+        status, _ctype, raw = http("GET", self._url(server, "/"))
+        self.assertIn("Hae hinnat", raw.decode("utf-8"))
+        self.assertIn("/api/prices/refresh", raw.decode("utf-8"))
+
+
 class DemoTests(AppTestCase):
     def test_demo_serves_three_units(self):
         service = make_demo_service(self._tmp.name)

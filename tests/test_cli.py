@@ -6,7 +6,8 @@ import json
 import sqlite3
 import tempfile
 import urllib.error
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from urllib.parse import parse_qs, urlparse
 from pathlib import Path
 from unittest import mock
 
@@ -228,8 +229,8 @@ class TestRefreshCli(unittest.TestCase):
 
 
 class TestScheduleCli(unittest.TestCase):
-    """schedule: validates before arming, one attempt per day, plan after
-    success, clean stop, no auto-retry."""
+    """schedule: validates before arming, fetches missing days, plan after
+    success, clean stop, no retry inside 15 minutes."""
 
     SETTINGS = {
         "site": {"base_temperature_c": 19.0,
@@ -246,6 +247,15 @@ class TestScheduleCli(unittest.TestCase):
         path.write_text(json.dumps(payload), encoding="utf-8")
         return str(path)
 
+    @staticmethod
+    def _day_transport():
+        """A transport that answers each requested day with a full day."""
+        def respond(url, *args):
+            start = parse_qs(urlparse(url).query)["start"][0]
+            utc = datetime.fromisoformat(start.replace("Z", "+00:00"))
+            return elering_payload((utc + timedelta(hours=3)).date())
+        return mock.MagicMock(side_effect=respond)
+
     def _interrupting_sleep(self, sleeps: list):
         def sleep(seconds):
             sleeps.append(seconds)
@@ -257,8 +267,7 @@ class TestScheduleCli(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             settings = self._write_settings(tmp, self.SETTINGS)
             sleeps: list = []
-            transport = mock.MagicMock(
-                return_value=elering_payload(NORMAL_DAY))
+            transport = self._day_transport()
             with mock.patch("villa_kuppis.service.utc_now",
                             return_value=self.NOW), \
                  mock.patch.object(cli, "_sleep",
@@ -275,7 +284,7 @@ class TestScheduleCli(unittest.TestCase):
             assert "Room living_room: 96 of 96" in out, "plan after success"
             assert "Stopped." in out
             assert len(sleeps) == 2
-            assert transport.call_count == 1, "exactly one fetch per local day"
+            assert transport.call_count == 2, "one fetch each for today and tomorrow"
             assert (Path(tmp) / "prices.db").exists()
 
     def test_schedule_failure_no_auto_retry_and_clean_stop(self):
@@ -295,7 +304,8 @@ class TestScheduleCli(unittest.TestCase):
             assert code == 0, err
             assert "error: fetch failed" in out
             assert "Room" not in out, "no plan after a failed attempt"
-            assert transport.call_count == 1, "no automatic retry"
+            assert transport.call_count == 2, \
+                "one attempt per missing day, no retry inside 15 minutes"
             # NOTE: a sqlite3 connection is not closed by its context
             # manager; close it before the temp dir goes away (Windows).
             conn = sqlite3.connect(Path(tmp) / "prices.db")

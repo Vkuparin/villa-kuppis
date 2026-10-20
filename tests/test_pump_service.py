@@ -428,6 +428,44 @@ class StaleTests(ServiceTestCase):
         self.assertEqual(self._unit(service, "unit-1")["setpoint"], 23.5)
 
 
+class PollBackoffTests(ServiceTestCase):
+    def test_defaults_poll_every_minute_and_stay_fresh_between_polls(self):
+        from villa_kuppis import pump_service
+        self.assertEqual(pump_service.DEFAULT_POLL_INTERVAL, 60.0)
+        self.assertGreater(pump_service.DEFAULT_STALE_AFTER,
+                           2 * pump_service.DEFAULT_POLL_INTERVAL)
+
+    def test_delay_doubles_per_failure_is_capped_and_resets(self):
+        service, _ = self._start(FakeClient(make_unit_payloads()),
+                                 poll_interval=60.0)
+        gateway = service.gateway
+        self.assertEqual([gateway._next_poll_delay(n) for n in range(8)],
+                         [60.0, 120.0, 240.0, 480.0, 900.0, 900.0, 900.0, 900.0])
+        self.assertEqual(gateway._next_poll_delay(0), 60.0)
+
+    def test_poll_loop_backs_off_on_failures_and_resets_on_success(self):
+        import asyncio
+        real_sleep = asyncio.sleep
+        delays = []
+
+        async def fake_sleep(seconds, *args):
+            delays.append(seconds)
+            await real_sleep(0.01)
+
+        client = FlakyFake(make_unit_payloads())
+        with mock.patch.object(asyncio, "sleep", fake_sleep):
+            service, _ = self._start(client, poll_interval=60.0)
+            self.wait_for(lambda: len(delays) >= 1)
+            self.assertEqual(delays[0], 60.0)
+            client.broken = True
+            self.wait_for(lambda: len(delays) >= 5)
+            failed = [d for d in delays[1:] if d != 60.0]
+            self.assertEqual(failed[:4], [120.0, 240.0, 480.0, 900.0])
+            client.broken = False
+            self.wait_for(lambda: delays[-1] == 60.0 and len(delays) >= 7)
+            self.assertEqual(delays[-1], 60.0)
+
+
 class RequestTests(ServiceTestCase):
     def test_unknown_unit_404(self):
         client = FakeClient(make_unit_payloads())

@@ -8,6 +8,7 @@ SECTION_HTML = r"""
   <section class="plan" aria-label="Päivän suunnitelma">
     <h2>Päivän suunnitelma</h2>
     <p><button type="button" class="switch" role="switch" aria-checked="false" id="away-btn"><span class="track"></span><span>Poissa kotoa</span></button></p>
+    <p><button type="button" id="prices-btn">Hae hinnat</button> <span id="prices-note" class="detail" role="status"></span></p>
     <p id="plan-note" class="detail"></p>
     <div id="plan-body"></div>
   </section>
@@ -44,6 +45,33 @@ SCRIPT = r"""
       body: JSON.stringify({ away: !away }) })
       .then(function (r) { return r.json(); })
       .then(render).catch(function () {});
+  });
+  var $prices = document.getElementById("prices-btn");
+  var $pricesNote = document.getElementById("prices-note");
+  function dayText(d) {
+    if (d.status === "not_published") return "ei vielä julkaistu";
+    if (d.status === "error") return "haku epäonnistui";
+    return d.periods + " jaksoa";
+  }
+  $prices.addEventListener("click", function () {
+    $prices.disabled = true;
+    $pricesNote.textContent = "Haetaan...";
+    fetch("/api/prices/refresh", { method: "POST" })
+      .then(function (r) {
+        return r.json().then(function (data) { return { ok: r.ok, data: data }; });
+      })
+      .then(function (res) {
+        if (!res.ok) {
+          $pricesNote.textContent = res.data.detail || "Hintojen haku epäonnistui.";
+          return;
+        }
+        var days = res.data.days;
+        $pricesNote.textContent = "Hinnat haettu: tänään " + dayText(days[0]) +
+          ", huomenna " + dayText(days[1]);
+        load();
+      })
+      .catch(function () { $pricesNote.textContent = "Hintojen haku epäonnistui."; })
+      .then(function () { $prices.disabled = false; });
   });
   function optimizerText(o) {
     if (!o) return "Kiinteät hintarajat (optimointi pois tai huoneen jäähdytysnopeutta ei ole vielä opittu).";

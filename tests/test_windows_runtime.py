@@ -13,7 +13,7 @@ from unittest import mock
 import xml.etree.ElementTree as ET
 
 from villa_kuppis import windows_credentials as vault
-from villa_kuppis.runtime import Config, run
+from villa_kuppis.runtime import Config, price_loop, run
 from villa_kuppis.pump_service import make_live_service
 from villa_kuppis.windows_setup import (
     NS, public_origin, serve_matches_or_empty, task_xml, task_matches, write_new_or_identical,
@@ -329,6 +329,26 @@ class RuntimeTests(unittest.TestCase):
                 server_factory=lambda *a, **k: mock.Mock(handle_request=mock.Mock(side_effect=KeyboardInterrupt)),
                 backup_factory=lambda *a: mock.Mock(), price_factory=demo_prices)
             demo_prices.assert_not_called()
+
+    def test_price_loop_keeps_checking_after_errors_and_closes_service(self):
+        stop = threading.Event()
+        service = mock.Mock()
+        outcomes = [RuntimeError("boom"), mock.Mock(status="waiting"),
+                    mock.Mock(status="ok")]
+
+        def schedule_once():
+            item = outcomes.pop(0)
+            if not outcomes:
+                stop.set()
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+        service.schedule_once.side_effect = schedule_once
+        price_loop("data", stop, service_factory=lambda data: service,
+                   poll_seconds=0)
+        self.assertEqual(service.schedule_once.call_count, 3)
+        service.close.assert_called_once()
 
     def test_runner_cleans_up_and_does_not_read_credentials_for_demo(self):
         service, server, backup = mock.Mock(), mock.Mock(), mock.Mock()

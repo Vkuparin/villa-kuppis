@@ -38,6 +38,7 @@ from aiomelcloudhome.models.ata import ATAFanSpeed, ATAOperationMode
 
 from . import learning, weather
 from .cooling import CoolingAutomation
+from .service import SpotPriceService
 from .settings import SettingsStore, vat_factor
 from .pump_probe import (
     _default_client_factory,
@@ -47,8 +48,10 @@ from .pump_probe import (
 )
 
 DB_FILENAME = "pumps.db"
-DEFAULT_POLL_INTERVAL = 10.0
-DEFAULT_STALE_AFTER = 60.0
+DEFAULT_POLL_INTERVAL = 60.0
+DEFAULT_STALE_AFTER = 180.0
+MAX_POLL_BACKOFF = 900.0     # longest wait between cloud reads after failures
+PRICE_FETCH_MIN_SECONDS = 60.0   # between manual price fetches
 DEFAULT_READBACK_POLLS = 3
 DEFAULT_READBACK_DELAY = 5.0
 DEFAULT_COMMAND_TIMEOUT = 30.0
@@ -874,7 +877,16 @@ class PumpGateway:
 
     # -- polling --
 
+    def _next_poll_delay(self, failures: int) -> float:
+        """Wait before the next cloud read: the normal interval after a
+        success, doubled for each consecutive failure up to the cap."""
+        if failures <= 0:
+            return self._poll_interval
+        return min(self._poll_interval * 2 ** failures,
+                   max(MAX_POLL_BACKOFF, self._poll_interval))
+
     async def _poll_loop(self) -> None:
+        failures = 0
         while True:
             try:
                 context = await asyncio.wait_for(
@@ -891,12 +903,14 @@ class PumpGateway:
                 with self._lock:
                     self._last_ok = self._now()
                     self._last_error = None
+                failures = 0
             except asyncio.CancelledError:
                 raise
             except Exception as err:
+                failures += 1
                 with self._lock:
                     self._last_error = _operation_message("cloud read", err)
-            await asyncio.sleep(self._poll_interval)
+            await asyncio.sleep(self._next_poll_delay(failures))
 
     # -- commands --
 
@@ -1053,7 +1067,9 @@ class PumpService:
                  forecast_fetcher=None,
                  prices_db=None,
                  automation_interval: float | None = None,
-                 automation_default_on: bool = True):
+                 automation_default_on: bool = True,
+                 price_transport=None,
+                 price_fetch_enabled: bool = True):
         self._data_dir = Path(data_dir)
         self._now = now
         self._stale_after = stale_after
@@ -1082,6 +1098,10 @@ class PumpService:
         self._models_lock = threading.Lock()
         self._prices_db = (Path(prices_db) if prices_db is not None
                            else self._data_dir / PRICE_DB_FILENAME)
+        self._price_transport = price_transport
+        self._price_fetch_enabled = price_fetch_enabled
+        self._price_fetch_lock = threading.Lock()
+        self._price_fetch_last: datetime | None = None
         self.automation = CoolingAutomation(
             self, SettingsStore(self.store.path), self._prices_db, now=now,
             interval=automation_interval, default_on=automation_default_on)
@@ -1163,6 +1183,32 @@ class PumpService:
         """Home-away button (card F6.1)."""
         self.automation.set_away(away, actor)
         return self.plan_view()
+
+    def refresh_prices(self) -> tuple[int, dict]:
+        """`Hae hinnat` button: fetch today's and tomorrow's prices if missing.
+
+        Writes to the prices.db the plan reads. At most one fetch per
+        PRICE_FETCH_MIN_SECONDS, whatever its outcome.
+        """
+        if not self._price_fetch_enabled:
+            return 503, {"error": "unavailable",
+                         "detail": "Hintoja ei haeta verkosta demotilassa."}
+        with self._price_fetch_lock:
+            now = self._now()
+            last = self._price_fetch_last
+            if last is not None and (now - last).total_seconds() < PRICE_FETCH_MIN_SECONDS:
+                return 429, {"error": "too_many_requests",
+                             "detail": "Hinnat haettiin juuri äsken. "
+                                       "Odota hetki ennen uutta hakua."}
+            self._price_fetch_last = now
+            # prices.db lives in a data directory of its own name.
+            with SpotPriceService(self._prices_db.parent,
+                                  transport=self._price_transport,
+                                  now=self._now) as prices:
+                days = prices.fetch_missing()
+        return 200, {"days": [{"day": d.day.isoformat(), "status": d.status,
+                               "periods": d.interval_count,
+                               "detail": d.detail} for d in days]}
 
     def automation_state(self) -> dict:
         return {"on": self.automation.automation_on(),
