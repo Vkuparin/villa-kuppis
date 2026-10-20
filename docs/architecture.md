@@ -1,45 +1,57 @@
 # Architecture
 
+Revised on 20 October 2026 to the two-site Home Assistant design (card H1.1). The earlier Windows PC + Android app design is described in [platform decision](platform-decision.md#superseded-android-and-google-home-route); the Windows installation keeps running until the home cutover (H1.5) passes.
+
 ## Decided
 
-- One Python service on the owner's home Windows 11 PC, which is almost always on. No Home Assistant box, VM or cottage computer; those are a last resort.
-- One Finnish web app served by the PC, for the desktop browser. One native Kotlin Android app that shows the same web app inside it and adds the cottage functions that need Google Home.
-- The goal is one app instead of many. Take the simplest working route to each device, even through the manufacturer's cloud.
-- Home: three Mitsubishi indoor units, all in MELCloud Home, controlled from the PC through the MELCloud Home cloud. Their main job is summer cooling; the apartment's radiators are geothermal and outside the owner's control.
-- Cottage (devices arriving early November 2026): four Mill heaters and two IKEA ALPSTUGA sensors in Google Home over Matter, with the Google Home Speaker as hub. The heaters follow the ALPSTUGA readings rather than their own sensors.
-- Spot-price automation is a high priority: fixed thresholds first, then an optimizer. Home cooling ships first, because the pumps are available now. See [spot-price automation](spot-price.md).
-- Every setting (thresholds, temperatures, prices, away and night settings) has a default and can be changed in the app.
-- Household members use the app with full control, each with their own Google account. No separate app login.
-- No paid services, stores or signing: free Google Cloud project and OAuth setup without billing, a self-signed Android APK installed directly, free Tailscale, Elering and FMI.
+- Villa Kuppis is the one Finnish application for controlling, monitoring and optimizing the home and the cottage. Household members use it in a browser, optionally installed as a PWA. No APK.
+- One Home Assistant per site is the device gateway and local fallback controller. Home Assistant UIs are for administration and emergencies, not the household's daily app.
+- Two refurbished, always-on x86-64 mini-PCs (models not yet chosen):
+  - **Home:** Debian + Docker Compose running Villa Kuppis, Home Assistant Container and a host-level Tailscale client.
+  - **Cottage:** Home Assistant OS with its Matter Server and Tailscale apps.
+- Home pumps: Home Assistant's MELCloud Home integration after a parity test (H1.3). The direct `aiomelcloudhome` client stays as the rollback path until then.
+- Cottage: four Mill Gen 4 heaters (Matter over Wi-Fi) and two IKEA ALPSTUGA sensors (Matter over Thread) controlled locally by the cottage Home Assistant. The Google Home Speaker (2026) stays as Thread border router and secondary controller.
+- Villa Kuppis owns prices, forecasts, learning, plans, visits, history and settings. Each Home Assistant owns pairing, actual device state and immediate commands. The cottage Home Assistant also owns the local safe fallback.
+- No inbound ports, no public Home Assistant, no paid services. Tailscale (free plan), Elering and FMI.
+
+The goal stays the same: one app instead of many, the simplest working route to each device, and no AI in the command path.
 
 ## Shape
 
 ```mermaid
-flowchart LR
-  Desktop[Desktop browser] --> PC[Home PC: Python service and web app]
-  Phone[Villa Kuppis Android app] -->|Tailscale| PC
-  PC -->|MELCloud Home cloud| Pumps[3 Mitsubishi indoor units]
-  PC --> Prices[Elering spot prices]
-  PC --> Weather[FMI forecast]
-  PC --> DB[(SQLite)]
-  Phone -->|Home APIs| Google[Google Home]
-  Google --> Hub[Cottage speaker]
-  Hub --> Mill[4 Mill heaters]
-  Hub --> Sensors[2 ALPSTUGA]
+flowchart TB
+  Clients[Desktop and phone browsers / optional PWA]
+  Clients -->|Private HTTPS through Tailscale| VK[Villa Kuppis web UI + API]
+
+  subgraph Home[Home: mini-PC, Debian + Compose]
+    VK --> Core[Python planning: prices, FMI, learning, optimizer]
+    Core --> DB[(SQLite + backup)]
+    Core <-->|Local REST + WebSocket| HAH[Home Assistant Container]
+    HAH <-->|MELCloud Home cloud| Pumps[3 Mitsubishi indoor units]
+  end
+
+  Core <-->|Tailscale: HA REST + WebSocket| HAC[Home Assistant OS]
+  subgraph Cottage[Cottage: mini-PC, HAOS]
+    HAC <-->|Matter over Wi-Fi| Mill[4 Mill Gen 4 heaters]
+    HAC <-->|Matter over Thread| Speaker[Google Home Speaker: Thread border router]
+    Speaker --- Sensors[2 ALPSTUGA]
+    HAC --> Local[Local room-target controller + safe fallback]
+  end
 ```
 
-**The PC** holds configuration, history, rules, prices, the forecast and every plan. It controls the pumps directly.
+Tailscale connects Villa Kuppis to the cottage Home Assistant's API, not to individual devices. Each Matter fabric stays inside its own site; nothing is routed across the internet except the API connection.
 
-**The PC cannot reach Google Home.** Google offers its device API only to Android and iOS apps signed in as the user. The only route for PC programs is Home MCP, which needs Premium Advanced and is US-only; the speaker includes Premium Standard. So the PC never reads or writes cottage devices itself.
+## Ownership
 
-**The Android app** is the cottage link. It:
+| Concern | Owner | Notes |
+| --- | --- | --- |
+| Device pairing, capabilities, physical state, immediate commands | Each site's Home Assistant | One writer per thermostat; no competing Google or Mill schedules |
+| Prices, forecast, learning, optimization, visits, planned targets | Villa Kuppis (home) | Existing Python modules; deterministic code |
+| Safe maintenance temperature, sensor-validity watchdog, fallback targets | Cottage Home Assistant | Works without the home server, Tailscale, the internet or a phone |
+| Long-term history, graphs, event log, settings | Villa Kuppis | Home Assistant's recorder only keeps short diagnostic history |
+| Remote user identity and access | Tailscale + Villa Kuppis | Tailnet membership is not the same as per-user permission; see [Users](#users) |
 
-- reads cottage readings through the Home APIs and reports them to the PC about every 15 minutes, for graphs and the optimizer (Android may stretch this in battery saver; gaps show in the graphs);
-- fetches the cottage plan from the PC and uploads it as Google Home automations, once a day after the 14:25 price fetch, plus a manual re-send button (on the owner's phone only);
-- starts and ends visit heating;
-- shows notifications.
-
-Google runs the uploaded automations, so the cottage follows its plan with the PC and phone off. Manual control through the Google Home app also works at any time, including when the PC is down.
+**Precedence:** device safety → manual override → active visit → economic plan. The optimizer must not immediately undo a person's change.
 
 ## Rooms
 
@@ -49,62 +61,77 @@ Google runs the uploaded automations, so the cottage follows its plan with the P
 | Cottage | Small room | Mill heater 1 × 1050 W, one ALPSTUGA |
 | Home | Three rooms | One Mitsubishi indoor unit each |
 
-## Stack
+The ALPSTUGA readings are measurement inputs, not safety thermostats. The heaters' own thermostats still enforce an upper bound.
 
-- **PC:** Python 3.13, SQLite and a Finnish web app served by the standard-library HTTP server. Pumps use `aiomelcloudhome` 0.3.1; `tzdata` supplies Europe/Helsinki on Windows. The weather client uses the standard library. The unattended runner reads Windows Credential Manager under the owner's account; a password-backed Windows boot task runs it without an interactive login. Tailscale Serve supplies the remote user's identity. Deployment and before-login startup require the F3.2 live checks.
-- **Android:** Kotlin with the Google Home APIs; the web app is shown in a WebView.
-- **Shared data:** spot prices from Elering's public API and the outdoor forecast from FMI open data. Neither needs a key; both were tested from a cloud session on 18 October 2026.
+## Device gateway
 
-The MELCloud Home client is unofficial; if it breaks, REA on the current app is the repair tool.
+A small `DeviceGateway` interface (card H1.2) covers what the product uses:
+
+- discover and bind entities to Villa Kuppis devices (read-only, explicit per site)
+- snapshot and subscribe to state changes (WebSocket, with reconciliation after a disconnect)
+- request a command and track it as pending, confirmed, failed or unknown
+- health and last contact.
+
+Stable Villa Kuppis IDs stay separate from Home Assistant `entity_id` strings, and the mapping is stored. A missing or renamed entity is a clear mapping error; a command must never silently reach a different device. The existing pump client can implement the same interface until H1.5. No plugin system or event bus.
+
+## Cottage control
+
+Villa Kuppis computes each room's effective target for every 15-minute period (prices, forecast, fixed thresholds, later the optimizer, visits). When the target changes it writes it to the room's Home Assistant helper with a heartbeat and revision. After a reconnect it reads actual states and sends only the currently valid target; missed periods show as gaps.
+
+The cottage Home Assistant runs one local controller per room (card H2.2):
+
+- reads the ALPSTUGA, compares it with the stored target and sets the room's heaters with hysteresis, clamping to the heater's supported range, minimum dwell and a bounded command rate;
+- **watchdog:** a missing heartbeat, a stale target or a stale/implausible sensor falls back to the safe maintenance setpoint on the heaters' own thermostats; the same applies after a Home Assistant restart before a fresh target arrives;
+- keeps working when the WAN, Tailscale, the home server or every phone is down.
+
+Mill heaters also have built-in frost protection. There are no water pipes. A cached whole-day plan at the cottage is not part of the first version (later card H3.3).
+
+**`Automaatio` switch:** off stops economic control (prices, optimizer). The cottage's local safe fallback keeps running. The exact wording is an open owner question.
+
+## Home control
+
+The pump automation logic stays in Villa Kuppis (`cooling.py`, `optimizer.py`, away and night mode): cooling only, never changes a mode, minimum off time. With H1.5 its commands go through Home Assistant's `climate` entities instead of the direct client; `climate.turn_off`/`turn_on` semantics are checked in H1.3 first. Home Assistant polls the MELCloud Home cloud about every 60 seconds; the plan loop must accept that update rate.
 
 ## History and graphs
 
-The PC stores every reading as a time series in SQLite and keeps it all; a few years of data at these rates is small.
+Villa Kuppis stores every reading as a time series in SQLite and keeps it all.
 
 | Series | Source | Interval |
 | --- | --- | --- |
-| Room temperature, setpoint, mode, fan, on/off: each pump | MELCloud Home: its realtime stream where available, otherwise polling | 5 minutes, plus every change |
-| Pump energy use, if exposed | MELCloud Home measurements | As reported |
-| Room temperature, CO2, PM2.5, humidity, as exposed: each ALPSTUGA | Android app, through the Home APIs | About 15 minutes |
-| Temperature, setpoint, mode: each Mill heater | Android app, through the Home APIs | About 15 minutes |
-| Heater power or energy | Matter energy measurement if the heaters expose it; otherwise estimated from heating time × rated power | 15 minutes |
-| Outdoor temperature: both sites | FMI observations (no key) | Hourly |
-| Spot price (15-minute periods) | Elering | Fetched daily at 14:25 for the next day, and on demand with a button |
-| Plan targets, commands and their results | PC | Every change |
+| Room temperature, setpoint, mode, fan, on/off: each pump | Home Assistant (today: direct MELCloud Home client) | On change, plus a periodic snapshot |
+| Pump energy, if exposed | MELCloud Home measurements | As reported |
+| Temperature, CO2, PM2.5, humidity (as exposed): each ALPSTUGA | Cottage Home Assistant | On change |
+| Temperature, setpoint, mode: each Mill heater | Cottage Home Assistant | On change |
+| Heater power or energy | Matter energy measurement if exposed; otherwise labelled as an estimate | 15 minutes |
+| Outdoor temperature and forecast: both sites | FMI open data | Hourly |
+| Spot price (15-minute periods) | Elering | Daily after 14:25 and on demand |
+| Plan targets, commands, results, site connectivity | Villa Kuppis | Every change |
 
-The web app draws the series as graphs per room and per site, over a day, week, month or year. Prices, setpoints and outdoor temperature share the time axis, and energy and cost (energy × spot price) can be shown per day.
-
-Cottage history starts when the Android app starts recording; Google Home does not hand over past readings. Gaps appear when Android delays the background job or the phone is offline, and the graphs show them as gaps rather than drawing a line across.
+Graphs per room and per site over a day, week, month or year; prices, setpoints and outdoor temperature share the time axis. Gaps from outages show as gaps. Estimated energy is labelled as an estimate.
 
 ## Model
 
-Stable internal IDs for Site, Room, Device and Capability. Finnish display labels; language-neutral protocol identifiers. Store only capabilities a device actually reports.
+Site, Room, Device and Capability with stable internal IDs; Finnish display labels; language-neutral protocol identifiers; only capabilities a device actually reports. Each reading has a value, a source timestamp and a fresh/stale flag. Each command records who asked (`user`, `Suunnitelma`, site fallback or Home Assistant), the target, the requested value, a request ID and its result. Reported state and a pending request are shown separately until the device confirms.
 
-Each reading has a value, a timestamp and a fresh/stale flag. Each command records who or which plan asked, the target, the requested value and its result. Show the device's reported state and a pending request separately until the device confirms it.
+Plans use Europe/Helsinki local time, including the 92- and 100-period daylight-saving days; timestamps are stored in UTC.
 
-## Heating and cooling
+## Deployment
 
-Devices remain their own thermostats; plans only change setpoints, on/off and fan, never the mode. Every automation acts on measured room temperatures, so idle seasons take care of themselves: the cottage heaters do nothing when the room is already warm, and pump automation is cooling-only and leaves alone any unit not in cooling mode. The installed service runs the plan loop and a daily spot-price fetch itself; a master switch (stored with the data, off unless configured otherwise) decides whether the plan acts on the pumps, and switching it off leaves the devices as they are. If the PC, phone or internet is down, the last uploaded automations and the devices' own setpoints keep working. The Mill heaters also have built-in frost protection.
+**Home (H1.4):** Villa Kuppis and Home Assistant Container as separate Compose services with pinned versions, persistent volumes and restart policies. Villa Kuppis reaches Home Assistant on a local endpoint; no Home Assistant port is published. Host-level Tailscale publishes only the Villa Kuppis UI with Serve. Windows-only pieces (Task Scheduler, Credential Manager, `%LOCALAPPDATA%`, the PowerShell update script) move behind OS-neutral configuration and secrets; Windows development keeps working. Backups go off the SSD.
 
-Plans use Europe/Helsinki local time; store timestamps in UTC.
+**Cottage (H2.1):** HAOS on a mini-PC wired to the Archer BE230; the NE200-Outdoor provides the 5G uplink (carrier NAT is fine for Tailscale). Local IPv6 and mDNS on a non-isolated LAN. BIOS set to power on after AC loss. Built-in Home Assistant backups, copied off the device.
+
+**Mini-PC minimum:** 64-bit x86/UEFI, wired Ethernet, SSD, power on after AC loss, measured idle power, 8 GB RAM (16 GB preferred at home), non-condensing environment. Installing Debian or HAOS erases the machine's previous system.
 
 ## Remote access and security
 
-[Tailscale](https://tailscale.com/pricing) connects phones to the PC from anywhere. It is a small app installed once on the PC and on each phone; it then runs in the background as a private VPN. Wi-Fi passwords protect each local network, but they do not let a phone on mobile data or the cottage Wi-Fi reach the home PC, which is not reachable from the internet. The Android app needs that link to report cottage readings and fetch the daily plan wherever the phone is. Opening a port on the home router would expose the PC to the internet and need its own login and certificates, so Tailscale is the simpler free option. The service listens only on the PC itself (localhost); `tailscale serve` publishes it to the owner's Tailscale network, so the user identity it passes on cannot be faked from the home LAN. On the PC itself, the browser uses localhost. The free Personal plan should cover this: recent reports say it has allowed six users and unlimited personal devices since April 2026; confirm on the pricing page. Nothing is exposed to the public internet.
+Phones and the desktop reach Villa Kuppis through [Tailscale](https://tailscale.com/pricing) with Serve; nothing is exposed to the public internet. The cottage Home Assistant is reachable only from the home mini-PC over the tailnet, ideally limited by Tailscale access rules.
+
+- Each Home Assistant is a separate controller with its own credentials. Villa Kuppis uses a site-specific long-lived access token, stored outside Git and outside user-visible backups, with rotation and revocation documented.
+- Identity: today's Tailscale `Tailscale-User-*` header trust was designed for Windows localhost; after the move to a container it must be re-checked (Host, Origin, proxy trust, CSRF) before it is relied on.
+- A partly work-managed phone may not allow Tailscale; test it. If it is blocked, an authenticated HTTPS gateway for Villa Kuppis alone is a separate later feature, not a reason to weaken security.
+- Backups contain personal history but not secrets.
 
 ## Users
 
-Each household member uses their own Google account; nothing new to remember:
-
-- **Cottage:** invite them into the owner's Google Home home and add them as OAuth test users of the Android app.
-- **PC:** they sign in to Tailscale with Google and join the owner's network. The web app is published with `tailscale serve`, which tells the service who each request comes from. The change history shows names without an app login.
-
-Google Family Link manages supervised child accounts but offers no sign-in for other apps. Supervised accounts may be limited in Google Home and Tailscale; check before relying on them.
-
-Keep MELCloud Home and Google credentials outside Git, in the Windows credential store. The service copies the SQLite database once a day to a backup folder the owner chooses.
-
-The Windows task runs with least privilege as the same account that enrolled the MELCloud credential. Task Scheduler receives the Windows account password through its own local prompt; Villa Kuppis does not collect it. S4U/no-password tasks and SYSTEM are not substitutes: their network or credential access differs. Tailscale runs unattended and Serve uses its background configuration. The installer refuses conflicting Serve/Funnel settings and existing unrelated tasks.
-
-The app accepts the configured HTTPS authority only with Tailscale identity headers and a matching Origin when supplied. Localhost requests use a fixed local actor and ignore proxy identity headers; request bodies cannot select an actor. Loopback processes on the PC are trusted. Tailnet access rules determine who can control the app. Backups use SQLite's online backup API and contain personal history; they exclude Credential Manager secrets. A completed Helsinki-date marker prevents repeating a successful day's backup across restarts. Backups are individually consistent databases, not a transaction spanning multiple files.
-
-No AI model is in the command path. Plans are deterministic code.
+Household members use Villa Kuppis with full control, without a separate app login; the event log names them through Tailscale identity. Matter commissioning needs a phone or tablet app (Home Assistant Companion or Google Home), not the PWA. Google Home stays usable as a secondary controller and for voice, without competing heating schedules.

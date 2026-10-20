@@ -1,11 +1,11 @@
 # Villa Kuppis design documents
 
-The initial design is complete. Implementation began on 19 October 2026 with the spot-price experiment. Device and account integrations have not been tested.
+Implementation began on 19 October 2026. The home pump service runs unattended on the owner's Windows PC and passed its live checks. On 20 October 2026 the design moved to one Home Assistant per site on two always-on mini-PCs; that route has not been tested yet.
 
 | Document | Purpose |
 | --- | --- |
-| [Architecture](architecture.md) | Decisions, PC service, Android app, users, graphs and remote access |
-| [Platform decision](platform-decision.md) | How each device is reached, and the sensor-driven cottage automations |
+| [Architecture](architecture.md) | Two-site Home Assistant design, ownership, cottage control, graphs, deployment and security |
+| [Platform decision](platform-decision.md) | How each device is reached, the gates before relying on it, and the superseded Android route |
 | [Cottage](cottage.md) | Hardware, rooms, setup steps and heating |
 | [Mitsubishi](mitsubishi.md) | Three indoor units, the MELCloud Home route and first experiment |
 | [Spot-price automation](spot-price.md) | Prices, fixed thresholds, the optimizer, visit heating and summer cooling |

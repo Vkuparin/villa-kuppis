@@ -2,7 +2,7 @@
 
 Experiment specifications and recorded checks. Keep private reference material in ignored `scratch/`; publish only generic device labels and capability facts. The pump probe reads credentials through masked local prompts and does not save them. Each live test needs the owner's go-ahead.
 
-Order: C and D first, when implementation begins; A and B when the cottage devices are installed.
+C, C2, C3 and D are done. A and B (Android and Google Home automations) were superseded on 20 October 2026 by the two-site Home Assistant design; its experiments are in [E](#e-two-site-home-assistant-planned).
 
 ## C. Mitsubishi through MELCloud Home
 
@@ -89,33 +89,28 @@ Validated on 19 October 2026 at `29cd774`: 102 tests passed in the Windows Pytho
 
 Owner-approved live check on 19 October 2026, using the implementation at `62dedd0`: one Elering fetch stored all 96 FI intervals for that Helsinki day in a new temporary SQLite database. A separate database read confirmed 00:00 through 23:45 at 900-second spacing without another fetch. This validates on-demand retrieval and persistence; the unattended daily scheduler has only mocked test coverage.
 
-## A. Cottage through the Home APIs
+## A and B. Cottage through the Google Home APIs (superseded)
 
-Prerequisite: heaters and sensors commissioned into Google Home over Matter.
+Planned experiments for the Android route: reading and setting the cottage through the Home APIs from Google's sample app, background-job frequency, and sensor-driven Google Home automations with 12 time windows a day. Never run; superseded on 20 October 2026 (cards F2.2 and F2.6 dropped). See the [superseded route](platform-decision.md#superseded-android-and-google-home-route).
 
-1. Build [Google's sample](https://github.com/google-home/google-home-api-sample-app-android) at a pinned revision with the `home.platform.selected.devices` scope.
-2. List the cottage devices and their traits. Read each ALPSTUGA (temperature, CO2, PM2.5, humidity, as exposed) and each heater (temperature, setpoint, mode).
-3. Over mobile data, change one heater's setpoint, confirm the read-back, restore it.
-4. Run a background job that reads all devices every 15 minutes for a day. Record whether the Home APIs work in the background at all, and how often Android actually runs the job.
-5. Check whether the heaters expose power or energy over Matter.
+## E. Two-site Home Assistant (planned)
 
-Pass: steps 2–3 work over mobile data. Step 4 shows how complete the cottage graphs will be.
+None of these has been run. Each live step needs the owner's go-ahead; record the commit, date and evidence here when it runs.
 
-## B. Sensor-driven automations
+**E1. Offline (H1.2, H1.4).** Mocked Home Assistant HTTP and WebSocket: reconnect and resync, wrong or missing entity, unsupported mode, stale value, auth/TLS error, delayed confirmation, duplicate or reordered command, site outage and a revised price plan. Existing pump, cooling, optimizer, learning, price, weather, settings and UI tests still pass. Cold-start the Linux service with synthetic data and synthetic Home Assistant state, then reboot; no credentials committed and no external writes.
 
-1. Give the cottage home a street address in Google Home (needed for time-based starters).
-2. From the app, create the small room's automation: every 30 minutes, read the ALPSTUGA; below target minus hysteresis, set the heater to target + margin; above target plus hysteresis, set it to target − margin.
-3. Confirm it sets the heater's absolute setpoint and runs with the phone off.
-4. Encode a day of 12 time windows with different targets in both rooms' automations. Confirm it fits Google's limits and follows the windows.
-5. Replace both automations from a background job, as the daily upload will.
-6. Try one automation with separate branches for both rooms, every 15 minutes.
+**E2. Home pump parity (H1.3, owner present).** See [Mitsubishi](mitsubishi.md#home-assistant-route-planned). All three units appear separately; one allowed setpoint and fan change per unit with read-back and restoration; other units, modes and power unchanged; cooling-only and minimum-off rules hold; latency recorded. Pause the Windows plan before Home Assistant writes; test the switch back.
 
-Pass: a day's plan runs from Google Home with the phone and PC off. If it fails, use the time-based fallback in [platform decision](platform-decision.md#sensor-driven-automations).
+**E3. Cottage safety first (H2.1, H2.2, owner present).** One heater and one ALPSTUGA on Home Assistant OS: real minimum setpoint, read-back and sensor freshness; then the room following its ALPSTUGA with hysteresis while the heater's own thermostat limits the maximum. Reboot, stale sensor, router power loss and the 5G uplink unplugged with the LAN running. A full local control cycle with the home mini-PC and every phone off; on reconnect, the last confirmed state is visible and current targets resume without replaying old ones.
+
+**E4. Production (H3.1, H3.2).** Browser on the home LAN, remote browser over Tailscale and a tablet show both sites with the right identities and no public Home Assistant. DST days, manual override, `Automaatio`, away, night, visit and target expiry behave consistently. Start after AC power loss, off-device backups of both Home Assistant configurations and the Villa Kuppis database, and a real restore.
 
 ## Next step
 
 | Evidence | Next |
 | --- | --- |
-| C and D pass | Build the PC service and the home side of the web app |
-| A and B pass | Build the Android app's cottage functions and the daily upload |
-| B fails | Use the time-based fallback in [platform decision](platform-decision.md#sensor-driven-automations) |
+| C and D pass | Done: home service and web app (0.2.0) |
+| E1 passes | Home transition: E2, then the H1.5 cutover |
+| E3 passes with one heater and one sensor | Commission the remaining devices (F1.6), then cottage targets (H2.3, H2.4) |
+| Google speaker does not route Thread for Home Assistant | Choose a supported local Thread border router |
+| Matter lacks a critical heater control | Test Home Assistant's Mill cloud integration as an interim route |

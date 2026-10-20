@@ -1,68 +1,32 @@
 # Client and device access decision
 
-Status: proposed, 18 October 2026, revision 5.
+Status: decided by the owner, 20 October 2026, revision 6 (two-site Home Assistant). Supersedes revision 5 (Android app and Google Home automations), kept in summary below.
 
 ## Decided
 
-- **Pumps:** the PC controls them through the MELCloud Home cloud.
-- **Cottage:** Mill heaters and ALPSTUGA sensors in Google Home over Matter. The owner wants the heaters to follow the ALPSTUGA readings, and Matter keeps both in one place. Mill cloud mode was considered and rejected for this reason; the heaters run either Mill cloud or Matter, not both.
-- **Clients:** a desktop web app served by the PC, and a native Kotlin Android app that shows the same web app and adds the cottage functions.
-- **No Premium.** The speaker includes Premium Standard; Home MCP needs Advanced and is US-only.
+- **One Home Assistant per site** as the device gateway; Villa Kuppis stays the one UI and planner. The owner's reasons: one device layer per site is architecturally cleaner, and more home IoT devices can be added through Home Assistant while Villa Kuppis remains the shared interface.
+- **Pumps:** Home Assistant's [MELCloud Home integration](https://www.home-assistant.io/integrations/melcloud_home) on the home Home Assistant Container, after a parity test against today's `aiomelcloudhome` client (H1.3). If Home Assistant cannot keep the cooling-only, never-change-mode semantics, the direct client stays for the pumps while home Home Assistant takes future devices.
+- **Cottage:** Mill Gen 4 heaters and ALPSTUGA sensors on the cottage Home Assistant OS through its [Matter Server](https://www.home-assistant.io/integrations/matter). Devices are commissioned into Google Home and shared to Home Assistant (Matter multi-admin), so the Google speaker provides Thread; Home Assistant uses third-party border routers only to reach the Thread network.
+- **Clients:** the Villa Kuppis web app in a browser, optionally as a PWA. No Kotlin app, APK, Google Cloud project or OAuth test users.
+- **Between sites:** Tailscale from the home mini-PC to the cottage Home Assistant API. No cross-site Matter fabric, routed multicast or forwarded ports.
 
-## How the cottage is controlled
-
-The PC cannot reach Google Home; only an Android or iOS app signed in as the user can. So the work is split:
+## How each device is reached
 
 | Job | Where |
 | --- | --- |
-| Prices, forecast, rules, optimizer, plans, history | PC |
-| Reading the cottage | Android app, through the [Home APIs](https://developers.home.google.com/apis/android/connectivity); reported to the PC |
-| Applying the plan | Android app uploads Google Home automations; Google runs them |
-| Manual control | Villa Kuppis Android app, or the Google Home app and [home.google.com](https://home.google.com) |
+| Prices, forecast, learning, optimizer, plans, history, settings | Villa Kuppis on the home mini-PC |
+| Reading and commanding the pumps | Home Home Assistant (direct client until H1.5) |
+| Reading and commanding the cottage | Cottage Home Assistant, through its API over Tailscale |
+| Keeping the cottage safe when the link is down | Cottage Home Assistant's local controller and watchdog |
+| Manual control | Villa Kuppis; in an emergency Home Assistant's own UI, Google Home or MELCloud Home |
 
-## Sensor-driven automations
+## Gates before relying on it
 
-Google's documented [automation limits](https://developers.home.google.com/apis/android/automation) shape the design: 64 automations per home, 128 runs per day per developer per home, and 64 comparisons per automation. Automations triggered by every sensor change would exceed the run limit, so the heaters follow the sensors on a timer instead.
+- **Cottage commissioning (H2.1):** one heater and one sensor first. Check the heater's real minimum setpoint over Matter (is 5 °C accepted?), which ALPSTUGA readings are exposed, and how the Google speaker's Thread routing behaves with the WAN down. Add the other four devices only after that passes.
+- **Mill caveat:** a Mill Gen 4 heater runs either Matter or Mill Cloud, not both; going back to Mill Cloud needs a reset on the heater. Home Assistant's Mill cloud integration is the fallback only if Matter lacks a critical control.
+- **Pump parity (H1.3):** all three units, independent changes, read-back, latency and the known HTTP-500-after-success behaviour. Only one automation writer at a time during the cutover.
+- **Thread fallback:** if the Google speaker does not work as a border router for Home Assistant, choose a supported local Thread border router then; do not pre-purchase radios.
 
-**Uploaded once a day, run every 30 minutes.** The phone uploads the day's automations once, after the 14:25 price fetch. The plan inside them (which target applies when) is fixed for the day. Google then runs them every 30 minutes on its own, to compare each room's ALPSTUGA with the plan and nudge the heaters. Nothing is sent from the phone or PC between uploads. The repeated runs are needed because Google cannot make a heater use the ALPSTUGA instead of its own thermostat. The owner chose this over changing setpoints only at plan times, which would be less precise.
+## Superseded: Android and Google Home route
 
-
-- **One automation per room** (two in total), run by Google every 30 minutes through a recurring clock-time starter: 2 × 48 = 96 runs a day, under the 128 limit.
-- **Each run** reads the room's ALPSTUGA and the plan target for the current time window, then sets that room's heaters. If the reading is below target minus the hysteresis, the heaters go to target + margin. If it is above target plus the hysteresis, they go to target − margin.
-- **The day's plan is encoded as time-window conditions** inside each automation. To fit the comparison limit, the planner merges each room's day into at most 12 time windows (a setting).
-- **Defaults:** margin 2 °C, hysteresis 0.3 °C; both are settings. Setpoints are clamped to each heater's reported range, so a 5 °C target's "off" setting becomes the heater's minimum rather than 3 °C. Between runs the heaters' own thermostats cap any overshoot at about the margin, even if a sensor stops reporting. If the heaters' own sensors read much warmer than the room, a larger margin may be needed; the graphs will show it.
-- **Finer control:** if one automation can hold separate branches per room, a single cottage automation every 15 minutes (96 runs a day) is the alternative.
-
-The automations repeat daily. If the PC is down at 14:25 or an upload is missed, yesterday's windows run again until a new plan arrives. Google's [overview](https://developers.home.google.com/apis/android/overview) says its automation engine stores and runs automations, so they keep running with the phone and PC off. Time-based starters need a street address on the cottage home in Google Home.
-
-The plan is uploaded once a day, after the PC's daily price fetch at 14:25 and the new plan. A visit uploads at once. A **re-send** button covers a failed upload.
-
-The daily upload runs on one designated phone, the owner's, so household phones do not overwrite each other; any household phone can start or end a visit. It works wherever the phone has internet. The app notifies on a failed upload, and the web app shows a warning if the PC has had no upload confirmation by 15:30.
-
-**Fallback** if setting a heater's setpoint from an automation or reading the ALPSTUGA in a condition is not possible: upload time-based setpoints instead, each corrected by a per-room offset (the gap between the heaters' own readings and the ALPSTUGA), recalculated daily from history.
-
-**Documented, 18 October 2026:**
-
-- Automations can start at clock times or on a recurring schedule, at most once a minute.
-- Conditions can compare any device attribute with `lessThan`, `greaterThan` and similar operators, and can compare the current time.
-- Actions can be commands or state updates.
-- An app can hold permission for only one Google Home home at a time; Villa Kuppis needs only the cottage.
-- Only OAuth test users (at most 100) can grant permissions.
-- The Home APIs need a physical Android 10+ phone and a hub; the rate limit is 30,000 queries a minute per project; no price is listed.
-
-**Not documented; test when the devices arrive:**
-
-- whether an automation can set a Mill heater's absolute heating setpoint;
-- whether the ALPSTUGA temperature can be read in a condition;
-- whether the Home APIs work from an Android background job (if not, the daily upload becomes a notification to tap, and cottage readings are recorded only while the app runs);
-- whether permissions of an unpublished test app expire after 7 days.
-
-## Setup notes
-
-Start from [Google's Android sample app](https://github.com/google-home/google-home-api-sample-app-android). Its [authorization guide](https://developers.home.google.com/apis/android/sample-app/authorization) defaults to the partner-gated `home.platform.v2` scope; use `HOME_PLATFORM_SCOPE_VERSION_1` (`home.platform.selected.devices`). Add household accounts as OAuth test users; [unregistered apps allow 100 users](https://developers.home.google.com/apis/android/oauth). A Google Cloud project and OAuth credentials are needed. No usage fee was found.
-
-## Not pursued
-
-- **Mill cloud mode:** the heaters could not follow the ALPSTUGA sensors.
-- **Direct Matter from the PC:** needs routed IPv6 into the cottage network, which the current routers are unlikely to provide; see [cottage](cottage.md).
-- **Home MCP:** Premium Advanced and US-only.
+Revision 5 (18 October 2026) assumed the PC cannot reach Google Home, so a native Android app read the cottage through the Google Home APIs and uploaded the PC's plan once a day as sensor-driven Google Home automations: one per room, run every 30 minutes, at most 12 time windows a day, within Google's documented limits of 64 automations and 128 runs a day per home. Several capabilities it needed were undocumented (setting a Mill heater's absolute setpoint from an automation, reading the ALPSTUGA in a condition, background jobs, permission expiry of an unpublished app). The always-on cottage Home Assistant removes the need for all of them. Home MCP (Premium Advanced, US-only) and Mill cloud mode for the cottage were rejected earlier; direct Matter from the home PC across the internet stays out of scope.

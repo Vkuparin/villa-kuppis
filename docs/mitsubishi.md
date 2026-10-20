@@ -2,7 +2,7 @@
 
 ## Installation
 
-At home. Not in Google Home.
+At home. Not in Google Home. Planned to move behind the home Home Assistant (card H1.3); see [Home Assistant route](#home-assistant-route-planned).
 
 | Indoor unit | Outdoor unit | Wi-Fi adapter | Route |
 | --- | --- | --- | --- |
@@ -18,7 +18,7 @@ Supplied identifiers, one per indoor unit: `LN25VGHZ2LU`, `LN35VG2WLU`, `LN25VG2
 
 ## Routes
 
-One route for every unit: the MELCloud Home cloud. All three units are in the owner's MELCloud Home app.
+One route for every unit: the MELCloud Home cloud. All three units are in the owner's MELCloud Home app. Today Villa Kuppis uses its own `aiomelcloudhome` client; the planned route is Home Assistant's MELCloud Home integration on the home mini-PC, with the direct client kept as rollback.
 
 **MAC-597IFB-E (LN25 upstairs):** MELCloud Home's current adapter. Mitsubishi says it needs continuous internet; there is no known local API, and `pymitsubishi` does not support it. Cloud only.
 
@@ -32,6 +32,17 @@ The MELCloud Home cloud clients:
 Both are unofficial. No new hardware is needed, and the MELCloud Home app keeps working alongside. Keep each adapter on the LAN only; published research describes weak security in MAC-577 firmware.
 
 **Local alternative, only if the cloud proves unreliable:** replace a MAC-597 with a CN105 serial board running [ESPHome](https://esphome.io/components/climate/mitsubishi_cn105/). An [owner report](https://github.com/echavet/MitsubishiCN105ESPHome/discussions/317) confirms MSZ-LN25VG2W and MSZ-LN35VG2W. This takes the adapter's connector, so MELCloud Home stops working on that unit.
+
+## Home Assistant route (planned)
+
+Home Assistant's [MELCloud Home integration](https://www.home-assistant.io/integrations/melcloud_home) exposes each air-to-air indoor unit as a `climate` entity, with capabilities depending on the unit; it polls the cloud about every 60 seconds. Card H1.3 compares it with today's client on all three units before anything relies on it:
+
+- each unit appears separately; power, mode, setpoint range and fan read back independently, and a change to one unit leaves the others unchanged;
+- one supervised setpoint and fan change and restoration per unit, confirmed by read-back (owner present, go-ahead first);
+- how `climate.turn_off` and `turn_on` behave, so the cooling-only, never-change-mode and minimum-off-time rules still hold;
+- update latency, and whether the known HTTP-500-after-success writes resolve by read-back.
+
+Only one automation writer at a time: pause the Windows service's plan before Home Assistant writes, and keep a tested switch back to the direct client. If parity fails, the direct client stays for the pumps (H1.5). No HA acceptance is claimed until it has been run.
 
 ## First functions
 

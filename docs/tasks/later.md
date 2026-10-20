@@ -18,3 +18,9 @@ Ideas the owner agreed to that have no release yet. Add a feature heading and th
 | L1.4 | Show measured cottage heat-up and cool-down rates. | Tier 2 | F4.2 | Dropped: part of F5.1 |
 | L1.5 | "Cheapest hours" rule. | Tier 2 | F4.2 | Dropped: superseded by the optimizer, F5.2 |
 | L1.6 | Show ALPSTUGA readings in Villa Kuppis. | Tier 1 | F3.2 | Dropped: now core, F3.1 and F3.3 |
+
+## H3. Two-site Home Assistant follow-ups
+
+| ID | Task and Done when | Agent | Depends on | Status |
+| --- | --- | --- | --- | --- |
+| H3.3 | Evaluate local cached price schedules at the cottage (a whole day's plan executed by the cottage Home Assistant during outages). Not implemented automatically. Done when outage tests quantify the value and a scoped decision builds or defers a cottage runner. | Tier 1 | H2.4, H3.2 | Planned |

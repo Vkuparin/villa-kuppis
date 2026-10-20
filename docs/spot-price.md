@@ -1,6 +1,6 @@
 # Spot-price automation
 
-High priority. Plans are computed on the PC for every 15-minute price period. The home pumps get them directly; the cottage gets them through the Android app's daily upload.
+High priority. Plans are computed on the PC for every 15-minute price period. The home pumps get them through the home device gateway; the cottage gets each room's current target through the cottage Home Assistant, which applies it locally and falls back to a safe maintenance setpoint if targets stop arriving (see [architecture](architecture.md#cottage-control)).
 
 ## Inputs
 
@@ -37,7 +37,7 @@ A switch per site or room. The owner sets:
 - **Low price:** below this, storing heat is worth it.
 - **High price:** above this, avoid heating and let the room cool towards the minimum.
 
-The optimizer chooses a target for each 15-minute period, then merges them into at most 12 time windows per room for the cottage upload, that minimizes the cost of the known price window while staying between the minimum and the maximum. It uses each room's learned heat-up and cool-down rates and the outdoor forecast. Until enough history exists (a few weeks of readings), it falls back to the fixed thresholds implied by the low and high prices.
+The optimizer chooses a target for each 15-minute period, that minimizes the cost of the known price window while staying between the minimum and the maximum. It uses each room's learned heat-up and cool-down rates and the outdoor forecast. Until enough history exists (a few weeks of readings), it falls back to the fixed thresholds implied by the low and high prices.
 
 ## Summer cooling (home pumps)
 
@@ -71,7 +71,7 @@ The owner enters an arrival time and a target temperature, e.g. Friday 18:00 and
 
 - Until each room's heat-up rate is learned, it assumes the heat-up from maintenance temperature takes 12 hours.
 - If arrival is beyond the published prices, it plans with the prices it has and recalculates when the next day's prices arrive.
-- The Android app uploads the visit plan at once, and again after each recalculation.
+- Villa Kuppis sends the room targets to the cottage Home Assistant as they change, including after each recalculation.
 - The end-visit button returns the cottage to maintenance heating.
 - A notification warns if the plan cannot reach the target in time.
 

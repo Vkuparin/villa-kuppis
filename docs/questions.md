@@ -2,17 +2,22 @@
 
 Answers go into the relevant design doc; then remove the question here. Never send pairing codes, serial numbers or passwords.
 
-None at the moment.
+Two-site Home Assistant (20 October 2026), none blocking the documentation or the mocked gateway:
+
+1. **Mini-PC models** for home and cottage (refurbished business mini-PCs; see the [minimum](architecture.md#deployment)).
+2. **`Automaatio` and the cottage's safe fallback:** proposed rule: switching `Automaatio` off stops economic control, while the cottage's local frost and safe-maintenance fallback keeps running. Confirm, and the UI wording.
+3. **Safe fallback setpoint** per cottage room, once the heaters' real minimum over Matter is known (H2.1).
+4. **The partly work-managed phone:** does its VPN policy allow Tailscale? Test before H3.1.
 
 ## Settled
 
 - Name Villa Kuppis; public repository [Vkuparin/villa-kuppis](https://github.com/Vkuparin/villa-kuppis) under Apache License 2.0. Finnish UI; technical docs in English.
 - The goal is one app instead of many; take the simplest working route to each device, cloud included.
-- Python service on the home Windows 11 PC, almost always on. Desktop web app; native Kotlin Android app with the web app inside and the cottage functions. Tailscale between phones and PC (free plan).
-- Household members use the app with full control, each with their own Google account (Google Home membership for the cottage, Tailscale with Google sign-in for the PC). No separate app login. Android notifications for failed uploads, offline devices and visit plans that cannot reach the target.
-- No Home Assistant box, VM or cottage computer unless every other route fails. No Premium.
+- Two-site Home Assistant (20 October 2026): Villa Kuppis and Home Assistant Container on an always-on home mini-PC (Debian + Compose), Home Assistant OS on a cottage mini-PC. Browser/PWA, no Android app. Tailscale between browsers, the home server and the cottage Home Assistant (free plan). Until the cutover, the service runs on the home Windows 11 PC.
+- Household members use the app with full control, signed in to Tailscale with their own Google accounts. No separate app login. Site health and stale data shown in the web app.
+- One Home Assistant per site on its own mini-PC (replaces "no Home Assistant or cottage computer"). No Premium.
 - Home: three indoor units (LN25 on outdoor unit 1; LN35 and LN25 on outdoor unit 2), all in MELCloud Home and controlled through its cloud. Summer cooling matters most; radiators are geothermal and outside our control.
-- Cottage: four Mill heaters and two ALPSTUGA sensors in Google Home over Matter, arriving early November 2026. Large room: 2 × 1050 W and 1 × 500 W heaters plus one ALPSTUGA; small room: 1 × 1050 W heater plus one ALPSTUGA. Heaters follow the ALPSTUGA readings through sensor-driven automations uploaded daily by the Android app. Network stays NE200-Outdoor and Archer BE230. Mill built-in frost protection; no water pipes.
+- Cottage: four Mill heaters and two ALPSTUGA sensors in Google Home over Matter, arriving early November 2026. Large room: 2 × 1050 W and 1 × 500 W heaters plus one ALPSTUGA; small room: 1 × 1050 W heater plus one ALPSTUGA. Heaters follow the ALPSTUGA readings through the cottage Home Assistant's local controller, which gets each room's target from Villa Kuppis. Network stays NE200-Outdoor and Archer BE230. Mill built-in frost protection; no water pipes.
 - Spot prices: the raw spot price only. Fixed thresholds first, then a smart maintenance heating optimizer (minimum and maximum storage temperature, low and high price, learned rates, FMI forecast); settings per site or per room. Pump cooling in reverse; no season mode.
 - Summer cooling defaults: maximum 25 °C, precooling 21 °C, switching off allowed with a minimum off time. Separate home-away button. Quiet fan at night in chosen rooms. All settings changeable in the app.
 - Visit: arrival time and target; cheapest heat-up that reaches the target in time; ended by button.

@@ -33,4 +33,4 @@ sdkmanager --sdk_root="$env:ANDROID_HOME" --list_installed
 tailscale version
 ```
 
-A physical Android phone with USB debugging is the simplest test device; Home APIs need Google Play services and the owner's Google Home account. The app is a self-signed APK installed directly; no Play Store account or paid signing. Account sign-in, device pairing and live integration checks remain separate from this tool setup.
+Android Studio and the SDK were installed for the Android app planned at the time. That app was dropped on 20 October 2026 (two-site Home Assistant), so they are no longer needed for this project. Matter commissioning uses the Home Assistant Companion or Google Home app on a phone or tablet. Mini-PC setup (Debian + Docker Compose at home, Home Assistant OS at the cottage) will be recorded here when it happens (H1.4, H2.1).

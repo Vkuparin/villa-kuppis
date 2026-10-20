@@ -21,6 +21,6 @@ Only the coordinator edits cards. A small fix can reuse an existing card. The da
 | --- | --- |
 | [0.1.0](0.1.0.md) | Prove the integrations |
 | [0.2.0](0.2.0.md) | Home: PC service, web app and pump automation |
-| [0.3.0](0.3.0.md) | Cottage: Android app and automation |
+| [0.3.0](0.3.0.md) | Two-site Home Assistant and cottage control |
 | [0.4.0](0.4.0.md) | Optimizer for both sites |
 | [Later](later.md) | Unassigned work |
