@@ -2,3 +2,5 @@
 tzdata>=2024.1
 # Pinned for the MELCloud Home integration experiment.
 aiomelcloudhome==0.3.1
+# Home Assistant WebSocket client (card H1.2); also required by aiomelcloudhome.
+aiohttp>=3.10

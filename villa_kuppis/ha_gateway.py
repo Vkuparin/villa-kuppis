@@ -1,0 +1,904 @@
+"""Home Assistant device gateway for one site (card H1.2).
+
+Villa Kuppis talks to each site's Home Assistant over its WebSocket API:
+an authenticated snapshot (``get_states``), a ``state_changed``
+subscription, and ``call_service`` for commands. Devices keep stable
+Villa Kuppis IDs; the mapping to Home Assistant ``entity_id`` strings is
+stored per site and never guessed. A bound entity that disappears (removed
+or renamed in Home Assistant) is a mapping error, and commands to it fail
+instead of reaching another device.
+
+Every command ends in one of four states:
+
+- ``pending``: accepted and in flight;
+- ``confirmed``: Home Assistant reported the requested value;
+- ``failed``: refused before sending, or Home Assistant returned an error,
+  so the device was not changed by this command;
+- ``unknown``: sent, but neither an error nor the new value came back in
+  time (connection lost, slow device). A later state report that matches
+  still confirms it.
+
+After a disconnect the gateway reconnects with backoff, takes a fresh
+snapshot and resubscribes; a periodic snapshot also covers lost events.
+Older reports than the one already held (reordered events) are ignored.
+
+The gateway runs in its own thread and event loop like ``PumpGateway``;
+``run()`` is also usable directly from an asyncio test.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import itertools
+import json
+import math
+import sqlite3
+import threading
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Awaitable, Callable
+
+import aiohttp
+
+KINDS = ("climate", "sensor", "number")
+DOMAINS = {
+    "climate": ("climate",),
+    "sensor": ("sensor",),
+    "number": ("input_number", "number"),
+}
+ACTIONS = {
+    "climate": ("power", "setpoint", "mode", "fan"),
+    "number": ("value",),
+    "sensor": (),
+}
+UNAVAILABLE = ("unavailable", "unknown")
+
+# Home Assistant ClimateEntityFeature bits.
+FEATURE_TARGET_TEMPERATURE = 1
+FEATURE_FAN_MODE = 8
+FEATURE_TURN_OFF = 128
+FEATURE_TURN_ON = 256
+
+DEFAULT_COMMAND_TIMEOUT = 15.0     # wait for Home Assistant's call result
+DEFAULT_CONFIRM_TIMEOUT = 90.0     # wait for the new value after that
+DEFAULT_RESYNC_INTERVAL = 300.0    # periodic snapshot while connected
+DEFAULT_ENTITY_STALE_AFTER = 1800.0
+DEFAULT_SITE_STALE_AFTER = 180.0
+RETRY_BASE = 5.0
+RETRY_MAX = 300.0
+COMMAND_HISTORY = 200
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class HAError(Exception):
+    """Home Assistant answered a request with an error."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(f"{code}: {message}")
+        self.code = code
+        self.message = message
+
+
+class HAAuthError(Exception):
+    """The access token was refused."""
+
+
+class HAConnectionClosed(ConnectionError):
+    """The WebSocket closed before the request was answered."""
+
+
+# --- connection ------------------------------------------------------------------
+
+class HAConnection:
+    """One authenticated Home Assistant WebSocket connection.
+
+    A reader task resolves request futures by message id and hands
+    subscription events to their callbacks. When the socket closes, every
+    open request fails with HAConnectionClosed and ``wait_closed`` returns.
+    """
+
+    def __init__(self, session: aiohttp.ClientSession, ws, ha_version: str):
+        self._session = session
+        self._ws = ws
+        self.ha_version = ha_version
+        self._ids = itertools.count(1)
+        self._futures: dict[int, asyncio.Future] = {}
+        self._handlers: dict[int, Callable[[dict], None]] = {}
+        self._closed = asyncio.Event()
+        self.on_message: Callable[[], None] | None = None
+        self._reader = asyncio.create_task(self._read())
+
+    @classmethod
+    async def open(cls, url: str, token: str, *, timeout: float = 15.0) -> "HAConnection":
+        session = aiohttp.ClientSession()
+        ws = None
+        try:
+            ws = await session.ws_connect(
+                url, heartbeat=30.0, max_msg_size=0,
+                timeout=aiohttp.ClientWSTimeout(ws_close=timeout),
+            )
+            hello = await asyncio.wait_for(ws.receive_json(), timeout)
+            if hello.get("type") != "auth_required":
+                raise HAError("protocol", f"unexpected first message {hello.get('type')!r}")
+            await ws.send_json({"type": "auth", "access_token": token})
+            reply = await asyncio.wait_for(ws.receive_json(), timeout)
+            if reply.get("type") == "auth_invalid":
+                raise HAAuthError(reply.get("message") or "access token refused")
+            if reply.get("type") != "auth_ok":
+                raise HAError("protocol", f"unexpected auth reply {reply.get('type')!r}")
+            return cls(session, ws, str(reply.get("ha_version") or hello.get("ha_version") or ""))
+        except BaseException:
+            if ws is not None:
+                await ws.close()
+            await session.close()
+            raise
+
+    async def _read(self) -> None:
+        try:
+            async for msg in self._ws:
+                if msg.type != aiohttp.WSMsgType.TEXT:
+                    continue
+                data = json.loads(msg.data)
+                # Home Assistant may coalesce several messages into a list.
+                for item in data if isinstance(data, list) else [data]:
+                    try:
+                        self._dispatch(item)
+                    except Exception:
+                        pass   # one malformed message must not end the reader
+        except (aiohttp.ClientError, ValueError, asyncio.TimeoutError):
+            pass
+        finally:
+            for fut in self._futures.values():
+                if not fut.done():
+                    fut.set_exception(HAConnectionClosed("connection closed"))
+            self._futures.clear()
+            self._closed.set()
+
+    def _dispatch(self, item: dict) -> None:
+        if self.on_message is not None:
+            self.on_message()
+        kind = item.get("type")
+        msg_id = item.get("id")
+        if kind == "event":
+            handler = self._handlers.get(msg_id)
+            if handler is not None:
+                handler(item.get("event") or {})
+            return
+        fut = self._futures.pop(msg_id, None)
+        if fut is None or fut.done():
+            return
+        if kind == "result":
+            if item.get("success"):
+                fut.set_result(item.get("result"))
+            else:
+                err = item.get("error") or {}
+                fut.set_exception(HAError(str(err.get("code") or "error"),
+                                          str(err.get("message") or "")))
+        elif kind == "pong":
+            fut.set_result(None)
+
+    async def request(self, payload: dict, timeout: float | None = None) -> Any:
+        if self._closed.is_set():
+            raise HAConnectionClosed("connection closed")
+        msg_id = next(self._ids)
+        fut = asyncio.get_running_loop().create_future()
+        self._futures[msg_id] = fut
+        try:
+            await self._ws.send_json({**payload, "id": msg_id})
+        except (aiohttp.ClientError, ConnectionError) as err:
+            self._futures.pop(msg_id, None)
+            raise HAConnectionClosed(str(err)) from err
+        try:
+            return await asyncio.wait_for(fut, timeout)
+        finally:
+            self._futures.pop(msg_id, None)
+
+    async def get_states(self, timeout: float | None = None) -> list[dict]:
+        return await self.request({"type": "get_states"}, timeout)
+
+    async def subscribe_state_changed(self, handler: Callable[[dict], None],
+                                      timeout: float | None = None) -> None:
+        msg_id = next(self._ids)
+        self._handlers[msg_id] = handler
+        fut = asyncio.get_running_loop().create_future()
+        self._futures[msg_id] = fut
+        await self._ws.send_json({"id": msg_id, "type": "subscribe_events",
+                                  "event_type": "state_changed"})
+        await asyncio.wait_for(fut, timeout)
+
+    async def call_service(self, domain: str, service: str, entity_id: str,
+                           data: dict, timeout: float | None = None) -> Any:
+        return await self.request({
+            "type": "call_service", "domain": domain, "service": service,
+            "service_data": data, "target": {"entity_id": entity_id},
+        }, timeout)
+
+    async def wait_closed(self) -> None:
+        await self._closed.wait()
+
+    async def close(self) -> None:
+        try:
+            await self._ws.close()
+        finally:
+            await self._session.close()
+            await asyncio.gather(self._reader, return_exceptions=True)
+
+
+# --- bindings --------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Binding:
+    site_id: str
+    device_id: str
+    entity_id: str
+    kind: str
+    label: str = ""
+
+
+class BindingError(ValueError):
+    pass
+
+
+_BINDING_SCHEMA = """
+CREATE TABLE IF NOT EXISTS device_binding (
+    site_id TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('climate','sensor','number')),
+    label TEXT NOT NULL DEFAULT '',
+    bound_at_utc TEXT NOT NULL,
+    PRIMARY KEY (site_id, device_id),
+    UNIQUE (site_id, entity_id)
+);
+"""
+
+
+def check_binding(entity_id: str, kind: str) -> None:
+    if kind not in KINDS:
+        raise BindingError(f"kind must be one of {', '.join(KINDS)}")
+    domain, dot, rest = entity_id.partition(".")
+    if not dot or not rest or domain not in DOMAINS[kind]:
+        raise BindingError(f"{entity_id!r} is not a {kind} entity")
+
+
+class BindingStore:
+    """Stable Villa Kuppis device IDs mapped to Home Assistant entities."""
+
+    def __init__(self, path):
+        self._path = Path(path)
+        self._lock = threading.Lock()
+        self._conn = sqlite3.connect(self._path, check_same_thread=False)
+        self._conn.executescript(_BINDING_SCHEMA)
+        self._conn.commit()
+
+    def bind(self, site_id: str, device_id: str, entity_id: str, kind: str,
+             label: str = "", *, now=utc_now) -> Binding:
+        check_binding(entity_id, kind)
+        with self._lock:
+            try:
+                self._conn.execute(
+                    "INSERT INTO device_binding VALUES (?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT (site_id, device_id) DO UPDATE SET "
+                    "entity_id = excluded.entity_id, kind = excluded.kind, "
+                    "label = excluded.label, bound_at_utc = excluded.bound_at_utc",
+                    (site_id, device_id, entity_id, kind, label, now().isoformat()),
+                )
+                self._conn.commit()
+            except sqlite3.IntegrityError as err:
+                self._conn.rollback()
+                raise BindingError(f"{entity_id} is already bound to another device") from err
+        return Binding(site_id, device_id, entity_id, kind, label)
+
+    def unbind(self, site_id: str, device_id: str) -> bool:
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM device_binding WHERE site_id = ? AND device_id = ?",
+                (site_id, device_id))
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def bindings(self, site_id: str) -> list[Binding]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT site_id, device_id, entity_id, kind, label FROM device_binding "
+                "WHERE site_id = ? ORDER BY device_id", (site_id,)).fetchall()
+        return [Binding(*row) for row in rows]
+
+    def close(self) -> None:
+        with self._lock:
+            self._conn.close()
+
+
+# --- state normalization ---------------------------------------------------------
+
+def _parse_ts(value) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        ts = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
+
+
+def _seen_at(ha_state: dict) -> datetime | None:
+    """Latest time Home Assistant wrote this state, changed or not."""
+    stamps = [_parse_ts(ha_state.get(k)) for k in ("last_reported", "last_updated")]
+    stamps = [s for s in stamps if s is not None]
+    return max(stamps) if stamps else None
+
+
+def _number(value) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return out if math.isfinite(out) else None
+
+
+def capabilities(kind: str, attrs: dict) -> dict:
+    """Only what the entity actually reports."""
+    if kind == "climate":
+        features = attrs.get("supported_features")
+        features = features if isinstance(features, int) else 0
+        return {
+            "setpoint": bool(features & FEATURE_TARGET_TEMPERATURE),
+            "power": bool(features & FEATURE_TURN_OFF) and bool(features & FEATURE_TURN_ON),
+            "fan": bool(features & FEATURE_FAN_MODE),
+            "min": _number(attrs.get("min_temp")),
+            "max": _number(attrs.get("max_temp")),
+            "step": _number(attrs.get("target_temp_step")),
+            "modes": [m for m in attrs.get("hvac_modes") or [] if isinstance(m, str)],
+            "fan_modes": [m for m in attrs.get("fan_modes") or [] if isinstance(m, str)],
+        }
+    if kind == "number":
+        return {"min": _number(attrs.get("min")), "max": _number(attrs.get("max")),
+                "step": _number(attrs.get("step"))}
+    return {"unit": attrs.get("unit_of_measurement"),
+            "device_class": attrs.get("device_class")}
+
+
+def reading(binding: Binding, ha_state: dict) -> dict:
+    """Normalize one Home Assistant state for a bound device."""
+    attrs = ha_state.get("attributes") or {}
+    raw = ha_state.get("state")
+    available = raw not in UNAVAILABLE and raw is not None
+    seen = _seen_at(ha_state)
+    out = {
+        "device_id": binding.device_id,
+        "site_id": binding.site_id,
+        "entity_id": binding.entity_id,
+        "kind": binding.kind,
+        "label": binding.label or attrs.get("friendly_name") or binding.device_id,
+        "available": available,
+        "source_ts": seen.isoformat() if seen is not None else None,
+        "caps": capabilities(binding.kind, attrs),
+    }
+    if binding.kind == "climate":
+        out.update({
+            "power": (raw != "off") if available else None,
+            "mode": raw if available else None,
+            "setpoint": _number(attrs.get("temperature")) if available else None,
+            "room_temp": _number(attrs.get("current_temperature")) if available else None,
+            "fan": attrs.get("fan_mode") if available else None,
+        })
+    else:
+        out["value"] = _number(raw) if available else None
+    return out
+
+
+def validate(state: dict, action: str, value):
+    """Check one command against the latest reading.
+
+    Returns (ok, normalized_value, detail).
+    """
+    kind = state["kind"]
+    if action not in ACTIONS.get(kind, ()):
+        if not ACTIONS.get(kind):
+            return False, None, "the device is read-only"
+        return False, None, f"action must be one of {', '.join(ACTIONS[kind])}"
+    if not state.get("available"):
+        return False, None, "the device is unavailable in Home Assistant"
+    caps = state["caps"]
+    if action == "power":
+        if not isinstance(value, bool):
+            return False, None, "value must be true or false"
+        if not caps["power"]:
+            return False, None, "the device cannot be turned on and off"
+        return True, value, ""
+    if action == "mode":
+        if not isinstance(value, str) or value not in caps["modes"]:
+            return False, None, "the mode is not supported by this device"
+        return True, value, ""
+    if action == "fan":
+        if not caps["fan"] or not isinstance(value, str) or value not in caps["fan_modes"]:
+            return False, None, "the fan speed is not supported by this device"
+        return True, value, ""
+    # setpoint or number value
+    if action == "setpoint" and not caps["setpoint"]:
+        return False, None, "the device has no setpoint"
+    number = _number(value)
+    if number is None or isinstance(value, bool):
+        return False, None, "value must be a number"
+    lo, hi, step = caps["min"], caps["max"], caps["step"]
+    if lo is None or hi is None:
+        return False, None, "the device has not reported its range"
+    if not lo <= number <= hi:
+        return False, None, f"value must be between {lo:g} and {hi:g}"
+    if step:
+        steps = (number - lo) / step
+        if abs(steps - round(steps)) > 1e-6:
+            return False, None, f"value must be in steps of {step:g}"
+    return True, number, ""
+
+
+def matches(state: dict | None, action: str, value) -> bool:
+    if state is None or not state.get("available"):
+        return False
+    if action == "power":
+        return state["power"] == value
+    if action == "mode":
+        return state["mode"] == value
+    if action == "fan":
+        return state["fan"] == value
+    current = state["setpoint"] if action == "setpoint" else state["value"]
+    return current is not None and abs(current - value) < 1e-6
+
+
+def service_call(binding: Binding, action: str, value) -> tuple[str, str, dict]:
+    if action == "power":
+        return "climate", "turn_on" if value else "turn_off", {}
+    if action == "setpoint":
+        return "climate", "set_temperature", {"temperature": value}
+    if action == "mode":
+        return "climate", "set_hvac_mode", {"hvac_mode": value}
+    if action == "fan":
+        return "climate", "set_fan_mode", {"fan_mode": value}
+    return binding.entity_id.partition(".")[0], "set_value", {"value": value}
+
+
+# --- commands --------------------------------------------------------------------
+
+@dataclass
+class Command:
+    request_id: str
+    site_id: str
+    device_id: str
+    action: str
+    value: Any
+    actor: str
+    state: str = "pending"
+    detail: str = ""
+    created_at: str = ""
+    finished_at: str | None = None
+    _done: asyncio.Event | None = field(default=None, repr=False, compare=False)
+
+    def public(self) -> dict:
+        return {k: v for k, v in self.__dict__.items() if not k.startswith("_")}
+
+
+# --- gateway ---------------------------------------------------------------------
+
+class HomeAssistantGateway:
+    """One site's Home Assistant: bound devices, readings and commands.
+
+    ``on_command_done`` receives each finished command (for the event log);
+    it runs under the gateway lock and must not call back into the gateway.
+    """
+
+    def __init__(self, site_id: str, url: str, token_provider: Callable[[], str],
+                 bindings: BindingStore, *, now=utc_now,
+                 connect: Callable[[str, str], Awaitable[HAConnection]] | None = None,
+                 command_timeout: float = DEFAULT_COMMAND_TIMEOUT,
+                 confirm_timeout: float = DEFAULT_CONFIRM_TIMEOUT,
+                 resync_interval: float = DEFAULT_RESYNC_INTERVAL,
+                 entity_stale_after: float = DEFAULT_ENTITY_STALE_AFTER,
+                 site_stale_after: float = DEFAULT_SITE_STALE_AFTER,
+                 retry_base: float = RETRY_BASE, retry_max: float = RETRY_MAX,
+                 on_command_done: Callable[[dict], None] | None = None):
+        self.site_id = site_id
+        self._url = url
+        self._token_provider = token_provider
+        self._bindings_store = bindings
+        self._now = now
+        self._connect = connect or (lambda u, t: HAConnection.open(u, t, timeout=command_timeout))
+        self._command_timeout = command_timeout
+        self._confirm_timeout = confirm_timeout
+        self._resync_interval = resync_interval
+        self._entity_stale_after = entity_stale_after
+        self._site_stale_after = site_stale_after
+        self._retry_base = retry_base
+        self._retry_max = retry_max
+        self._on_command_done = on_command_done
+
+        self._lock = threading.Lock()
+        self._bindings: dict[str, Binding] = {}
+        self._by_entity: dict[str, Binding] = {}
+        self._states: dict[str, dict] = {}
+        self._raw: dict[str, dict] = {}          # entity_id -> latest HA state
+        self._missing: set[str] = set()
+        self._commands: dict[str, Command] = {}
+        self._active: dict[str, Command] = {}    # device_id -> pending command
+        self._latest: dict[str, Command] = {}    # device_id -> last command
+        self._conn: HAConnection | None = None
+        self._connected = False
+        self._state = "stopped"
+        self._last_contact: datetime | None = None
+        self._last_error: str | None = None
+        self._ha_version = ""
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._stop: asyncio.Event | None = None
+        self._stop_requested = False
+        self._thread: threading.Thread | None = None
+        self.reload_bindings()
+
+    # -- bindings --
+
+    def reload_bindings(self) -> None:
+        bindings = {b.device_id: b for b in self._bindings_store.bindings(self.site_id)}
+        with self._lock:
+            self._bindings = bindings
+            self._by_entity = {b.entity_id: b for b in bindings.values()}
+            self._states = {k: v for k, v in self._states.items() if k in bindings}
+            for entity_id, raw in self._raw.items():
+                self._apply_locked(entity_id, raw, force=True)
+            self._refresh_missing_locked()
+
+    def _refresh_missing_locked(self) -> None:
+        if not self._raw and not self._connected:
+            self._missing = set()
+            return
+        self._missing = {d for d, b in self._bindings.items() if b.entity_id not in self._raw}
+        for device_id in self._missing:
+            self._states.pop(device_id, None)
+
+    def discover(self) -> list[dict]:
+        """Entities from the latest snapshot that could be bound (read-only)."""
+        domains = {d: kind for kind, ds in DOMAINS.items() for d in ds}
+        with self._lock:
+            out = []
+            for entity_id, raw in sorted(self._raw.items()):
+                kind = domains.get(entity_id.partition(".")[0])
+                if kind is None:
+                    continue
+                bound = self._by_entity.get(entity_id)
+                out.append({
+                    "entity_id": entity_id, "kind": kind,
+                    "name": (raw.get("attributes") or {}).get("friendly_name") or "",
+                    "device_id": bound.device_id if bound else None,
+                })
+            return out
+
+    # -- readings --
+
+    def _apply_locked(self, entity_id: str, raw: dict | None, *, force: bool = False) -> str | None:
+        """Store one HA state; returns the bound device id when it changed."""
+        if raw is None:
+            self._raw.pop(entity_id, None)
+            binding = self._by_entity.get(entity_id)
+            if binding is not None:
+                self._states.pop(binding.device_id, None)
+                self._missing.add(binding.device_id)
+            return None
+        held = self._raw.get(entity_id)
+        if not force and held is not None:
+            new_ts, old_ts = _seen_at(raw), _seen_at(held)
+            if new_ts is not None and old_ts is not None and new_ts < old_ts:
+                return None   # an older report arriving late
+        self._raw[entity_id] = raw
+        binding = self._by_entity.get(entity_id)
+        if binding is None:
+            return None
+        self._states[binding.device_id] = reading(binding, raw)
+        self._missing.discard(binding.device_id)
+        return binding.device_id
+
+    def _status_locked(self, device_id: str, now: datetime) -> str:
+        if device_id in self._missing:
+            return "missing"
+        state = self._states.get(device_id)
+        if state is None:
+            return "unknown"
+        if not self._connected:
+            return "stale"
+        if not state["available"]:
+            return "unavailable"
+        seen = _parse_ts(state["source_ts"])
+        if seen is not None and (now - seen).total_seconds() > self._entity_stale_after:
+            return "stale"
+        return "ok"
+
+    def snapshot(self) -> dict[str, dict]:
+        """Every bound device: its latest reading, status and pending command."""
+        now = self._now()
+        with self._lock:
+            out = {}
+            for device_id, binding in self._bindings.items():
+                state = dict(self._states.get(device_id) or {
+                    "device_id": device_id, "site_id": self.site_id,
+                    "entity_id": binding.entity_id, "kind": binding.kind,
+                    "label": binding.label or device_id, "available": False,
+                })
+                state["status"] = self._status_locked(device_id, now)
+                active = self._active.get(device_id)
+                state["pending"] = active.public() if active else None
+                out[device_id] = state
+            return out
+
+    def health(self) -> dict:
+        now = self._now()
+        with self._lock:
+            state = self._state
+            last = self._last_contact
+            if state == "ok" and (last is None or
+                                  (now - last).total_seconds() > self._site_stale_after):
+                state = "stale"
+            return {
+                "site_id": self.site_id,
+                "state": state,
+                "last_contact": last.isoformat() if last else None,
+                "error": self._last_error,
+                "missing": sorted(self._missing),
+                "ha_version": self._ha_version,
+            }
+
+    # -- commands --
+
+    def command(self, request_id: str) -> dict | None:
+        with self._lock:
+            cmd = self._commands.get(request_id)
+            return cmd.public() if cmd else None
+
+    def submit(self, device_id: str, action: str, value, actor: str) -> dict:
+        """Validate and queue a command; thread-safe. Returns the command.
+
+        An identical command already pending is returned instead of a new
+        one; a different command while one is pending fails at once, so two
+        commands for one device never race.
+        """
+        cmd = Command(uuid.uuid4().hex, self.site_id, device_id, action, value,
+                      actor, created_at=self._now().isoformat())
+        with self._lock:
+            binding = self._bindings.get(device_id)
+            active = self._active.get(device_id)
+            if binding is None:
+                return self._finish_locked(cmd, "failed", "the device is not bound at this site")
+            if device_id in self._missing:
+                return self._finish_locked(
+                    cmd, "failed", f"{binding.entity_id} is missing in Home Assistant; check the binding")
+            if active is not None:
+                if active.action == action and active.value == value:
+                    return active.public()
+                return self._finish_locked(cmd, "failed", "another command for this device is pending")
+            loop = self._loop
+            if not self._connected or loop is None or loop.is_closed():
+                return self._finish_locked(cmd, "failed", "Home Assistant is not connected")
+            state = self._states.get(device_id)
+            ok, normalized, detail = validate(state, action, value) if state else (
+                False, None, "the device has not reported its state")
+            if not ok:
+                return self._finish_locked(cmd, "failed", detail)
+            cmd.value = normalized
+            if matches(state, action, normalized):
+                return self._finish_locked(cmd, "confirmed", "already at the requested value")
+            self._active[device_id] = cmd
+            self._commands[cmd.request_id] = cmd
+            self._latest[device_id] = cmd
+            out = cmd.public()
+        try:
+            loop.call_soon_threadsafe(lambda: loop.create_task(self._execute(cmd, binding)))
+        except RuntimeError:
+            with self._lock:
+                return self._finish_locked(cmd, "failed", "Home Assistant is not connected")
+        return out
+
+    def _finish_locked(self, cmd: Command, result: str, detail: str) -> dict:
+        cmd.state = result
+        cmd.detail = detail
+        cmd.finished_at = self._now().isoformat()
+        if self._active.get(cmd.device_id) is cmd:
+            del self._active[cmd.device_id]
+        self._commands[cmd.request_id] = cmd
+        self._latest.setdefault(cmd.device_id, cmd)
+        while len(self._commands) > COMMAND_HISTORY:
+            self._commands.pop(next(iter(self._commands)))
+        if cmd._done is not None:
+            cmd._done.set()
+        out = cmd.public()
+        if self._on_command_done is not None:
+            try:
+                self._on_command_done(out)
+            except Exception:
+                pass
+        return out
+
+    async def wait(self, request_id: str, timeout: float | None = None) -> dict | None:
+        """Wait until a command leaves pending (for asyncio callers)."""
+        with self._lock:
+            cmd = self._commands.get(request_id)
+            if cmd is None or cmd.state != "pending":
+                return cmd.public() if cmd else None
+            if cmd._done is None:
+                cmd._done = asyncio.Event()
+            done = cmd._done
+        await asyncio.wait_for(done.wait(), timeout)
+        return self.command(request_id)
+
+    async def _execute(self, cmd: Command, binding: Binding) -> None:
+        domain, service, data = service_call(binding, cmd.action, cmd.value)
+        with self._lock:
+            conn = self._conn
+            if cmd._done is None:
+                cmd._done = asyncio.Event()
+            done = cmd._done
+        try:
+            if conn is None:
+                raise HAConnectionClosed("not connected")
+            await conn.call_service(domain, service, binding.entity_id, data,
+                                    timeout=self._command_timeout)
+        except HAError as err:
+            with self._lock:
+                self._finish_locked(cmd, "failed", f"Home Assistant refused the command: {err.message or err.code}")
+            return
+        except (HAConnectionClosed, asyncio.TimeoutError, aiohttp.ClientError):
+            with self._lock:
+                self._finish_locked(cmd, "unknown",
+                                    "no answer from Home Assistant; the change may have been applied")
+            return
+        with self._lock:
+            if cmd.state != "pending":
+                return
+            if matches(self._states.get(cmd.device_id), cmd.action, cmd.value):
+                self._finish_locked(cmd, "confirmed", "")
+                return
+        try:
+            await asyncio.wait_for(done.wait(), self._confirm_timeout)
+        except asyncio.TimeoutError:
+            with self._lock:
+                if cmd.state == "pending":
+                    self._finish_locked(
+                        cmd, "unknown",
+                        f"Home Assistant accepted the command but did not report the new value within {self._confirm_timeout:g} s")
+
+    def _confirm_locked(self, device_id: str) -> None:
+        """Confirm the device's pending or last unknown command if it now matches."""
+        cmd = self._active.get(device_id) or self._latest.get(device_id)
+        if cmd is None or cmd.state not in ("pending", "unknown"):
+            return
+        if matches(self._states.get(device_id), cmd.action, cmd.value):
+            was_unknown = cmd.state == "unknown"
+            if was_unknown:
+                cmd._done = None
+            self._finish_locked(cmd, "confirmed", "confirmed by a later report" if was_unknown else "")
+
+    # -- connection loop --
+
+    def _on_state_changed(self, event: dict) -> None:
+        data = event.get("data") or {}
+        entity_id = data.get("entity_id")
+        if not isinstance(entity_id, str):
+            return
+        with self._lock:
+            device_id = self._apply_locked(entity_id, data.get("new_state"))
+            if device_id is not None:
+                self._confirm_locked(device_id)
+
+    def _touch(self) -> None:
+        with self._lock:
+            self._last_contact = self._now()
+
+    async def _resync(self, conn: HAConnection) -> None:
+        states = await conn.get_states(timeout=self._command_timeout)
+        with self._lock:
+            fresh = {s["entity_id"]: s for s in states
+                     if isinstance(s, dict) and isinstance(s.get("entity_id"), str)}
+            for entity_id in [e for e in self._raw if e not in fresh]:
+                self._apply_locked(entity_id, None)
+            for entity_id, raw in fresh.items():
+                device_id = self._apply_locked(entity_id, raw)
+                if device_id is not None:
+                    self._confirm_locked(device_id)
+            self._refresh_missing_locked()
+
+    def retry_delay(self, failures: int, auth_failed: bool = False) -> float:
+        if auth_failed:
+            return self._retry_max
+        return min(self._retry_base * 2 ** max(failures - 1, 0), self._retry_max)
+
+    def _set_state(self, state: str, error: str | None = None) -> None:
+        with self._lock:
+            self._state = state
+            self._last_error = error
+
+    async def _session(self) -> None:
+        conn = await self._connect(self._url, self._token_provider())
+        conn.on_message = self._touch
+        try:
+            self._touch()
+            with self._lock:
+                self._ha_version = conn.ha_version
+            # Subscribe first so nothing between the snapshot and the
+            # subscription is lost; older events are dropped by timestamp.
+            await conn.subscribe_state_changed(self._on_state_changed,
+                                               timeout=self._command_timeout)
+            with self._lock:
+                self._conn = conn
+                self._connected = True
+            await self._resync(conn)
+            self._set_state("ok")
+            closed = asyncio.ensure_future(conn.wait_closed())
+            stop = asyncio.ensure_future(self._stop.wait())
+            try:
+                while True:
+                    done, _ = await asyncio.wait({closed, stop}, timeout=self._resync_interval,
+                                                 return_when=asyncio.FIRST_COMPLETED)
+                    if done:
+                        return
+                    await self._resync(conn)
+            finally:
+                closed.cancel()
+                stop.cancel()
+        finally:
+            with self._lock:
+                self._conn = None
+                self._connected = False
+            await conn.close()
+
+    async def run(self) -> None:
+        """Connect, keep the snapshot current and reconnect until stopped."""
+        self._loop = asyncio.get_running_loop()
+        self._stop = asyncio.Event()
+        if self._stop_requested:
+            self._stop.set()
+        failures = 0
+        while not self._stop.is_set():
+            self._set_state("connecting", self.health()["error"])
+            auth_failed = False
+            try:
+                await self._session()
+                if self._stop.is_set():
+                    break
+                failures = 1
+                self._set_state("disconnected", "the connection to Home Assistant closed")
+            except asyncio.CancelledError:
+                raise
+            except HAAuthError as err:
+                failures += 1
+                auth_failed = True
+                self._set_state("auth_failed", f"access token refused: {err}")
+            except Exception as err:
+                failures += 1
+                self._set_state("disconnected", f"{type(err).__name__}: {err}".rstrip(": "))
+            try:
+                await asyncio.wait_for(self._stop.wait(), self.retry_delay(failures, auth_failed))
+            except asyncio.TimeoutError:
+                pass
+        self._set_state("stopped", None)
+
+    def request_stop(self) -> None:
+        self._stop_requested = True
+        loop, stop = self._loop, self._stop
+        if loop is not None and stop is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(stop.set)
+
+    # -- thread runner --
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(target=lambda: asyncio.run(self.run()),
+                                        name=f"ha-gateway-{self.site_id}", daemon=True)
+        self._thread.start()
+
+    def stop(self, timeout: float = 30.0) -> None:
+        self.request_stop()
+        if self._thread is not None:
+            self._thread.join(timeout)
+            self._thread = None
