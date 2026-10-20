@@ -81,17 +81,33 @@ class CoolingTests(ServiceTestCase):
         self.run_plan(service)
         self.assertEqual(self._unit(service, "unit-1")["setpoint"], 25.0)
 
-    def test_hot_room_starts_a_household_off_cooling_unit_only_when_enabled(self):
+    def test_power_management_starts_hot_rooms_and_stops_cool_ones(self):
         service, _ = self.start()
         self.set_prices(100)
         sent = self.run_plan(service)             # off by default
         self.assertNotIn(("unit-2", "power", True), self.brief(sent))
         self.assertFalse(self._unit(service, "unit-2")["power"])
-        SettingsStore(f"{self.tmp}/pumps.db").set(
-            "site:home", "cool_start_when_hot", True, "Ville")
-        sent = self.run_plan(service)             # room 27 > maximum 25
+        store = SettingsStore(f"{self.tmp}/pumps.db")
+        store.set("site:home", "cool_manage_power", True, "Ville")
+        sent = self.run_plan(service)             # rooms 26 and 27 > maximum 25
         self.assertIn(("unit-2", "power", True), self.brief(sent))
         self.assertTrue(self._unit(service, "unit-2")["power"])
+        self.assertTrue(self._unit(service, "unit-1")["power"])
+        store.set("site:home", "cool_max_c", 28.0, "Ville")
+        store.set("site:home", "away_max_c", 30.0, "Ville")
+        self.run_plan(service)                    # rooms 26/27 <= 27.5: no need
+        self.assertFalse(self._unit(service, "unit-1")["power"])
+
+    def test_power_management_never_starts_a_unit_without_need(self):
+        service, _ = self.start()
+        self.set_prices(100)
+        store = SettingsStore(f"{self.tmp}/pumps.db")
+        store.set("site:home", "cool_manage_power", True, "Ville")
+        store.set("site:home", "cool_max_c", 28.0, "Ville")
+        store.set("site:home", "away_max_c", 30.0, "Ville")
+        sent = self.run_plan(service)
+        self.assertNotIn(("unit-2", "power", True), self.brief(sent))
+        self.assertFalse(self._unit(service, "unit-2")["power"])
 
     def test_precooling_switch_off_keeps_the_maximum_when_cheap(self):
         service, _ = self.start()

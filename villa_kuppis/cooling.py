@@ -32,11 +32,13 @@ applies them to the pumps:
   applied with the same rules as above, and it is planned again at each
   new period from the room's current temperature.
 
-* ``cool_start_when_hot`` (off by default) also switches on a unit in
-  cooling mode that is off, when its room is above the maximum and the
-  price is not high. It stops such a unit again once the room is
-  ``START_BAND_C`` below the maximum and the minimum time has passed. A
-  unit the household switched off again is left alone.
+* ``cool_manage_power`` (off by default) lets the automation run the
+  units' power by the room temperature: a cooling-mode unit that is off is
+  switched on when its room is above the maximum (and the price is not
+  high); a unit that is on is switched off once the room is ``STOP_BAND_C``
+  below the maximum. The minimum off time also bounds how soon a unit the
+  automation started or stopped is switched the other way. Nothing is
+  started when there is no need to cool.
 
 * Night mode (card F6.2) is separate from the prices: in rooms with
   ``night_enabled`` the fan is set to its quietest speed between
@@ -64,7 +66,7 @@ from .planning import Period, plan_day
 from .prices import HELSINKI, INTERVAL_SECONDS, helsinki_day_bounds
 from .storage import PriceStore
 
-START_BAND_C = 1.0   # a unit started for overheating stops this far below the maximum
+STOP_BAND_C = 0.5    # with power management a unit stops this far below the maximum
 ACTOR = "Suunnitelma"
 SITE = "home"
 DEFAULT_INTERVAL = 60.0
@@ -182,8 +184,9 @@ class CoolingAutomation:
                 "id INTEGER PRIMARY KEY CHECK (id = 1), on_ INTEGER NOT NULL, "
                 "changed_utc TEXT, actor TEXT)")
             conn.execute(
-                "CREATE TABLE IF NOT EXISTS start_state ("
-                "unit_id TEXT PRIMARY KEY, started_utc TEXT)")
+                "CREATE TABLE IF NOT EXISTS power_state ("
+                "unit_id TEXT PRIMARY KEY, kind TEXT NOT NULL, "
+                "changed_utc TEXT NOT NULL)")
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS night_state ("
                 "unit_id TEXT PRIMARY KEY, saved_fan TEXT)")
@@ -524,31 +527,38 @@ class CoolingAutomation:
             off_since = None
             self._save(unit_id, None, last_target, hold)
 
-        started = self._started(unit_id)
-        if started is not None and (not state["power"]
-                                    or not values["cool_start_when_hot"]):
-            # Switched off by the household, or the setting was turned off:
-            # the unit is no longer ours to stop.
-            self._set_started(unit_id, None)
-            started = None
-        if values["cool_start_when_hot"] and not current.off:
+        manage = values["cool_manage_power"]
+        mark = self._power_mark(unit_id)       # (kind, when_utc) or None
+        if mark is not None and not manage:
+            self._set_power_mark(unit_id, None)
+            mark = None
+        if manage and not current.off and state["room_temp"] is not None:
             room = state["room_temp"]
             limit = float(values["cool_max_c"])
-            if (not state["power"] and off_since is None
-                    and room is not None and room > limit):
-                result = self._command(state, "power", True)
-                if result["status"] == 202:
-                    self._set_started(unit_id, now.isoformat())
-                return [result]
-            if (state["power"] and started is not None and room is not None
-                    and room <= limit - START_BAND_C
-                    and self._off_time_over(started, values, now)):
-                # We started it because the room overheated; stop it again
-                # once the room is clearly below the maximum.
-                result = self._command(state, "power", False)
-                if result["status"] == 202:
-                    self._set_started(unit_id, None)
-                return [result]
+            if state["power"]:
+                if mark is not None and mark[0] == "idle":
+                    # Somebody switched it on again: the idle mark is stale.
+                    self._set_power_mark(unit_id, None)
+                    mark = None
+                ran_long_enough = (mark is None or mark[0] != "started"
+                                   or self._off_time_over(mark[1], values, now))
+                if room <= limit - STOP_BAND_C and ran_long_enough:
+                    result = self._command(state, "power", False)
+                    if result["status"] == 202:
+                        self._set_power_mark(unit_id, "idle", now.isoformat())
+                    return [result]
+            else:
+                if mark is not None and mark[0] == "started":
+                    # Switched off by the household after we started it.
+                    self._set_power_mark(unit_id, None)
+                    mark = None
+                rested = (mark is None or mark[0] != "idle"
+                          or self._off_time_over(mark[1], values, now))
+                if room > limit and off_since is None and rested:
+                    result = self._command(state, "power", True)
+                    if result["status"] == 202:
+                        self._set_power_mark(unit_id, "started", now.isoformat())
+                    return [result]
 
         if current.off and not (hold and state["power"]):
             if state["power"]:
@@ -582,25 +592,26 @@ class CoolingAutomation:
                 self._save(unit_id, None, current.target_c, hold)
         return sent
 
-    def _started(self, unit_id: str) -> str | None:
+    def _power_mark(self, unit_id: str) -> tuple[str, str] | None:
         conn = self._connect()
         try:
-            row = conn.execute("SELECT started_utc FROM start_state "
+            row = conn.execute("SELECT kind, changed_utc FROM power_state "
                                "WHERE unit_id = ?", (unit_id,)).fetchone()
         finally:
             conn.close()
-        return row[0] if row else None
+        return (row[0], row[1]) if row else None
 
-    def _set_started(self, unit_id: str, when: str | None) -> None:
+    def _set_power_mark(self, unit_id: str, kind: str | None,
+                        when: str | None = None) -> None:
         conn = self._connect()
         try:
-            if when is None:
-                conn.execute("DELETE FROM start_state WHERE unit_id = ?",
+            if kind is None:
+                conn.execute("DELETE FROM power_state WHERE unit_id = ?",
                              (unit_id,))
             else:
-                conn.execute("INSERT OR REPLACE INTO start_state "
-                             "(unit_id, started_utc) VALUES (?, ?)",
-                             (unit_id, when))
+                conn.execute("INSERT OR REPLACE INTO power_state "
+                             "(unit_id, kind, changed_utc) VALUES (?, ?, ?)",
+                             (unit_id, kind, when))
         finally:
             conn.close()
 
