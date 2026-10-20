@@ -33,13 +33,16 @@ class Config:
     credential_file: Path | None = None
     # ((site_id, cottage.SiteConfig), ...): Home Assistant gateways (card H2.3).
     sites: tuple = ()
+    # Pump client (card H1.5): "melcloud" (direct) or "home_assistant"
+    # (through sites.home); switching back is the rollback.
+    pumps: str = "melcloud"
 
     @classmethod
     def load(cls, path):
         raw = json.loads(Path(path).read_text(encoding="utf-8-sig"))
         if not isinstance(raw, dict) or set(raw) - {
                 "data_dir", "backup_dir", "public_origin", "port", "credential_target",
-                "weather", "plan", "credential_file", "sites"}:
+                "weather", "plan", "credential_file", "sites", "pumps"}:
             raise ValueError("Invalid service configuration fields")
         weather = raw.get("weather", {})
         if not isinstance(weather, dict) or set(weather) - {"home", "cottage"}:
@@ -60,7 +63,12 @@ class Config:
                      raw.get("credential_target", DEFAULT_TARGET), sites,
                      raw.get("plan", False),
                      Path(credential_file) if credential_file else None,
-                     parse_sites(raw.get("sites", {})))
+                     parse_sites(raw.get("sites", {})),
+                     raw.get("pumps", "melcloud"))
+        if config.pumps not in ("melcloud", "home_assistant"):
+            raise ValueError("pumps must be melcloud or home_assistant")
+        if config.pumps == "home_assistant" and "home" not in dict(config.sites):
+            raise ValueError("pumps through Home Assistant need sites.home")
         if not config.data_dir.is_absolute() or not config.backup_dir.is_absolute():
             raise ValueError("Service data and backup paths must be absolute")
         if config.data_dir.resolve() == config.backup_dir.resolve():
@@ -98,10 +106,14 @@ def run(config: Config, *, demo=False, stop_event=None, service_factory=None,
         if demo:
             service_factory = make_demo_service
         else:
-            credentials = (read_credentials_file(config.credential_file)
-                           if config.credential_file
-                           else read_credentials(config.credential_target))
             extra = {"sites": dict(config.sites)} if config.sites else {}
+            if config.pumps == "home_assistant":
+                credentials = None
+                extra["pump_site"] = dict(config.sites)["home"]
+            else:
+                credentials = (read_credentials_file(config.credential_file)
+                               if config.credential_file
+                               else read_credentials(config.credential_target))
             service_factory = lambda data: make_live_service(
                 data, credentials=credentials, weather_sites=dict(config.weather),
                 automation_interval=DEFAULT_PLAN_INTERVAL,

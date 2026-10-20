@@ -109,8 +109,10 @@ def _local_command(store: BindingStore, args, print_fn) -> int:
             print_fn(f"{b.device_id}\t{b.entity_id}\t{b.kind}\t{b.room or '-'}\t{b.label}")
         return 0
     if args.command == "bind":
-        if args.site != "cottage":
+        if args.site not in ("cottage", "home"):
             raise ValueError(f"unknown site {args.site!r}")
+        if args.site == "home" and args.kind != "climate":
+            raise ValueError("home bindings are pumps: kind climate, device id = the MELCloud unit id")
         expected = [r for r in ROOMS if args.entity_id == status_entity(r)]
         if expected and args.room != expected[0]:
             raise ValueError(f"{args.entity_id} belongs to room {expected[0]}; add --room {expected[0]}")

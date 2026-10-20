@@ -1501,13 +1501,41 @@ def make_live_service(data_dir, *, credentials=None, weather_sites=None,
                       command_timeout=DEFAULT_COMMAND_TIMEOUT,
                       automation_interval=None,
                       automation_default_on=True,
-                      sites=None) -> PumpService:
+                      sites=None, pump_site=None) -> PumpService:
     """Live service with explicit credentials, or development environment values.
 
     The unattended runner supplies credentials from Windows Credential Manager.
     Values are never printed or logged.
     """
     import os
+
+    cottage_factory = None
+    if sites and "cottage" in sites:
+        from .cottage import make_cottage_site
+        cottage_factory = lambda data: make_cottage_site(data, sites["cottage"])
+    common = dict(
+        poll_interval=poll_interval, stale_after=stale_after,
+        readback_polls=readback_polls, readback_delay=readback_delay,
+        command_timeout=command_timeout,
+        weather_sites=(weather.weather_sites_from_env(os.environ)
+                       if weather_sites is None else weather_sites),
+        forecast_fetcher=weather.fetch_forecast_temperature,
+        automation_interval=automation_interval,
+        automation_default_on=automation_default_on,
+        cottage_factory=cottage_factory,
+    )
+    if pump_site is not None:
+        # Card H1.5: the pumps through the home Home Assistant's climate
+        # entities, bound in sites.db with their MELCloud unit ids.
+        from .credential_file import read_token_file
+        from .ha_gateway import BindingStore, HomeAssistantGateway
+        from .ha_pumps import client_factory as ha_client_factory
+        bindings = BindingStore(Path(data_dir) / "sites.db")
+        token_file = pump_site.token_file
+        gateway = HomeAssistantGateway("home", pump_site.url,
+                                       lambda: read_token_file(token_file), bindings)
+        return PumpService(data_dir, client=None,
+                           client_factory=ha_client_factory(gateway), **common)
 
     username = (credentials.username if credentials is not None else
                 os.environ.get("VILLA_KUPPIS_MELCLOUD_USERNAME"))
@@ -1518,11 +1546,6 @@ def make_live_service(data_dir, *, credentials=None, weather_sites=None,
             "live mode requires the VILLA_KUPPIS_MELCLOUD_USERNAME and "
             "VILLA_KUPPIS_MELCLOUD_PASSWORD environment variables"
         )
-    cottage_factory = None
-    if sites and "cottage" in sites:
-        from .cottage import make_cottage_site
-        cottage_factory = lambda data: make_cottage_site(data, sites["cottage"])
-
     def client_factory():
         client, close_session = _default_client_factory(username, password)
 
@@ -1536,15 +1559,4 @@ def make_live_service(data_dir, *, credentials=None, weather_sites=None,
 
         return client, teardown
 
-    return PumpService(
-        data_dir, client=None, client_factory=client_factory,
-        poll_interval=poll_interval, stale_after=stale_after,
-        readback_polls=readback_polls, readback_delay=readback_delay,
-        command_timeout=command_timeout,
-        weather_sites=(weather.weather_sites_from_env(os.environ)
-                       if weather_sites is None else weather_sites),
-        forecast_fetcher=weather.fetch_forecast_temperature,
-        automation_interval=automation_interval,
-        automation_default_on=automation_default_on,
-        cottage_factory=cottage_factory,
-    )
+    return PumpService(data_dir, client=None, client_factory=client_factory, **common)

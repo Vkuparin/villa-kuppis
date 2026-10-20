@@ -76,16 +76,25 @@ def unit_from_state(state: dict):
 class HAPumpClient:
     """The part of the MELCloud Home client API that PumpGateway calls."""
 
-    def __init__(self, gateway, *, write_timeout: float = 20.0, poll: float = 0.2):
+    def __init__(self, gateway, *, write_timeout: float = 20.0, poll: float = 0.2,
+                 connect_wait: float = 15.0):
         self._gateway = gateway
         self._write_timeout = write_timeout
         self._poll = poll
+        self._connect_wait = connect_wait
 
     def _climates(self) -> dict:
         return {d: s for d, s in self._gateway.snapshot().items() if s.get("kind") == "climate"}
 
     async def get_context(self):
+        # Right after start the first read would otherwise fail and wait a
+        # whole (backed-off) poll interval.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._connect_wait
         health = self._gateway.health()
+        while health["state"] in ("stopped", "connecting") and loop.time() < deadline:
+            await asyncio.sleep(self._poll)
+            health = self._gateway.health()
         if health["state"] not in CONNECTED:
             raise ConnectionError(f"Home Assistant {health['state']}: {health.get('error') or ''}".rstrip(": "))
         units = [unit_from_state(s) for s in self._climates().values()

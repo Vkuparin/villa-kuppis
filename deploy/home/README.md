@@ -104,6 +104,24 @@ The Mökki section of the web app and `/api/cottage` show each reading as ok,
 stale, unavailable or missing; history and mode changes are recorded in
 `pumps.db`.
 
+## Pumps through Home Assistant (H1.5)
+
+Off by default: the pumps use the direct MELCloud Home client. After the parity test (H1.3), add the home Home Assistant to `sites` and switch:
+
+```json
+"sites": {"home": {"url": "ws://127.0.0.1:8123/api/websocket", "token_file": "/run/secrets/home_ha_token"}},
+"pumps": "home_assistant"
+```
+
+Bind each pump's climate entity with its existing MELCloud unit id as the device id, so history, settings and plans carry over (the unit ids are in the app's `/api/view`; `discover --site home` lists the entities):
+
+```bash
+docker compose -f deploy/home/compose.yaml run --rm --entrypoint python villa-kuppis \
+  -m villa_kuppis.sites --config /config/villa-kuppis.json bind home UNIT_ID climate.olohuone climate
+```
+
+The MELCloud credential is not read in this mode. Rollback: set `"pumps": "melcloud"` and restart `villa-kuppis`. Only one automation writer at a time: turn off any Home Assistant automations for the pumps.
+
 ## Start and publish
 
 ```

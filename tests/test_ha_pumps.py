@@ -129,3 +129,88 @@ class UnitShapeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LiveSwitchTests(unittest.TestCase):
+    """The `pumps` configuration switch (card H1.5)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write_config(self, **extra):
+        import json
+        token = self.root / "home-token"
+        token.write_text("t0k3n")
+        token.chmod(0o600)
+        values = {"data_dir": str(self.root / "data"), "backup_dir": str(self.root / "backups"),
+                  "sites": {"home": {"url": "ws://127.0.0.1:8123/api/websocket",
+                                     "token_file": str(token)}}}
+        values.update(extra)
+        path = self.root / "service.json"
+        path.write_text(json.dumps(values))
+        return path
+
+    def test_config_validates_the_switch(self):
+        from villa_kuppis.runtime import Config
+        self.assertEqual(Config.load(self.write_config()).pumps, "melcloud")
+        self.assertEqual(Config.load(self.write_config(pumps="home_assistant")).pumps,
+                         "home_assistant")
+        with self.assertRaises(ValueError):
+            Config.load(self.write_config(pumps="mqtt"))
+        with self.assertRaises(ValueError):
+            Config.load(self.write_config(pumps="home_assistant", sites={}))
+
+    def test_home_assistant_pumps_need_no_melcloud_credentials(self):
+        from unittest import mock
+        from villa_kuppis.runtime import Config, run
+        config = Config.load(self.write_config(pumps="home_assistant"))
+        stop = threading.Event()
+        server = mock.Mock()
+        server.handle_request.side_effect = stop.set
+        with mock.patch("villa_kuppis.runtime.read_credentials") as creds, \
+                mock.patch("villa_kuppis.runtime.make_live_service") as live:
+            run(config, stop_event=stop, server_factory=lambda *a, **k: server,
+                backup_factory=lambda *a: mock.Mock(), price_factory=mock.Mock())
+        creds.assert_not_called()
+        self.assertIsNone(live.call_args.kwargs["credentials"])
+        self.assertEqual(live.call_args.kwargs["pump_site"].url,
+                         "ws://127.0.0.1:8123/api/websocket")
+
+    def test_live_service_runs_the_pumps_through_home_assistant(self):
+        from villa_kuppis.cottage import SiteConfig
+        from villa_kuppis.pump_service import make_live_service
+        loop = asyncio.new_event_loop()
+        thread = threading.Thread(target=loop.run_forever, daemon=True)
+        thread.start()
+        ha = FakeHA(lambda: datetime.now(timezone.utc))
+        ha.token = "t0k3n"
+
+        async def start():
+            await ha.start()
+            ha.set_state("climate.olohuone", "cool", pump_attrs(), push=False)
+        asyncio.run_coroutine_threadsafe(start(), loop).result(10)
+        token = self.root / "home-token"
+        token.write_text("t0k3n\n")
+        token.chmod(0o600)
+        data = self.root / "data"
+        data.mkdir()
+        store = BindingStore(data / "sites.db")
+        store.bind("home", UNIT, "climate.olohuone", "climate")
+        store.close()
+        service = make_live_service(data, weather_sites={},
+                                    pump_site=SiteConfig(ha.url, token),
+                                    automation_default_on=False)
+        try:
+            service.start()
+            wait_until(lambda: service.store.unit_state(UNIT) is not None, timeout=10)
+            self.assertEqual(service.store.unit_state(UNIT)["setpoint"], 24.0)
+        finally:
+            service.close()
+            asyncio.run_coroutine_threadsafe(ha.stop(), loop).result(10)
+            loop.call_soon_threadsafe(loop.stop)
+            thread.join(5)
+            loop.close()

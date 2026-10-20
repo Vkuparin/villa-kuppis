@@ -91,7 +91,7 @@ def parse_sites(raw) -> tuple:
 
     Error messages never include the configured values.
     """
-    if not isinstance(raw, dict) or set(raw) - {SITE_ID}:
+    if not isinstance(raw, dict) or set(raw) - {SITE_ID, "home"}:
         raise ValueError("Invalid sites configuration")
     out = []
     for site_id, entry in sorted(raw.items()):
