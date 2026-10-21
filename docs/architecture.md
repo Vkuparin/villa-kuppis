@@ -129,7 +129,7 @@ Plans use Europe/Helsinki local time, including the 92- and 100-period daylight-
 **Before wiping Windows on either machine:** boot a Debian live USB and check that Ethernet, virtualization (`virt-host-validate`), storage and the power-on settings work. Installing Debian erases the previous system.
 
 **Home laptop as a server:**
-- **Network:** wired Ethernet, through a USB-C adapter if the laptop has no RJ45 port: the VM bridge needs it. Until home has Matter devices, libvirt's NAT network is an acceptable fallback (MELCloud Home is a cloud integration).
+- **Network:** wired Ethernet for the VM bridge, through a TP-Link UE306 USB 3.0 Gigabit adapter (AX88179, in Debian's stock kernel; bought 21 October 2026). It shows up as `enx<MAC>`; put that interface in `br0`. Until home has Matter devices, libvirt's NAT network is an acceptable fallback (MELCloud Home is a cloud integration).
 - **Lid closed:** set `HandleLidSwitch=ignore` (and the docked/external-power variants) in `/etc/systemd/logind.conf`, so closing the lid does not suspend the machine. Disable suspend and hibernate.
 - **Battery:** the battery bridges short power cuts like a small UPS. If the BIOS offers a charge limit or battery-health mode, turn it on, since the laptop stays plugged in all the time. Check now and then that the battery is not swelling.
 - **Kernel:** the Ryzen AI 300 series is recent hardware; if Debian's stock kernel misses the Wi-Fi or graphics driver, use the Debian backports kernel.

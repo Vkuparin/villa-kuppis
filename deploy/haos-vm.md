@@ -25,8 +25,8 @@ photo copies and family shares are in the owner's own server guide.
 - Reserve two addresses in each router: the host and the VM
   (`HOME_HA_IP`, `COTTAGE_HA_IP`). Villa Kuppis uses the VM's address, not a
   `.local` name.
-- Home exception: if the OmniBook has no Ethernet port, use a USB Ethernet
-  adapter. Until home has Matter devices, libvirt's default NAT network also
+- Home: the OmniBook uses a TP-Link UE306 USB Ethernet adapter (`enx<MAC>`)
+  as the bridge port. Until home has Matter devices, libvirt's default NAT network also
   works there: MELCloud Home only needs the internet, and the host reaches the
   VM at its `192.168.122.x` address.
 
