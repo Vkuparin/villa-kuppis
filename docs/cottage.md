@@ -23,7 +23,11 @@ The heaters and sensors arrive early November 2026.
 
 ## Setup when the devices arrive (cards H2.1 and F1.6)
 
-Everything can be set up at home first: set the BE230 to the cottage's Wi-Fi name and password, so the devices reconnect on their own when moved.
+Everything can be set up at home first by bringing the cottage network home: the BE230 with the cottage's Wi-Fi name and password, its WAN port plugged into the home router, and the HP MP9 wired to the BE230. At the cottage only the BE230's uplink changes (to the NE200-Outdoor), so devices and addresses stay as they are.
+
+- Give the BE230 a LAN range that differs from the home router's (for example 192.168.50.0/24) and reserve addresses for `cottage-server` and the Home Assistant VM there; the reservations travel with the router and keep the Tailscale subnet route valid.
+- Keep `br0` on DHCP in Debian, so the host still gets an address on an unexpected network.
+- Bridge setup needs a screen and keyboard on the MP9. Before leaving it at the cottage, pull the power once and check that Debian, the VM and Tailscale come back; after that, SSH over Tailscale is enough.
 
 1. Install Debian 13 on the HP MP9, wire it to the BE230 and set the BIOS to power on after AC loss with virtualization on. Create the Home Assistant OS virtual machine on a wired bridge, add the Matter Server app in it, and route the VM's address to the tailnet from the host ([deploy/haos-vm.md](../deploy/haos-vm.md), [deploy/home/README.md](../deploy/home/README.md#cottage-connection)).
 2. Set up the Google Home Speaker. Commission **one** heater and **one** ALPSTUGA into Google Home over Matter (Matter mode on the heater, not Mill Cloud), then share both to Home Assistant from Google Home (linked Matter apps and services). The Home Assistant Companion app on a phone or tablet can do the commissioning; the Villa Kuppis web app cannot.
