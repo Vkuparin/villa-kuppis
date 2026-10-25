@@ -16,7 +16,7 @@ remains a fallback.
 | Home Home Assistant | Through the Supervisor (`ws://supervisor/core/websocket`), no token to create |
 | Web app | Port 8377 on the VM's host network. Accepted: the Supervisor ingress proxy (sidebar, HA user as the actor), the `tailscale_proxy` address with Tailscale identity headers, and loopback. Everything else gets 403. |
 | Backups | Home Assistant backs the app up cold (stopped for a few seconds), so the databases are consistent |
-| Updates | `scripts/release-ha-app.sh X.Y.Z` tags `ha-app-X.Y.Z`; Home Assistant offers the update and builds that tag |
+| Updates | `scripts/release-ha-app.sh X.Y.Z` points `ha-app/build.yaml` at the current commit and bumps the version; Home Assistant offers the update and builds that commit |
 
 ## Install
 

@@ -1,5 +1,5 @@
 # Villa Kuppis as a Home Assistant app (card H1.4). The Supervisor builds
-# ha-app/Dockerfile, which downloads the tagged release ha-app-<version>
+# ha-app/Dockerfile from the commit named in build.yaml
 # (scripts/release-ha-app.sh). Data lives in /data (db, backup, secrets).
 name: Villa Kuppis
 version: "0.4.0"
