@@ -190,7 +190,7 @@ SCRIPT = r"""
     });
   }
   function load(keepScope) {
-    return fetch("/api/settings", { cache: "no-store" })
+    return fetch("api/settings", { cache: "no-store" })
       .then(function (r) { return r.json(); })
       .then(function (j) {
         data = j;
@@ -206,7 +206,7 @@ SCRIPT = r"""
   }
   function send(body) {
     say("Tallennetaan…");
-    fetch("/api/settings", { method: "POST",
+    fetch("api/settings", { method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body) })
       .then(function (r) { return r.json().then(function (j) { return [r.ok, j]; }); })

@@ -1,0 +1,28 @@
+configuration:
+  pumps:
+    name: Pumps
+    description: melcloud = direct MELCloud Home client; home_assistant = through this Home Assistant's climate entities (after the parity test).
+  melcloud_username:
+    name: MELCloud username
+  melcloud_password:
+    name: MELCloud password
+  automation_default_on:
+    name: Automaatio on at first start
+    description: Only the initial state; the switch in the app header decides after that.
+  weather_home:
+    name: Home weather point
+    description: "lat,lon for FMI observations, e.g. 60.18,25.06"
+  weather_cottage:
+    name: Cottage weather point
+  cottage_url:
+    name: Cottage Home Assistant WebSocket URL
+    description: e.g. wss://cottage-haos.corvus-stairs.ts.net/api/websocket
+  cottage_token:
+    name: Cottage access token
+    description: Long-lived token of the cottage Home Assistant's villa-kuppis user.
+  public_origin:
+    name: Web app address
+    description: e.g. https://home-server.corvus-stairs.ts.net (Tailscale Serve on home-server).
+  tailscale_proxy:
+    name: Tailscale proxy address
+    description: LAN address of home-server, the only machine allowed to forward the web app.

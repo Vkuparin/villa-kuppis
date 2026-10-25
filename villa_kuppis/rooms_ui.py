@@ -98,7 +98,7 @@ SCRIPT = r"""
     });
   }
   function load() {
-    fetch("/api/rooms").then(function (r) { return r.json(); })
+    fetch("api/rooms").then(function (r) { return r.json(); })
       .then(render).catch(function () {});
   }
   load();

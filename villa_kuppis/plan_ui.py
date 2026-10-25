@@ -40,7 +40,7 @@ SCRIPT = r"""
     $away.setAttribute("aria-checked", on ? "true" : "false");
   }
   $away.addEventListener("click", function () {
-    fetch("/api/away", { method: "POST",
+    fetch("api/away", { method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ away: !away }) })
       .then(function (r) { return r.json(); })
@@ -56,7 +56,7 @@ SCRIPT = r"""
   $prices.addEventListener("click", function () {
     $prices.disabled = true;
     $pricesNote.textContent = "Haetaan...";
-    fetch("/api/prices/refresh", { method: "POST" })
+    fetch("api/prices/refresh", { method: "POST" })
       .then(function (r) {
         return r.json().then(function (data) { return { ok: r.ok, data: data }; });
       })
@@ -115,7 +115,7 @@ SCRIPT = r"""
     });
   }
   function load() {
-    fetch("/api/plan").then(function (r) { return r.json(); })
+    fetch("api/plan").then(function (r) { return r.json(); })
       .then(render).catch(function () {});
   }
   load();

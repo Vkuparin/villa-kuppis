@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 from dataclasses import dataclass
 import json
 import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+import sys
 import threading
 
 from .cottage import parse_sites
@@ -36,13 +38,22 @@ class Config:
     # Pump client (card H1.5): "melcloud" (direct) or "home_assistant"
     # (through sites.home); switching back is the rollback.
     pumps: str = "melcloud"
+    # Home Assistant app (card H1.4): serve the ingress proxy too, and accept
+    # Tailscale Serve from these proxy addresses; both listen on all
+    # interfaces inside the app container.
+    ingress: bool = False
+    trusted_proxies: tuple = ()
 
     @classmethod
     def load(cls, path):
-        raw = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+        return cls.load_dict(json.loads(Path(path).read_text(encoding="utf-8-sig")))
+
+    @classmethod
+    def load_dict(cls, raw):
         if not isinstance(raw, dict) or set(raw) - {
                 "data_dir", "backup_dir", "public_origin", "port", "credential_target",
-                "weather", "plan", "credential_file", "sites", "pumps"}:
+                "weather", "plan", "credential_file", "sites", "pumps",
+                "ingress", "trusted_proxies"}:
             raise ValueError("Invalid service configuration fields")
         weather = raw.get("weather", {})
         if not isinstance(weather, dict) or set(weather) - {"home", "cottage"}:
@@ -54,6 +65,17 @@ class Config:
             raise ValueError("Invalid weather coordinates") from None
         if type(raw.get("plan", False)) is not bool:
             raise ValueError("Invalid plan setting")
+        if type(raw.get("ingress", False)) is not bool:
+            raise ValueError("Invalid ingress setting")
+        proxies = raw.get("trusted_proxies", [])
+        try:
+            if not isinstance(proxies, list):
+                raise ValueError
+            proxies = tuple(str(ipaddress.ip_address(p)) for p in proxies)
+        except ValueError:
+            raise ValueError("trusted_proxies must be a list of IP addresses") from None
+        if proxies and not raw.get("public_origin"):
+            raise ValueError("trusted_proxies need public_origin")
         credential_file = raw.get("credential_file")
         if credential_file is not None and (
                 not isinstance(credential_file, str) or not Path(credential_file).is_absolute()):
@@ -64,7 +86,8 @@ class Config:
                      raw.get("plan", False),
                      Path(credential_file) if credential_file else None,
                      parse_sites(raw.get("sites", {})),
-                     raw.get("pumps", "melcloud"))
+                     raw.get("pumps", "melcloud"),
+                    raw.get("ingress", False), proxies)
         if config.pumps not in ("melcloud", "home_assistant"):
             raise ValueError("pumps must be melcloud or home_assistant")
         if config.pumps == "home_assistant" and "home" not in dict(config.sites):
@@ -124,8 +147,14 @@ def run(config: Config, *, demo=False, stop_event=None, service_factory=None,
     service = service_factory(config.data_dir)
     server = backups = None
     try:
-        server = server_factory(service, host="127.0.0.1", port=config.port,
-                                demo=demo, public_origin=config.public_origin)
+        extra_server = {}
+        if config.ingress or config.trusted_proxies:
+            extra_server = {"ingress": config.ingress,
+                            "trusted_proxies": config.trusted_proxies}
+        host = "0.0.0.0" if extra_server else "127.0.0.1"
+        server = server_factory(service, host=host, port=config.port,
+                                demo=demo, public_origin=config.public_origin,
+                                **extra_server)
         server.timeout = 0.5
         service.start()
         backups = backup_factory(config.data_dir, config.backup_dir)
@@ -157,13 +186,18 @@ def main(argv=None):
     parser.add_argument("--config", required=True)
     parser.add_argument("--demo", action="store_true",
                         help="offline devices; use a temporary data/backup config")
+    parser.add_argument("--log-stdout", action="store_true",
+                        help="also log to standard output (Home Assistant app log)")
     args = parser.parse_args(argv)
     try:
         config = Config.load(args.config)
         config.data_dir.mkdir(parents=True, exist_ok=True)
         handler = RotatingFileHandler(config.data_dir / "service.log",
                                       maxBytes=262144, backupCount=3, encoding="utf-8")
-        logging.basicConfig(level=logging.INFO, handlers=[handler],
+        handlers = [handler]
+        if args.log_stdout:
+            handlers.append(logging.StreamHandler(sys.stdout))
+        logging.basicConfig(level=logging.INFO, handlers=handlers,
                             format="%(asctime)s %(levelname)s %(message)s", force=True)
         run(config, demo=args.demo)
     except Exception as error:

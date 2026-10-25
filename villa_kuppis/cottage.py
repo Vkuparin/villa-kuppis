@@ -1028,7 +1028,7 @@ SCRIPT = r"""
     });
     var end = el("button", "", "Lopeta vierailu", "Lopettaa vierailun; huoneet palaavat hintaohjaukseen.");
     end.type = "button";
-    end.addEventListener("click", function () { visitCall("/api/visit/end", {}); });
+    end.addEventListener("click", function () { visitCall("api/visit/end", {}); });
     $vState.appendChild(end);
   }
   function visitCall(url, body) {
@@ -1047,15 +1047,15 @@ SCRIPT = r"""
     if (!arrival) { $vMsg.textContent = "Valitse saapumisaika."; return; }
     var rooms = ["large", "small"].filter(function (r) {
       return document.getElementById("visit-" + r).checked; });
-    visitCall("/api/visit", { arrival: arrival, target: parseFloat(document.getElementById("visit-target").value),
+    visitCall("api/visit", { arrival: arrival, target: parseFloat(document.getElementById("visit-target").value),
       rooms: rooms });
   });
   function loadVisit() {
-    fetch("/api/visit").then(function (r) { return r.json(); })
+    fetch("api/visit").then(function (r) { return r.json(); })
       .then(function (j) { VISIT = j; renderVisit(); }).catch(function () {});
   }
   function load() {
-    fetch("/api/cottage").then(function (r) { return r.json(); })
+    fetch("api/cottage").then(function (r) { return r.json(); })
       .then(function (d) { render(d); if (d.configured) loadVisit(); }).catch(function () {});
   }
   load();

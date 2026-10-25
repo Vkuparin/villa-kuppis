@@ -984,7 +984,7 @@ class IdentityTests(AppTestCase):
         _, _, raw = http("GET", self._url(server, "/"))
         page = raw.decode("utf-8")
         self.assertIn('id="identity"', page)
-        self.assertIn('"/api/identity"', page)
+        self.assertIn('"api/identity"', page)
         # the deprecated client-chosen actor field is gone from the page
         self.assertNotIn('user: ""', page)
 
@@ -1091,7 +1091,7 @@ class PriceRefreshTests(AppTestCase):
         server, _ = self._start_prices(self._transport())
         status, _ctype, raw = http("GET", self._url(server, "/"))
         self.assertIn("Hae hinnat", raw.decode("utf-8"))
-        self.assertIn("/api/prices/refresh", raw.decode("utf-8"))
+        self.assertIn('"api/prices/refresh"', raw.decode("utf-8"))
 
 
 class DemoTests(AppTestCase):

@@ -259,7 +259,7 @@ class ServiceTests(unittest.TestCase):
         with urllib.request.urlopen(server.url, timeout=5) as resp:
             page = resp.read().decode("utf-8")
         self.assertIn("Huoneiden opitut nopeudet", page)
-        self.assertIn('fetch("/api/rooms")', page)
+        self.assertIn('fetch("api/rooms")', page)
 
 
 if __name__ == "__main__":

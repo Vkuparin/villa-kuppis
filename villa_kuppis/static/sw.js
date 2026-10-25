@@ -2,9 +2,12 @@
 // Villa Kuppis service worker: keeps only the app shell for an offline start.
 // Network first. API responses are never cached and non-GET requests (commands)
 // are never touched, queued or replayed, so nothing runs late.
-const CACHE = "vk-shell-v1";
-const SHELL = ["/", "/manifest.webmanifest", "/icon.svg", "/icon-192.png",
-               "/icon-512.png", "/icon-maskable-512.png"];
+// Paths are relative to the worker's folder: "/" behind Tailscale Serve,
+// /api/hassio_ingress/<token>/ inside the Home Assistant sidebar.
+const CACHE = "vk-shell-v2";
+const BASE = new URL("./", self.location.href).pathname;
+const SHELL = ["", "manifest.webmanifest", "icon.svg", "icon-192.png",
+               "icon-512.png", "icon-maskable-512.png"].map((p) => BASE + p);
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -27,7 +30,7 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
-  if (url.pathname.startsWith("/api/")) return;
+  if (url.pathname.startsWith(BASE + "api/")) return;
   if (SHELL.indexOf(url.pathname) < 0) return;
   event.respondWith(
     fetch(request).then((response) => {

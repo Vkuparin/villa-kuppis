@@ -1,0 +1,44 @@
+# Villa Kuppis as a Home Assistant app (card H1.4). The Supervisor builds
+# ha-app/Dockerfile, which downloads the tagged release ha-app-<version>
+# (scripts/release-ha-app.sh). Data lives in /data (db, backup, secrets).
+name: Villa Kuppis
+version: "0.4.0"
+slug: villa_kuppis
+description: Kodin ja mökin lämpöpumput ja lämmitys yhdessä sovelluksessa
+url: https://github.com/Vkuparin/villa-kuppis
+arch:
+  - amd64
+  - aarch64
+init: false
+startup: application
+boot: auto
+# Host network: the web app sees real client addresses, so only the
+# Supervisor's ingress proxy and the configured Tailscale proxy get in.
+host_network: true
+ingress: true
+ingress_port: 8377
+panel_icon: mdi:home-thermometer
+panel_title: Villa Kuppis
+homeassistant_api: true
+# Stop the app while Home Assistant backs it up: the SQLite files are then
+# consistent. The app's own daily copies stay out of HA backups.
+backup: cold
+backup_exclude:
+  - "backup/**"
+map:
+  - addon_config:rw
+watchdog: tcp://[HOST]:[PORT:8377]
+options:
+  pumps: melcloud
+  automation_default_on: false
+schema:
+  pumps: list(melcloud|home_assistant)
+  melcloud_username: str?
+  melcloud_password: password?
+  automation_default_on: bool
+  weather_home: str?
+  weather_cottage: str?
+  cottage_url: str?
+  cottage_token: password?
+  public_origin: url?
+  tailscale_proxy: str?

@@ -240,7 +240,7 @@ class PageTests(unittest.TestCase):
     def test_page_has_the_visit_card_in_finnish(self):
         page = render_page(demo=True)
         for text in ("Aloita vierailu", "Lopeta vierailu", "Lämmitys alkaa", "Lämmitys alkoi",
-                     "Saapuminen", "Tavoite saavutettu", "12 tuntia", "/api/visit",
+                     "Saapuminen", "Tavoite saavutettu", "12 tuntia", "\"api/visit\"",
                      "Suunniteltu tavoite", "Mökki kuitannut"):
             self.assertIn(text, page)
 

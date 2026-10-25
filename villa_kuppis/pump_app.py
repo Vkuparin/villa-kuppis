@@ -73,6 +73,10 @@ from .settings_ui import SECTION_HTML as _SETTINGS_HTML
 from .settings_ui import STYLE as _SETTINGS_STYLE
 
 DEFAULT_HOST = "127.0.0.1"
+# Home Assistant app (Supervisor) mode: the ingress proxy always connects
+# from this address and adds the Home Assistant user as X-Remote-User-*.
+INGRESS_PROXY = "172.30.32.2"
+LOOPBACK_PEERS = ("127.0.0.1", "::1")
 # The actor used for every request that arrives without a trusted remote
 # identity (i.e. directly on the loopback interface).
 DEFAULT_LOCAL_ACTOR = "Paikallinen käyttäjä"
@@ -216,13 +220,13 @@ _PAGE = """<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pumput</title>
-<link rel="manifest" href="/manifest.webmanifest">
+<link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#0b5fff">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Kuppis">
-<link rel="icon" href="/icon.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
 <script>
 (function () {
   var t = null, a = null;
@@ -1039,7 +1043,7 @@ async function loadHistory() {
   histAbort = new AbortController();
   $histStatus.textContent = "Haetaan\u2026";
   try {
-    const url = "/api/history?unit=" + encodeURIComponent(unit) +
+    const url = "api/history?unit=" + encodeURIComponent(unit) +
       "&range=" + encodeURIComponent(range) +
       "&site=" + encodeURIComponent(site) +
       (histEnd === null ? "" : "&end=" + encodeURIComponent(new Date(histEnd).toISOString()));
@@ -1087,8 +1091,8 @@ function populateUnits(units) {
 async function refresh() {
   try {
     const [view, events] = await Promise.all([
-      fetch("/api/view").then((r) => { if (!r.ok) throw new Error("http " + r.status); return r.json(); }),
-      fetch("/api/events").then((r) => { if (!r.ok) throw new Error("http " + r.status); return r.json(); })
+      fetch("api/view").then((r) => { if (!r.ok) throw new Error("http " + r.status); return r.json(); }),
+      fetch("api/events").then((r) => { if (!r.ok) throw new Error("http " + r.status); return r.json(); })
     ]);
     renderView(view);
     renderEvents(events);
@@ -1099,7 +1103,7 @@ async function refresh() {
 
 async function loadIdentity() {
   try {
-    const id = await fetch("/api/identity").then((r) => {
+    const id = await fetch("api/identity").then((r) => {
       if (!r.ok) throw new Error("http " + r.status);
       return r.json();
     });
@@ -1119,7 +1123,7 @@ async function sendCommand(unitId, action, value) {
   if (sending) return;
   sending = true;
   try {
-    const res = await fetch("/api/command", {
+    const res = await fetch("api/command", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ unit: unitId, action: action, value: value })
@@ -1193,14 +1197,14 @@ function showAutomation(state) {
   $auto.setAttribute("aria-checked", state.on ? "true" : "false");
 }
 async function loadAutomation() {
-  try { showAutomation(await fetch("/api/automation").then((r) => r.json())); }
+  try { showAutomation(await fetch("api/automation").then((r) => r.json())); }
   catch (err) { /* the status badge already shows lost connection */ }
 }
 $auto.addEventListener("click", async () => {
   const on = $auto.getAttribute("aria-checked") !== "true";
   $auto.disabled = true;
   try {
-    const r = await fetch("/api/automation", { method: "POST",
+    const r = await fetch("api/automation", { method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ on: on }) });
     if (r.ok) showAutomation(await r.json());
@@ -1240,7 +1244,7 @@ setInterval(loadIdentity, 60000);
 if ("serviceWorker" in navigator) {
   // Offline start only; the worker never caches /api/ or touches commands.
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
+    navigator.serviceWorker.register("sw.js", { scope: "./" }).catch(() => {});
   });
 }
 </script>
@@ -1373,7 +1377,7 @@ var vkHealth = (function () {
     });
   }
   function loadSites() {
-    Promise.all([getJson("/api/sites"), getJson("/api/cottage")]).then(function (res) {
+    Promise.all([getJson("api/sites"), getJson("api/cottage")]).then(function (res) {
       S.sites = res[0]; S.cottage = res[1]; S.sitesAt = Date.now(); S.sitesFailed = false;
       render();
     }).catch(function () { S.sitesFailed = true; render(); });
@@ -1460,13 +1464,22 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
         before proxying to this loopback server.
         """
         port = self.app.server_port
+        peer = self.client_address[0]
+        if peer not in LOOPBACK_PEERS:
+            if self.app.ingress and peer == self.app.ingress_proxy:
+                return self._ingress_identity()
+            if peer not in self.app.trusted_proxies:
+                self._json(403, {"error": "forbidden",
+                                 "detail": "unknown client address"})
+                return None
         host_values = self.headers.get_all("Host")
         if not host_values or len(host_values) != 1:
             self._json(403, {"error": "forbidden",
                              "detail": "exactly one Host header is required"})
             return None
         host = host_values[0].strip().lower()
-        if host in (f"127.0.0.1:{port}", f"localhost:{port}"):
+        if (host in (f"127.0.0.1:{port}", f"localhost:{port}")
+                and peer in LOOPBACK_PEERS):
             # Loopback is the local machine, trusted in every mode:
             # same-origin HTTP, Tailscale identity headers ignored.
             origins = self.headers.get_all("Origin")
@@ -1551,6 +1564,41 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             actor = login
         return {"actor": actor, "display_name": display,
                 "source": "tailscale", "login": login}
+
+    def _ingress_identity(self) -> dict | None:
+        """Identity of a request through the Home Assistant ingress proxy.
+
+        Home Assistant has already authenticated the user; the Supervisor
+        drops client-supplied X-Remote-User-* headers and sets them from
+        the session. The Origin, when present, must be the Home Assistant
+        page itself (the proxy passes Host and Origin through unchanged).
+        """
+        def single(name):
+            values = self.headers.get_all(name) or []
+            if len(values) > 1:
+                return False
+            value = values[0].strip() if values else ""
+            if _has_control_chars(value):
+                return False
+            return value
+        user_id, login = single("X-Remote-User-Id"), single("X-Remote-User-Name")
+        display, host = single("X-Remote-User-Display-Name"), single("Host")
+        origin = single("Origin")
+        if not user_id or login is False or display is False or not host:
+            self._json(403, {"error": "forbidden",
+                             "detail": "no Home Assistant user"})
+            return None
+        if origin is False or (origin and urlsplit(origin).netloc.lower()
+                               != host.lower()):
+            self._json(403, {"error": "forbidden",
+                             "detail": "same origin required"})
+            return None
+        login = login or user_id
+        actor = display or login
+        if len(actor) > MAX_ACTOR_LENGTH:
+            actor = login[:MAX_ACTOR_LENGTH]
+        return {"actor": actor, "display_name": display or None,
+                "source": "home_assistant", "login": login}
 
     def do_GET(self) -> None:
         identity = self._identity()
@@ -1777,9 +1825,16 @@ class PumpAppServer(ThreadingHTTPServer):
     def __init__(self, service: PumpService, host: str = DEFAULT_HOST,
                  port: int = 0, demo: bool = False,
                  public_origin: str | None = None,
-                 local_actor: str = DEFAULT_LOCAL_ACTOR):
-        if host not in ("127.0.0.1", "localhost"):
+                 local_actor: str = DEFAULT_LOCAL_ACTOR,
+                 ingress: bool = False, trusted_proxies: tuple = ()):
+        # All interfaces only inside the Home Assistant app container, where
+        # every non-loopback client is refused unless it is the ingress proxy
+        # or a configured Tailscale Serve proxy.
+        if host not in ("127.0.0.1", "localhost") and not (
+                host == "0.0.0.0" and (ingress or trusted_proxies)):
             raise ValueError("the pump app must listen on localhost")
+        if trusted_proxies and public_origin is None:
+            raise ValueError("a trusted proxy needs the public origin")
         if public_origin is not None:
             origin, authority = _validate_public_origin(public_origin)
         else:
@@ -1793,6 +1848,9 @@ class PumpAppServer(ThreadingHTTPServer):
         self.public_origin = origin
         self.public_authority = authority
         self.local_actor = actor
+        self.ingress = ingress
+        self.ingress_proxy = INGRESS_PROXY
+        self.trusted_proxies = tuple(trusted_proxies)
         self.page_html = render_page(demo)
         self.settings = app_settings.SettingsStore(service.store.path)
         super().__init__((host, port), _PumpAppHandler)

@@ -1,0 +1,5 @@
+# Home Assistant app repository: Settings > Apps > App store > ⋮ > Repositories,
+# add https://github.com/Vkuparin/villa-kuppis. The app itself is in ha-app/.
+name: Villa Kuppis
+url: https://github.com/Vkuparin/villa-kuppis
+maintainer: Vkuparin

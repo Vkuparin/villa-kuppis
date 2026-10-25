@@ -1,5 +1,9 @@
 # Home server (Debian host + Docker Compose)
 
+Since 25 October 2026 the chosen home install is the Home Assistant app in
+`home-haos` ([../home-assistant-app.md](../home-assistant-app.md)). This page is
+the fallback: the same service in Docker Compose on the Debian host.
+
 The home server `home-server` runs Debian 13. Villa Kuppis is a Compose service
 on the host; the home Home Assistant is a separate Home Assistant OS virtual
 machine with its own LAN address `HOME_HA_IP` ([deploy/haos-vm.md](../haos-vm.md)).

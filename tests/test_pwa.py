@@ -54,8 +54,8 @@ class PwaFilesTests(AppTestCase):
         self.assertEqual(m["name"], "Villa Kuppis")
         self.assertEqual(m["short_name"], "Kuppis")
         self.assertEqual(m["lang"], "fi")
-        self.assertEqual(m["start_url"], "/")
-        self.assertEqual(m["scope"], "/")
+        self.assertEqual(m["start_url"], "./")
+        self.assertEqual(m["scope"], "./")
         self.assertEqual(m["display"], "standalone")
         self.assertEqual(m["theme_color"], "#0b5fff")
         self.assertTrue(m["background_color"].startswith("#"))
@@ -64,7 +64,7 @@ class PwaFilesTests(AppTestCase):
         self.assertIn(("512x512", "any"), purposes)
         self.assertIn(("512x512", "maskable"), purposes)
         for icon in m["icons"]:
-            status, _, _ = http("GET", self._url(self.server, icon["src"]))
+            status, _, _ = http("GET", self._url(self.server, "/" + icon["src"]))
             self.assertEqual(status, 200, icon["src"])
 
     def test_icons(self):
@@ -88,9 +88,9 @@ class PwaFilesTests(AppTestCase):
 
     def test_service_worker_source_never_touches_api_or_posts(self):
         source = (STATIC / "sw.js").read_text(encoding="utf-8")
-        # "/api/" appears only in the bypass; nothing is cached from it.
-        self.assertEqual(source.count("/api/"), 1)
-        self.assertIn('startsWith("/api/")', source)
+        # "api/" appears only in the bypass; nothing is cached from it.
+        self.assertEqual(source.count('"api/"'), 1)
+        self.assertIn('startsWith(BASE + "api/")', source)
         self.assertIn('request.method !== "GET"', source)
         self.assertNotIn("sync", source.lower())
         self.assertIn("caches.delete", source)
@@ -101,11 +101,11 @@ const fs = require('fs'), vm = require('vm');
 const src = fs.readFileSync(process.argv[1], 'utf8');
 const handlers = {}, store = {}, deleted = [];
 const cacheObj = { addAll: async () => {}, put: async (k, v) => { store[k] = v; } };
-const self_ = { location: { origin: 'http://x' }, addEventListener: (n, f) => { handlers[n] = f; },
+const self_ = { location: { origin: 'http://x', href: 'http://x' + process.argv[2] }, addEventListener: (n, f) => { handlers[n] = f; },
                 skipWaiting: async () => {}, clients: { claim: async () => {} } };
 const ctx = { self: self_, URL, Response: { error: () => 'ERR' },
   caches: { open: async () => cacheObj, match: async k => store[k] ? 'CACHED' : undefined,
-            keys: async () => ['vk-shell-v0', 'vk-shell-v1'], delete: async k => { deleted.push(k); } },
+            keys: async () => ['vk-shell-v1', 'vk-shell-v2'], delete: async k => { deleted.push(k); } },
   fetch: async () => { if (ctx.offline) throw new Error('offline');
     return { ok: true, clone: () => 'COPY' }; }, offline: false };
 vm.runInNewContext(src, ctx);
@@ -132,7 +132,15 @@ function run(method, path) {
   console.log(JSON.stringify(out));
 })();
 """
-        result = subprocess.run(["node", "-e", script, str(STATIC / "sw.js")],
+        for base in ("/", "/api/hassio_ingress/abc/"):
+            with self.subTest(base=base):
+                self._check_worker(script, base)
+
+    def _check_worker(self, script, base):
+        script = script.replace("'http://x' + path", "'http://x' + base + path.slice(1)")
+        script = script.replace("const src", "const base = process.argv[3];\nconst src")
+        result = subprocess.run(["node", "-e", script, str(STATIC / "sw.js"),
+                                 base + "sw.js", base],
                                 text=True, capture_output=True, encoding="utf-8",
                                 timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -141,18 +149,18 @@ function run(method, path) {
         self.assertTrue(out["api"])
         self.assertTrue(out["other"])
         self.assertTrue(out["online"])
-        self.assertEqual(out["cachedShell"], "/")
+        self.assertEqual(out["cachedShell"], base)
         self.assertEqual(out["offlineShell"], "CACHED")
         self.assertEqual(out["offlineIcon"], "ERR")  # never cached while online
-        self.assertEqual(out["deleted"], "vk-shell-v0")
+        self.assertEqual(out["deleted"], "vk-shell-v1")
 
     def test_page_links_manifest_and_registers_worker(self):
         _, _, raw = http("GET", self._url(self.server, "/"))
         page = raw.decode("utf-8")
-        for needle in ('<link rel="manifest" href="/manifest.webmanifest">',
+        for needle in ('<link rel="manifest" href="manifest.webmanifest">',
                        '<meta name="theme-color" content="#0b5fff">',
-                       '<link rel="apple-touch-icon" href="/icon-192.png">',
-                       'navigator.serviceWorker.register("/sw.js"',
+                       '<link rel="apple-touch-icon" href="icon-192.png">',
+                       'navigator.serviceWorker.register("sw.js", { scope: "./" })',
                        'id="health-home"', 'id="health-cottage"',
                        "Ei yhteyttä Villa Kuppisiin – näytetään viimeisin tieto",
                        "Mökki: turvalämpö", "Odottaa vahvistusta"):
