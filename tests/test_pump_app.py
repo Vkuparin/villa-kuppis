@@ -771,7 +771,14 @@ class IdentityTests(AppTestCase):
         status, body = http_json("GET", self._url(server, "/api/identity"))
         self.assertEqual(status, 200)
         self.assertEqual(body, {"actor": DEFAULT_LOCAL_ACTOR,
-                                "display_name": None, "source": "local"})
+                                "display_name": None, "source": "local",
+                                "version": ""})
+
+    def test_identity_reports_app_version_from_environment(self):
+        server, _ = self._start_app(FakeClient(make_unit_payloads()))
+        with mock.patch.dict(os.environ, {"VK_VERSION": "9.9.9"}):
+            _, body = http_json("GET", self._url(server, "/api/identity"))
+        self.assertEqual(body["version"], "9.9.9")
 
     def test_local_mode_ignores_tailscale_identity_headers(self):
         server, _ = self._start_app(FakeClient(make_unit_payloads()))

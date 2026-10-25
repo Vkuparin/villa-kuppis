@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime
@@ -290,6 +291,8 @@ h1 { font-size: 1.35rem; margin: 0; }
 .badge.warn { color: var(--warn); border-color: var(--warn); background: var(--warn-bg); }
 .badge.err  { color: var(--err); border-color: var(--err); background: var(--err-bg); }
 .badge.info { color: var(--info); border-color: var(--info); background: var(--info-bg); }
+.app-version { font-size: .75rem; color: var(--text3); }
+.app-version:empty { display: none; }
 #identity { max-width: 240px; overflow: hidden; text-overflow: ellipsis;
            white-space: nowrap; font-size: .85rem; color: var(--text2);
            background: var(--surface2); border: 1px solid var(--line);
@@ -424,6 +427,7 @@ td.result-observed { color: var(--text2); }
 <body data-demo="0">
 <header class="top">
   <h1>Pumput</h1>
+  <span id="app-version" class="app-version" title="Sovelluksen versio"></span>
   <span id="identity" class="identity" title="Kirjautunut käyttäjä"></span>
   <span id="health" class="health" role="status" aria-label="Kohteiden tila">
     <button type="button" class="badge info" id="health-home" data-site="home">Koti: yhdistetään…</button>
@@ -1127,6 +1131,8 @@ async function loadIdentity() {
       if (!r.ok) throw new Error("http " + r.status);
       return r.json();
     });
+    const ver = document.getElementById("app-version");
+    if (ver && id.version) ver.textContent = "v" + id.version;
     const el = document.getElementById("identity");
     if (!el) return;
     const label = (id.display_name && id.display_name !== id.actor)
@@ -1716,7 +1722,8 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
         elif parts.path == "/api/identity":
             self._json(200, {"actor": identity["actor"],
                              "display_name": identity["display_name"],
-                             "source": identity["source"]})
+                             "source": identity["source"],
+                             "version": os.environ.get("VK_VERSION", "")})
         elif parts.path in ("/api/command", "/api/prices/refresh", "/api/visit/end"):
             self._json(405, {"error": "method_not_allowed",
                              "detail": "use POST for this path"})

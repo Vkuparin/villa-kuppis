@@ -3,7 +3,9 @@
 FROM python:3.13-slim
 
 ARG VK_REF
-ENV TZ=Europe/Helsinki \
+ARG VK_VERSION=
+ENV VK_VERSION=$VK_VERSION \
+    TZ=Europe/Helsinki \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
