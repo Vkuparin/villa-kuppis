@@ -346,8 +346,6 @@ button.switch .track::after { content: ""; position: absolute; top: 3px; left: 3
                               box-shadow: 0 1px 3px rgba(0,0,0,.35); }
 button.switch[aria-checked="true"] .track { background: var(--accent); }
 button.switch[aria-checked="true"] .track::after { transform: translateX(22px); }
-.stepper { display: inline-flex; gap: .4rem; margin-left: auto; }
-.stepper button { min-width: 44px; font-size: 1.15rem; font-weight: 700; }
 .pending { margin-top: .8rem; padding: .55rem .75rem; border: 1px dashed var(--accent);
            border-radius: .5rem; background: var(--info-bg); color: var(--info); }
 .hold { margin-top: .8rem; display: flex; flex-wrap: wrap; align-items: center;
@@ -665,17 +663,9 @@ function cardHtml(unit) {
   rows.push(
     '<div class="row"><span class="label">Tavoitelämpötila</span>' +
     '<span class="value">' + fmtTemp(unit.setpoint) + "</span>" +
-    '<span class="stepper">' +
-    '<button data-action="setpoint" data-unit="' + esc(unit.id) + '" data-delta="' +
-    (-step) + '" aria-label="Laske tavoitelämpötilaa"' +
-    (canStep ? "" : " disabled") + ">&minus;</button>" +
     '<select data-action="setpoint-select" data-unit="' + esc(unit.id) +
     '" aria-label="Valitse tavoitelämpötila"' + (canStep ? "" : " disabled") + ">" +
-    setpointOptions(unit, step) + "</select>" +
-    '<button data-action="setpoint" data-unit="' + esc(unit.id) + '" data-delta="' +
-    step + '" aria-label="Nosta tavoitelämpötilaa"' +
-    (canStep ? "" : " disabled") + ">+</button>" +
-    "</span></div>"
+    setpointOptions(unit, step) + "</select></div>"
   );
   rows.push(
     '<div class="row"><span class="label">Toimintatila</span>' +
@@ -1187,13 +1177,7 @@ function onControl(e) {
     el.blur();
     return;
   }
-  if (action === "setpoint") {
-    const view = lastView;
-    const unit = view && view.units.find((u) => u.id === unitId);
-    if (!unit || unit.setpoint === null) return;
-    const next = Math.round((unit.setpoint + Number(el.dataset.delta)) * 2) / 2;
-    sendCommand(unitId, "setpoint", next);
-  } else if (action === "power") {
+  if (action === "power") {
     sendCommand(unitId, "power", el.dataset.value === "true");
   } else if (action === "resume") {
     resumeAutomation(unitId);

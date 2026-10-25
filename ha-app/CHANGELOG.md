@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.9
+
+- Tavoitelämpötilan − ja + -painikkeet poistettu, lämpötila valitaan listasta.
+
 ## 0.4.8
 
 - Sovelluksen versio näkyy yläpalkissa.
