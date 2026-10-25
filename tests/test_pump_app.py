@@ -295,6 +295,31 @@ assert.equal($cards.innerHTML, '<p>3</p>');
                                 encoding="utf-8", timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_click_on_mode_select_only_opens_list(self):
+        from villa_kuppis.pump_app import render_page
+        page = render_page(True)
+        source = page[page.index("function onControl("):page.index("let lastView = null;")]
+        script = """
+import assert from 'node:assert/strict';
+const sent = [];
+const sendCommand = (...a) => sent.push(a);
+let blurred = 0;
+const el = {tagName: 'SELECT', value: 'cool', dataset: {action: 'mode', unit: 'u1'},
+  blur() { blurred++; }};
+const ev = type => ({type, target: {closest: () => el}});
+""" + source + """
+onControl(ev('click'));
+assert.deepEqual(sent, []);
+assert.equal(blurred, 0);
+onControl(ev('change'));
+assert.deepEqual(sent, [['u1', 'mode', 'cool']]);
+assert.equal(blurred, 1);
+"""
+        result = subprocess.run(["node", "--input-type=module", "-"],
+                                input=script, text=True, capture_output=True,
+                                encoding="utf-8", timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_serves_finnish_page(self):
         server, _ = self._start_app(FakeClient(make_unit_payloads()))
         status, ctype, raw = http("GET", self._url(server, "/"))

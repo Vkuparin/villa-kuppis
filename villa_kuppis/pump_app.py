@@ -1175,8 +1175,8 @@ function onControl(e) {
     return;
   }
   if (el.tagName === "SELECT") {
-    if (el.value === el.dataset.lastValue) return;
-    el.dataset.lastValue = el.value;
+    // A click only opens the list; act on the chosen value (change) alone.
+    if (e.type !== "change") return;
     sendCommand(unitId, action, el.value);
     el.blur();
     return;
