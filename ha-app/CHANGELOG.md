@@ -1,5 +1,10 @@
 # Muutokset
 
+## 0.4.12
+
+- Varmuuskopio kattaa nyt myös laiteliitokset ja mökkikäynnit.
+- Vanhat varmuuskopiot poistetaan: tallessa pysyvät 14 viimeistä päivää ja kuukauden ensimmäinen puolen vuoden ajalta.
+
 ## 0.4.11
 
 - Mökin laitteet sidotaan automaattisesti mökin Home Assistantin ohjaimen tiedoista, joten oikeisiin laitteisiin vaihtaminen ei vaadi muutoksia Villa Kuppisiin.

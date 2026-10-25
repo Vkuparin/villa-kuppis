@@ -1,7 +1,8 @@
 """Daily SQLite backups for the pump service data (card F3.2).
 
-``backup_once`` snapshots ``pumps.db`` (required) and ``prices.db``
-(optional) with ``sqlite3.Connection.backup``: a separate read-only
+``backup_once`` snapshots ``pumps.db`` (required) and ``prices.db``,
+``sites.db`` and ``visits.db`` (each optional) with
+``sqlite3.Connection.backup``: a separate read-only
 source connection opened through a URI (``Path.as_uri``, so paths with
 spaces or non-ASCII names work), a consistent snapshot into a temp file
 in the destination day directory, then an atomic replace onto the final
@@ -24,7 +25,12 @@ restart skip the current day instead of overwriting the finished
 backup. Failures leave the temp partials cleaned up, keep whatever
 earlier backups (other days, and already-finished files of this day)
 exist, and write no marker, so the next attempt retries the whole day.
-There is no retention: old days are never deleted.
+
+Retention (``prune_backups``): after each day's backup is written, the
+loop keeps the newest ``KEEP_DAYS`` complete day folders plus the oldest
+complete day folder of each of the newest ``KEEP_MONTHS`` months, and
+deletes every other day folder. Anything not named ``YYYY-MM-DD`` is left
+alone.
 
 ``BackupLoop`` runs the backup on a daemon thread: an immediate first
 run, then one run per Helsinki date. Failures are retried every
@@ -63,6 +69,9 @@ HELSENKI_TZ = ZoneInfo("Europe/Helsinki")
 
 PUMPS_DB = "pumps.db"
 PRICES_DB = "prices.db"
+# Copied when present: prices, the Home Assistant bindings of the home pumps
+# and the cottage devices, and cottage visits.
+OPTIONAL_DBS = (PRICES_DB, "sites.db", "visits.db")
 COMPLETE_MARKER = ".complete"
 TMP_SUFFIX = ".tmp"
 
@@ -75,6 +84,10 @@ MAX_WAIT_CHUNK = 60.0
 # progress step of sqlite3.Connection.backup, so it also bounds the
 # busy/locked retry loop.
 DEFAULT_COPY_TIMEOUT = 30.0
+
+# Retention: the newest daily copies, plus one copy per month.
+KEEP_DAYS = 14
+KEEP_MONTHS = 6
 
 
 def utc_now() -> datetime:
@@ -221,11 +234,9 @@ def backup_once(data_dir: str | Path, backup_dir: str | Path, *,
         return BackupResult(day=day, backed_up=False, skipped=True,
                             files=(), error=None)
 
-    targets = [pumps]
-    prices = data / PRICES_DB
-    if prices.is_file():
-        # Optional: a missing prices.db is skipped, not an error.
-        targets.append(prices)
+    # Optional databases: a missing one is skipped, not an error.
+    targets = [pumps] + [data / name for name in OPTIONAL_DBS
+                         if (data / name).is_file()]
 
     written_names: list[str] = []
     try:
@@ -258,6 +269,45 @@ def backup_once(data_dir: str | Path, backup_dir: str | Path, *,
 
     return BackupResult(day=day, backed_up=True, skipped=False,
                         files=tuple(written_names), error=None)
+
+
+def prune_backups(backup_dir: str | Path, *, today: date | None = None,
+                  keep_days: int = KEEP_DAYS,
+                  keep_months: int = KEEP_MONTHS) -> list[str]:
+    """Delete the day folders outside the retention; returns their names.
+
+    Keeps the newest ``keep_days`` complete day folders and the oldest
+    complete folder of each of the newest ``keep_months`` months. Folders
+    dated ``today`` or later are never deleted, and only folders named
+    ``YYYY-MM-DD`` are considered.
+    """
+    root = Path(backup_dir)
+    if not root.is_dir():
+        return []
+    days, complete = [], []
+    for path in root.iterdir():
+        try:
+            day = date.fromisoformat(path.name)
+        except ValueError:
+            continue
+        if path.name != day.isoformat() or not path.is_dir():
+            continue
+        days.append(day)
+        if (path / COMPLETE_MARKER).is_file():
+            complete.append(day)
+    complete.sort(reverse=True)
+    keep = set(complete[:keep_days])
+    monthly: dict[tuple[int, int], date] = {}
+    for day in complete:        # newest first: the last one seen is the oldest
+        monthly[(day.year, day.month)] = day
+    keep.update(monthly[month] for month in sorted(monthly, reverse=True)[:keep_months])
+    removed = []
+    for day in sorted(days):
+        if day in keep or (today is not None and day >= today):
+            continue
+        shutil.rmtree(root / day.isoformat())
+        removed.append(day.isoformat())
+    return removed
 
 
 class BackupLoop:
@@ -348,10 +398,20 @@ class BackupLoop:
                 log.warning("Backup %s failed: %s", result.day, result.error)
             elif result.backed_up:
                 log.info("Backup %s written: %s", result.day, ", ".join(result.files))
+                self._prune(result.day)
             if result.ok:
                 self._wait_until_next_day(result.day)
             else:
                 self._sleep(self._retry_interval)
+
+    def _prune(self, day: str) -> None:
+        try:
+            removed = prune_backups(self._backup_dir, today=date.fromisoformat(day))
+        except (OSError, ValueError) as err:
+            log.warning("Removing old backups failed: %s", err)
+            return
+        if removed:
+            log.info("Removed old backups: %s", ", ".join(removed))
 
     def _wait(self, seconds: float) -> None:
         if self._custom_wait is not None:

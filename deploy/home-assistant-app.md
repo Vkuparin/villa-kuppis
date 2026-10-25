@@ -12,7 +12,7 @@ remains a fallback.
 | --- | --- |
 | App files | [ha-app/](../ha-app/) (`config.yaml`, `Dockerfile`), repository [repository.yaml](../repository.yaml) |
 | Entry point | `python -m villa_kuppis.ha_app`: options to config, one-time import, then the normal runtime |
-| Data | `/data/db` (SQLite, service.log), `/data/backup` (daily copies, left out of HA backups), `/data/secrets` (0600) |
+| Data | `/data/db` (SQLite, service.log), `/data/backup` (daily copies of every database: the newest 14 days plus one per month for 6 months; left out of HA backups), `/data/secrets` (0600) |
 | Home Home Assistant | Through the Supervisor (`ws://supervisor/core/websocket`), no token to create |
 | Web app | Port 8377 on the VM's host network. Accepted: the Supervisor ingress proxy (sidebar, HA user as the actor), the `tailscale_proxy` address with Tailscale identity headers, and loopback. Everything else gets 403. |
 | Backups | Home Assistant backs the app up cold (stopped for a few seconds), so the databases are consistent |

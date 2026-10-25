@@ -22,7 +22,7 @@ from unittest.mock import patch
 
 from villa_kuppis.backup import (COMPLETE_MARKER, HELSENKI_TZ, BackupLoop,
                                  BackupResult, backup_once, helsinki_day,
-                                 restore_backup, verify_backup)
+                                 prune_backups, restore_backup, verify_backup)
 from villa_kuppis.backup import main as backup_main
 
 START = datetime(2026, 10, 19, 20, 30, 0, tzinfo=timezone.utc)
@@ -118,6 +118,16 @@ class TestBackupOnce(TempDirTest):
         self.assertEqual(result.files, ("pumps.db",))
         self.assertEqual(self.day_files("2026-10-19"),
                          [COMPLETE_MARKER, "pumps.db"])
+
+    def test_copies_the_binding_and_visit_databases_too(self):
+        for name in ("pumps.db", "prices.db", "sites.db", "visits.db"):
+            make_db(self.data_dir / name, 5)
+        (self.data_dir / "other.db").write_bytes(b"not ours")
+        result = backup_once(self.data_dir, self.backup_dir, now=FakeClock())
+        self.assertTrue(result.backed_up)
+        self.assertEqual(result.files,
+                         ("pumps.db", "prices.db", "sites.db", "visits.db"))
+        self.assertEqual(row_count(self.backup_dir / "2026-10-19" / "sites.db"), 5)
 
     def test_missing_pumps_db_is_a_reported_error(self):
         result = backup_once(self.data_dir, self.backup_dir,
@@ -223,6 +233,65 @@ class TestBackupOnce(TempDirTest):
             self.assertEqual(row_count(source), 301)
         finally:
             writer.close()
+
+
+class TestPrune(TempDirTest):
+    def make_days(self, first: str, count: int, complete: bool = True) -> None:
+        day = datetime.fromisoformat(first).date()
+        for _ in range(count):
+            folder = self.backup_dir / day.isoformat()
+            folder.mkdir(parents=True)
+            if complete:
+                (folder / COMPLETE_MARKER).write_text("done")
+            day += timedelta(days=1)
+
+    def kept(self) -> list:
+        return sorted(p.name for p in self.backup_dir.iterdir())
+
+    def test_keeps_recent_days_and_the_first_of_each_month(self):
+        self.make_days("2026-01-10", 300)      # through 2026-11-05
+        (self.backup_dir / "notes.txt").write_text("not a day")
+        (self.backup_dir / "2026-13-01").mkdir()
+        removed = prune_backups(self.backup_dir,
+                                today=datetime(2026, 11, 5).date())
+        days = [f"2026-10-{d}" for d in range(23, 32)] + [
+            f"2026-11-0{d}" for d in range(1, 6)]
+        monthly = ["2026-06-01", "2026-07-01", "2026-08-01", "2026-09-01",
+                   "2026-10-01"]
+        self.assertEqual(self.kept(), sorted(monthly + days + [
+            "2026-13-01", "notes.txt"]))
+        self.assertEqual(len(removed), 300 - len(days) - len(monthly))
+        self.assertEqual(prune_backups(self.backup_dir), [])
+
+    def test_incomplete_days_are_not_kept_as_copies(self):
+        self.make_days("2026-10-01", 3, complete=False)
+        self.make_days("2026-10-04", 3)
+        removed = prune_backups(self.backup_dir, keep_days=2, keep_months=0)
+        self.assertEqual(removed, ["2026-10-01", "2026-10-02", "2026-10-03",
+                                   "2026-10-04"])
+        self.assertEqual(self.kept(), ["2026-10-05", "2026-10-06"])
+
+    def test_never_removes_today_or_a_missing_folder(self):
+        self.assertEqual(prune_backups(self.backup_dir), [])
+        self.make_days("2026-10-19", 1, complete=False)
+        self.assertEqual(prune_backups(self.backup_dir,
+                                       today=datetime(2026, 10, 19).date()), [])
+
+    def test_the_loop_prunes_after_a_backup(self):
+        make_db(self.data_dir / "pumps.db", 5)
+        self.make_days("2026-09-01", 40)       # through 2026-10-10
+        loop = BackupLoop(self.data_dir, self.backup_dir, now=FakeClock(),
+                          wait=lambda seconds: time.sleep(0.001))
+        with self.assertLogs("villa_kuppis.backup") as logs:
+            loop.start()
+            try:
+                wait_for(lambda: not (self.backup_dir / "2026-09-02").exists())
+            finally:
+                loop.close()
+        self.assertIn("Removed old backups: 2026-09-02", logs.output[-1])
+        self.assertEqual(self.kept()[0], "2026-09-01")
+        self.assertEqual(self.kept()[-1], "2026-10-19")
+        self.assertEqual(len(self.kept()), 1 + 13 + 1)
 
 
 class TestBackupLoopFake(TempDirTest):

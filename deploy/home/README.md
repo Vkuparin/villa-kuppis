@@ -190,7 +190,9 @@ System > Updates) after a backup; it does not touch Villa Kuppis.
 
 ## Check and restore the database
 
-The service writes one backup folder per day, `<backup folder>/YYYY-MM-DD/`.
+The service writes one backup folder per day, `<backup folder>/YYYY-MM-DD/`,
+with a copy of every database. It keeps the newest 14 days plus the first
+day of each month for 6 months and deletes older folders.
 Check the newest one (no service stop needed):
 
 ```
