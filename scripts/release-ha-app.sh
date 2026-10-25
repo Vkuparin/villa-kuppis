@@ -17,6 +17,7 @@ args:
   VK_REF: $ref
 EOF
 sed -i "s/^version: .*/version: \"$version\"/" ha-app/config.yaml
-git commit -q -m "Release the Home Assistant app $version" ha-app/build.yaml ha-app/config.yaml
+git add ha-app/build.yaml ha-app/config.yaml
+git commit -q -m "Release the Home Assistant app $version"
 git push -q origin HEAD:main
 echo "Released $version (source $ref); update the app in Home Assistant (Settings > Apps)."
