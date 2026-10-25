@@ -52,7 +52,8 @@ Only one Villa Kuppis may run at a time: both would control the pumps.
 3. Start the app. Its log shows `Imported pumps.db, prices.db` and
    `Service started`; the import runs only while the app has no databases and
    renames the copies to `*.imported`.
-4. On home-server: check that `tailscale serve status` has nothing on 443, then
+4. On home-server: check that `tailscale serve status` has nothing on 443 (Cockpit was
+   moved to `--https=9090` on 2026-10-25), then
    `sudo tailscale serve --bg --https=443 http://192.168.86.37:8377`.
 5. Check from the phone: `https://home-server.corvus-stairs.ts.net` opens
    without a Home Assistant login, the three pumps show live readings, the
