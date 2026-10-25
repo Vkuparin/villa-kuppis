@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.11
+
+- Mökin laitteet sidotaan automaattisesti mökin Home Assistantin ohjaimen tiedoista, joten oikeisiin laitteisiin vaihtaminen ei vaadi muutoksia Villa Kuppisiin.
+
 ## 0.4.10
 
 - Erillinen tavoitelämpötila-arvo poistettu, koska lista näyttää sen.
