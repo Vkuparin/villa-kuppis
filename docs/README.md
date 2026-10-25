@@ -1,6 +1,6 @@
 # Villa Kuppis design documents
 
-Implementation began on 19 October 2026. The home pump service runs unattended on the owner's Windows PC and passed its live checks. On 20 October 2026 the design moved to one Home Assistant per site on two always-on mini-PCs; that route has not been tested yet.
+Implementation began on 19 October 2026. On 20 October 2026 the design moved to one Home Assistant per site on two always-on mini-PCs. Since 25 October 2026 Villa Kuppis runs as a Home Assistant app in the home VM with the pumps through Home Assistant; the first Windows install is shut down and archived.
 
 | Document | Purpose |
 | --- | --- |

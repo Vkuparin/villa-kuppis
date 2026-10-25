@@ -3,9 +3,18 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from .windows_credentials import CredentialError, Credentials
+
+@dataclass(frozen=True)
+class Credentials:
+    username: str = field(repr=False)
+    password: str = field(repr=False)
+
+
+class CredentialError(RuntimeError):
+    pass
 
 
 def read_credentials_file(path) -> Credentials:

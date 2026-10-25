@@ -211,7 +211,7 @@ class LiveSwitchTests(unittest.TestCase):
         stop = threading.Event()
         server = mock.Mock()
         server.handle_request.side_effect = stop.set
-        with mock.patch("villa_kuppis.runtime.read_credentials") as creds, \
+        with mock.patch("villa_kuppis.runtime.read_credentials_file") as creds, \
                 mock.patch("villa_kuppis.runtime.make_live_service") as live:
             run(config, stop_event=stop, server_factory=lambda *a, **k: server,
                 backup_factory=lambda *a: mock.Mock(), price_factory=mock.Mock())

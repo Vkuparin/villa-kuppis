@@ -4,7 +4,7 @@ Project: Villa Kuppis.
 
 Purpose: A personal Finnish-language home automation app that brings the home and cottage devices into one app.
 
-Stack: Python 3.13 and SQLite for the PC service, a Finnish web app served by the standard-library HTTP server, aiomelcloudhome 0.3.1 for pumps, and tzdata for Europe/Helsinki on Windows. FMI observations use the standard-library HTTP/XML client. Planned (decided 2026-10-20): one Home Assistant per site as device gateway, on two always-on Debian 13 hosts, each with a Home Assistant OS KVM virtual machine on a wired bridge and a USB backup drive at /srv/archive: home HP OmniBook laptop with the home HA VM (MELCloud Home) running Villa Kuppis as a Home Assistant app (decided 2026-10-25, deploy/home-assistant-app.md; Docker Compose on the host stays a fallback), cottage HP MP9 G4 mini-PC with the cottage HA VM and its Matter Server; Tailscale between browsers and the hosts, with a subnet route to the cottage HA VM; browser/PWA only, no Android app. Update this line when the runtime, framework or key libraries change.
+Stack: Python 3.13 and SQLite, a Finnish web app served by the standard-library HTTP server, aiohttp for the Home Assistant WebSocket API, aiomelcloudhome 0.3.1 as the direct pump fallback, and tzdata for Europe/Helsinki. FMI observations use the standard-library HTTP/XML client. Runtime (since 2026-10-25): one Home Assistant per site as device gateway, on two always-on Debian 13 hosts, each with a Home Assistant OS KVM virtual machine on a wired bridge and a USB backup drive at /srv/archive: home HP OmniBook laptop with the home HA VM (MELCloud Home integration) running Villa Kuppis as a Home Assistant app (deploy/home-assistant-app.md; Docker Compose on the host stays a fallback), cottage HP MP9 G4 mini-PC with the cottage HA VM, its Matter Server and the villa_kuppis_cottage integration; Tailscale between browsers and the hosts and to the cottage HA VM; browser/PWA only, no Android app. Update this line when the runtime, framework or key libraries change.
 
 Codex, Hermes and Claude Code (through `CLAUDE.md`) all read this file. This is a hobby project: move quickly, keep process small, and ask the owner only about real product choices.
 
@@ -35,7 +35,7 @@ Codex, Hermes and Claude Code (through `CLAUDE.md`) all read this file. This is 
 | Pump app tests (mock devices and localhost HTTP) | .venv\Scripts\python -m unittest discover -s tests -p "test_pump_app.py" -v |
 | Cottage readings, history and events tests (fake Home Assistant on localhost, injected clocks) | .venv\Scripts\python -m unittest discover -s tests -p "test_cottage_view.py" -v |
 | Bind cottage devices (needs `sites` in the config; discover reads the cottage Home Assistant, owner approval for live) | .venv\Scripts\python -m villa_kuppis.sites --config CONFIG_FILE discover; .venv\Scripts\python -m villa_kuppis.sites --config CONFIG_FILE bind cottage DEVICE_ID ENTITY_ID KIND --room large; .venv\Scripts\python -m villa_kuppis.sites --config CONFIG_FILE list |
-| Startup, credential and backup tests (mock Windows/network boundaries; temporary data) | .venv\Scripts\python -m unittest discover -s tests -p "test_windows_runtime.py" -v; .venv\Scripts\python -m unittest discover -s tests -p "test_backup.py" -v |
+| Runtime, credential and backup tests (mock network boundaries; temporary data) | .venv\Scripts\python -m unittest discover -s tests -p "test_runtime.py" -v; .venv\Scripts\python -m unittest discover -s tests -p "test_backup.py" -v |
 | Credential file tests (temporary data) | .venv\Scripts\python -m unittest discover -s tests -p "test_credential_file.py" -v |
 | Home Assistant app tests (ingress and Tailscale proxy identity, options, import; localhost only) | .venv\Scripts\python -m unittest discover -s tests -p "test_ha_app.py" -v |
 | Pump parity check, read-only (inside the app; see deploy/home-assistant-app.md) and its tests | python -m villa_kuppis.pump_parity --config /data/villa-kuppis.json compare [--bind]; .venv\Scripts\python -m unittest discover -s tests -p "test_pump_parity.py" -v |
@@ -43,16 +43,13 @@ Codex, Hermes and Claude Code (through `CLAUDE.md`) all read this file. This is 
 | Home server image, demo only (Linux/Docker; temporary folders, see deploy/home/README.md "Try it offline") | docker compose -f deploy/home/compose.yaml -f deploy/home/compose.demo.yaml config; docker compose -f deploy/home/compose.yaml -f deploy/home/compose.demo.yaml up -d --build |
 | Check or restore a backup day (stop the service first for restore) | .venv\Scripts\python -m villa_kuppis.backup verify BACKUP_DAY_DIR; .venv\Scripts\python -m villa_kuppis.backup restore BACKUP_DAY_DIR DATA_DIR |
 | Update the home server (Debian; touches only villa-kuppis) | scripts/update-home-server.sh |
-| Plan unattended setup (no changes) | .venv\Scripts\python scripts/setup-pump-service.py plan --backup-dir BACKUP_DIR |
-| Configure unattended app (local credential enrollment and Windows task password; owner present) | .venv\Scripts\python scripts/setup-pump-service.py apply --backup-dir BACKUP_DIR |
-| Inspect unattended app (no credential values) | .venv\Scripts\python scripts/setup-pump-service.py inspect |
 | Run configured service (live requires owner go-ahead; demo uses explicit temporary paths) | .venv\Scripts\python -m villa_kuppis.runtime --config CONFIG_FILE [--demo] |
 | Inspect Tailscale connection and publication | tailscale status --json; tailscale serve status --json |
 | Supervised pump web app (fresh temporary data; local login dialog with Show password) | .venv\Scripts\python scripts/start-pump-app.py --demo; .venv\Scripts\python scripts/start-pump-app.py --live (owner approval) |
 | Live pump probe (owner approval; local interactive terminal) | .venv\Scripts\python -m villa_kuppis.pump_probe --live read; .venv\Scripts\python -m villa_kuppis.pump_probe --live test-setpoint |
 | Live pump power test (owner approval; starts off, on for 30 seconds after read-back, then off) | .venv\Scripts\python -m villa_kuppis.pump_probe --live test-power |
 | One-off live price fetch (owner approval; new temporary data directory) | .venv\Scripts\python -m villa_kuppis --data-dir DATA_DIR refresh --date YYYY-MM-DD |
-| Development tool verification (new terminal after installation) | py -3.13 --version; java -version; adb version; sdkmanager --sdk_root="$env:ANDROID_HOME" --list_installed; tailscale version |
+| Development tool verification (new terminal after installation) | py -3.13 --version; tailscale version |
 | Type, build and format checks | node scripts/check-docs.mjs (requires shared dev-dashboard); git diff --check |
 
 Define a command here before first relying on it. Add rows when the project needs them.

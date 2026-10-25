@@ -1,13 +1,13 @@
 # Architecture
 
-Revised on 20 October 2026 to the two-site Home Assistant design (card H1.1), and the same evening to Home Assistant OS virtual machines on Debian hosts at both sites. The earlier Windows PC + Android app design is described in [platform decision](platform-decision.md#superseded-android-and-google-home-route); the Windows installation keeps running until the home cutover (H1.5) passes.
+Revised on 20 October 2026 to the two-site Home Assistant design (card H1.1), and the same evening to Home Assistant OS virtual machines on Debian hosts at both sites. The earlier Windows PC + Android app design is described in [platform decision](platform-decision.md#superseded-android-and-google-home-route); the Windows installation was shut down and archived on 25 October 2026, when Villa Kuppis moved into the home Home Assistant VM.
 
 ## Decided
 
 - Villa Kuppis is the one Finnish application for controlling, monitoring and optimizing the home and the cottage. Household members use it in a browser, optionally installed as a PWA. No APK.
 - One Home Assistant per site is the device gateway and local fallback controller. Home Assistant UIs are for administration and emergencies, not the household's daily app.
-- Two always-on x86-64 machines (bought 20 October 2026, not yet arrived), both running Debian 13 as the host with Tailscale, SSH, Docker and a 5 TB USB drive at `/srv/archive`, and Home Assistant OS as a KVM virtual machine on a wired bridge with its own LAN address ([deploy/haos-vm.md](../deploy/haos-vm.md)):
-  - **Home (`home-server`):** an HP OmniBook laptop (Ryzen AI 5 340, 16 GB, 512 GB NVMe). Villa Kuppis runs on the host in Docker Compose; the Home Assistant VM has the MELCloud Home integration.
+- Two always-on x86-64 machines (bought 20 October 2026, running since 24 October), both running Debian 13 as the host with Tailscale, SSH, Docker and a 5 TB USB drive at `/srv/archive`, and Home Assistant OS as a KVM virtual machine on a wired bridge with its own LAN address ([deploy/haos-vm.md](../deploy/haos-vm.md)):
+  - **Home (`home-server`):** an HP OmniBook laptop (Ryzen AI 5 340, 16 GB, 512 GB NVMe). Villa Kuppis runs as a Home Assistant app inside the Home Assistant VM (`home-haos`, decided 25 October 2026, [deploy/home-assistant-app.md](../deploy/home-assistant-app.md)), next to the MELCloud Home integration; Docker Compose on the host stays a fallback. Tailscale Serve on the host publishes the app at its own address.
   - **Cottage (`cottage-server`):** an HP MP9 G4 mini-PC (Core i3-8100T, 8 GB, 256 GB NVMe, Ethernet). The Home Assistant VM has the Matter Server app and the room controller.
   - The hosts also keep the owner's photo copies and family shares; those are outside Villa Kuppis.
 - Home pumps: Home Assistant's MELCloud Home integration since 25 October 2026 (parity test H1.3 passed). The direct `aiomelcloudhome` client stays as the rollback path (`pumps: melcloud`).
@@ -25,13 +25,15 @@ flowchart TB
   Clients -->|Private HTTPS through Tailscale| VK[Villa Kuppis web UI + API]
 
   subgraph Home[home-server: OmniBook laptop, Debian host]
-    VK --> Core[Python planning: prices, FMI, learning, optimizer]
-    Core --> DB[(SQLite + backup on /srv/archive)]
-    Core <-->|LAN bridge: HA WebSocket| HAH[Home Assistant OS VM]
-    HAH <-->|MELCloud Home cloud| Pumps[3 Mitsubishi indoor units]
+    subgraph HAH[Home Assistant OS VM]
+      VK --> Core[Python planning: prices, FMI, learning, optimizer]
+      Core --> DB[(SQLite + daily copies)]
+      Core <-->|Supervisor: HA WebSocket| HACore[Home Assistant]
+    end
+    HACore <-->|MELCloud Home cloud| Pumps[3 Mitsubishi indoor units]
   end
 
-  Core <-->|Tailscale subnet route: HA WebSocket| HAC[Home Assistant OS VM]
+  Core <-->|Tailscale: HA WebSocket| HAC[Home Assistant OS VM]
   subgraph Cottage[cottage-server: HP MP9 G4, Debian host]
     HAC <-->|Matter over Wi-Fi| Mill[4 Mill Gen 4 heaters]
     HAC <-->|Matter over Thread| Speaker[Google Home Speaker: Thread border router]
@@ -40,7 +42,7 @@ flowchart TB
   end
 ```
 
-Tailscale connects Villa Kuppis to the cottage Home Assistant's API, not to individual devices: `cottage-server` advertises only the VM's address as a subnet route. Each Matter fabric stays inside its own site; nothing is routed across the internet except the API connection.
+Tailscale connects Villa Kuppis to the cottage Home Assistant's API, not to individual devices: the cottage VM runs the Tailscale app and Villa Kuppis connects to its Tailscale address (apps in `home-haos` do not resolve `.ts.net` names). Each Matter fabric stays inside its own site; nothing is routed across the internet except the API connection.
 
 ## Ownership
 
@@ -122,7 +124,7 @@ Plans use Europe/Helsinki local time, including the 92- and 100-period daylight-
 
 **Both sites:** Debian 13 host, Home Assistant OS as a KVM/libvirt VM (`virsh autostart`; about 4 GB / 2 vCPU at home, 3 GB / 2 vCPU at the cottage) on a bridge `br0` over wired Ethernet, so the VM has its own reserved LAN address and Matter gets local IPv6 and mDNS. Each 5 TB USB drive (WD `HOME_BACKUP` at home, Seagate `COTTAGE_BACKUP` at the cottage; arrive 27 October) is ext4, mounted by UUID at `/srv/archive` with `nofail`. Home Assistant's own backups go to a Samba share on its host, `/srv/archive/ha-backups`, as a network-storage backup location; this replaces the earlier open question of backing up HAOS to a USB drive. Steps: [deploy/haos-vm.md](../deploy/haos-vm.md).
 
-**Home (H1.4):** Villa Kuppis is the only Compose service, with host networking and restart policies; it reaches the home Home Assistant VM at its LAN address. Host-level Tailscale publishes only the Villa Kuppis UI with Serve. Windows-only pieces (Task Scheduler, Credential Manager, `%LOCALAPPDATA%`, the PowerShell update script) sit behind OS-neutral configuration and secrets; Windows development keeps working. Daily backups go to `/srv/archive/villa-kuppis` on the WD drive; with the drive missing they fail and are logged rather than written to the SSD. Home Assistant updates from its own UI without touching Villa Kuppis.
+**Home (H1.4):** Villa Kuppis is a Home Assistant app in `home-haos` with host networking; it reaches the home Home Assistant through the Supervisor, and its data, secrets and daily database copies live in the app's `/data`. Host-level Tailscale on `home-server` publishes the app's port with Serve, and the app trusts only that proxy's address, the ingress proxy and loopback. Home Assistant backs the app up cold with its own backups. The Docker Compose install on the host ([deploy/home/README.md](../deploy/home/README.md)) is the fallback; there its daily copies go to `/srv/archive/villa-kuppis` on the WD drive.
 
 **Cottage (H2.1):** `cottage-server` wired to the Archer BE230; the NE200-Outdoor provides the 5G uplink (carrier NAT is fine for Tailscale). Non-isolated LAN with local IPv6 and mDNS. BIOS: virtualization on, power on after AC loss. The Mill heaters keep their own thermostats, so the cottage stays safe when the host, the VM, the router or the uplink is down.
 
@@ -139,10 +141,10 @@ Plans use Europe/Helsinki local time, including the 92- and 100-period daylight-
 
 ## Remote access and security
 
-Phones and the desktop reach Villa Kuppis through [Tailscale](https://tailscale.com/pricing) with Serve; nothing is exposed to the public internet. The cottage Home Assistant VM is not on the tailnet itself: `cottage-server` advertises its single address as a subnet route, which `home-server` accepts (`--accept-routes`). Tailscale access rules can limit that route to `home-server` and the owner's own devices. The Home Assistant Tailscale app inside the VM is the alternative if the route ever causes trouble.
+Phones and the desktop reach Villa Kuppis through [Tailscale](https://tailscale.com/pricing) with Serve; nothing is exposed to the public internet. Both Home Assistant VMs run the Tailscale app and have their own tailnet names; Villa Kuppis reaches the cottage one at its Tailscale address. Tailscale access rules can limit who reaches the cottage VM.
 
 - Each Home Assistant is a separate controller with its own credentials. Villa Kuppis uses a site-specific long-lived access token, stored outside Git and outside user-visible backups, with rotation and revocation documented.
-- Identity: today's Tailscale `Tailscale-User-*` header trust was designed for Windows localhost; after the move to a container it must be re-checked (Host, Origin, proxy trust, CSRF) before it is relied on.
+- Identity: the app trusts `Tailscale-User-*` headers only from the configured Serve proxy address, with the exact public Host and a matching Origin, and Home Assistant's user headers only from the Supervisor's ingress proxy; every other client gets 403.
 - A partly work-managed phone may not allow Tailscale; test it. If it is blocked, an authenticated HTTPS gateway for Villa Kuppis alone is a separate later feature, not a reason to weaken security.
 - Backups contain personal history but not secrets.
 

@@ -70,8 +70,8 @@ sudoedit /srv/villa-kuppis/secrets/melcloud.json
 ```
 
 Contents: `{"username": "you@example.com", "password": "..."}`. Do not put it in
-Git. Windows development is unchanged: leave `credential_file` out and it uses
-Credential Manager.
+Git. With `"pumps": "melcloud"` the service refuses to start without
+`credential_file`.
 
 ## Cottage connection
 

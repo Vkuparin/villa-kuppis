@@ -29,7 +29,7 @@ from villa_kuppis.pump_app import PumpAppServer, make_demo_service, render_page
 from villa_kuppis.pump_probe import FakeClient, _unit_payload
 from villa_kuppis.pump_service import HISTORY_INTERVAL_SECONDS, PumpService
 from villa_kuppis.runtime import Config
-from villa_kuppis.windows_credentials import CredentialError
+from villa_kuppis.credential_file import CredentialError
 
 POSIX = unittest.skipIf(os.name == "nt", "POSIX file modes")
 SECRET = "hunter2-secret-token"

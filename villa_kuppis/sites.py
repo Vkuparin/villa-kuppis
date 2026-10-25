@@ -23,7 +23,7 @@ from .cottage import ROOMS, SITES_DB, status_entity
 from .credential_file import read_token_file
 from .ha_gateway import BindingError, BindingStore, HomeAssistantGateway, KINDS
 from .runtime import Config
-from .windows_credentials import CredentialError
+from .credential_file import CredentialError
 
 DISCOVER_TIMEOUT = 20.0
 

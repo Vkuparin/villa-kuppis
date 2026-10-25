@@ -7,8 +7,7 @@ import unittest
 from unittest import mock
 
 from villa_kuppis.runtime import Config, run
-from villa_kuppis.credential_file import read_credentials_file
-from villa_kuppis.windows_credentials import CredentialError
+from villa_kuppis.credential_file import CredentialError, read_credentials_file
 
 POSIX = unittest.skipIf(os.name == "nt", "POSIX file modes")
 
@@ -78,26 +77,24 @@ class ConfigCredentialFileTests(unittest.TestCase):
             return mock.Mock()
         stop = mock.Mock()
         stop.is_set.return_value = True
-        with mock.patch("villa_kuppis.runtime.make_live_service", side_effect=make), \
-                mock.patch("villa_kuppis.runtime.read_credentials") as vault:
+        with mock.patch("villa_kuppis.runtime.make_live_service", side_effect=make):
             server = mock.Mock()
             run(config, stop_event=stop, server_factory=lambda *a, **k: server,
                 backup_factory=lambda *a: mock.Mock(), price_factory=lambda *a: None)
-        return captured, vault
+        return captured
 
-    def test_file_replaces_windows_credential_manager(self):
+    def test_file_supplies_the_melcloud_credentials(self):
         with tempfile.TemporaryDirectory() as temp:
             secret = write_secret(temp, {"username": "a@example.invalid", "password": "pw"})
             config = Config.load(self.config_file(temp, credential_file=str(secret)))
-            captured, vault = self.run_live(config)
+            captured = self.run_live(config)
             self.assertEqual(captured["credentials"].username, "a@example.invalid")
-            vault.assert_not_called()
 
-    def test_without_file_windows_credential_manager_is_used(self):
+    def test_live_melcloud_without_file_is_refused(self):
         with tempfile.TemporaryDirectory() as temp:
             config = Config.load(self.config_file(temp))
-            _, vault = self.run_live(config)
-            vault.assert_called_once_with(config.credential_target)
+            with self.assertRaisesRegex(ValueError, "credential_file"):
+                self.run_live(config)
 
 
 if __name__ == "__main__":

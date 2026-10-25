@@ -1,4 +1,4 @@
-"""Unattended localhost pump app with account-scoped credentials and backups."""
+"""Unattended pump app: config, service, web server, price loop and backups."""
 from __future__ import annotations
 
 import argparse
@@ -17,7 +17,6 @@ from .pump_service import make_live_service
 from .service import SpotPriceService
 from .credential_file import read_credentials_file
 from .weather import parse_coord_spec
-from .windows_credentials import DEFAULT_TARGET, read_credentials
 
 
 @dataclass(frozen=True)
@@ -26,12 +25,11 @@ class Config:
     backup_dir: Path
     public_origin: str | None = None
     port: int = 8377
-    credential_target: str = DEFAULT_TARGET
     # Optional {"home": "lat,lon", "cottage": "lat,lon"} for FMI weather.
     weather: tuple = ()
     # Apply the price-threshold cooling plan to the pumps (off: only shown).
     plan: bool = False
-    # Absolute path of a JSON credential file; replaces Windows Credential Manager.
+    # Absolute path of the JSON MELCloud credential file (pumps "melcloud").
     credential_file: Path | None = None
     # ((site_id, cottage.SiteConfig), ...): Home Assistant gateways (card H2.3).
     sites: tuple = ()
@@ -51,8 +49,8 @@ class Config:
     @classmethod
     def load_dict(cls, raw):
         if not isinstance(raw, dict) or set(raw) - {
-                "data_dir", "backup_dir", "public_origin", "port", "credential_target",
-                "weather", "plan", "credential_file", "sites", "pumps",
+                "data_dir", "backup_dir", "public_origin", "port", "weather",
+                "plan", "credential_file", "sites", "pumps",
                 "ingress", "trusted_proxies"}:
             raise ValueError("Invalid service configuration fields")
         weather = raw.get("weather", {})
@@ -81,8 +79,7 @@ class Config:
                 not isinstance(credential_file, str) or not Path(credential_file).is_absolute()):
             raise ValueError("Credential file path must be absolute")
         config = cls(Path(raw["data_dir"]), Path(raw["backup_dir"]),
-                     raw.get("public_origin"), raw.get("port", 8377),
-                     raw.get("credential_target", DEFAULT_TARGET), sites,
+                     raw.get("public_origin"), raw.get("port", 8377), sites,
                      raw.get("plan", False),
                      Path(credential_file) if credential_file else None,
                      parse_sites(raw.get("sites", {})),
@@ -136,10 +133,10 @@ def run(config: Config, *, demo=False, stop_event=None, service_factory=None,
             if config.pumps == "home_assistant":
                 credentials = None
                 extra["pump_site"] = dict(config.sites)["home"]
+            elif config.credential_file is None:
+                raise ValueError("pumps through MELCloud need credential_file")
             else:
-                credentials = (read_credentials_file(config.credential_file)
-                               if config.credential_file
-                               else read_credentials(config.credential_target))
+                credentials = read_credentials_file(config.credential_file)
             service_factory = lambda data: make_live_service(
                 data, credentials=credentials, weather_sites=dict(config.weather),
                 automation_interval=DEFAULT_PLAN_INTERVAL,
