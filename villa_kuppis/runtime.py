@@ -85,8 +85,11 @@ def price_loop(data_dir, stop, *, service_factory=SpotPriceService, poll_seconds
         while not stop.is_set():
             try:
                 outcome = service.schedule_once()
-                if outcome.status in ("ok", "error"):
-                    logging.info("Spot price fetch: %s", outcome.status)
+                if outcome.status == "ok":
+                    logging.info("Spot price fetch: ok (%s)", outcome.detail)
+                elif outcome.status == "error":
+                    logging.warning("Spot price fetch for %s: error: %s",
+                                    outcome.target_day, outcome.detail)
             except Exception as error:
                 logging.error("Spot price fetch failed: %s", type(error).__name__)
             stop.wait(poll_seconds)

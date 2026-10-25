@@ -340,6 +340,8 @@ class RuntimeTests(unittest.TestCase):
         stop = threading.Event()
         service = mock.Mock()
         outcomes = [RuntimeError("boom"), mock.Mock(status="waiting"),
+                    mock.Mock(status="error", target_day="2026-10-26",
+                              detail="missing interval"),
                     mock.Mock(status="ok")]
 
         def schedule_once():
@@ -351,9 +353,12 @@ class RuntimeTests(unittest.TestCase):
             return item
 
         service.schedule_once.side_effect = schedule_once
-        price_loop("data", stop, service_factory=lambda data: service,
-                   poll_seconds=0)
-        self.assertEqual(service.schedule_once.call_count, 3)
+        with self.assertLogs(level="INFO") as logs:
+            price_loop("data", stop, service_factory=lambda data: service,
+                       poll_seconds=0)
+        self.assertEqual(service.schedule_once.call_count, 4)
+        self.assertTrue(any("2026-10-26: error: missing interval" in line
+                            for line in logs.output))
         service.close.assert_called_once()
 
     def test_runner_cleans_up_and_does_not_read_credentials_for_demo(self):
