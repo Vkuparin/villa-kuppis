@@ -50,6 +50,8 @@ from .pump_probe import (
 
 DB_FILENAME = "pumps.db"
 DEFAULT_POLL_INTERVAL = 60.0
+# Through Home Assistant a read only looks at the gateway's live snapshot.
+HA_POLL_INTERVAL = 10.0
 DEFAULT_STALE_AFTER = 180.0
 MAX_POLL_BACKOFF = 900.0     # longest wait between cloud reads after failures
 PRICE_FETCH_MIN_SECONDS = 60.0   # between manual price fetches
@@ -1515,7 +1517,7 @@ class PumpService:
 # --- client factories -------------------------------------------------------------
 
 def make_live_service(data_dir, *, credentials=None, weather_sites=None,
-                      poll_interval=DEFAULT_POLL_INTERVAL,
+                      poll_interval=None,
                       stale_after=DEFAULT_STALE_AFTER,
                       readback_polls=DEFAULT_READBACK_POLLS,
                       readback_delay=DEFAULT_READBACK_DELAY,
@@ -1526,9 +1528,14 @@ def make_live_service(data_dir, *, credentials=None, weather_sites=None,
     """Live service with explicit credentials, or development environment values.
 
     The unattended runner supplies credentials from Windows Credential Manager.
-    Values are never printed or logged.
+    Values are never printed or logged. The pumps are read every
+    DEFAULT_POLL_INTERVAL seconds from the cloud, or every HA_POLL_INTERVAL
+    seconds through Home Assistant, unless ``poll_interval`` says otherwise.
     """
     import os
+
+    if poll_interval is None:
+        poll_interval = HA_POLL_INTERVAL if pump_site is not None else DEFAULT_POLL_INTERVAL
 
     cottage_factory = None
     if sites and "cottage" in sites:

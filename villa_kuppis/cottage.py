@@ -1128,6 +1128,6 @@ SCRIPT = r"""
       .then(function (d) { render(d); if (d.configured) loadVisit(); }).catch(function () {});
   }
   load();
-  setInterval(load, 10000);
+  vkEvery(load, 10000);
 })();
 """

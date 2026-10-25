@@ -123,6 +123,6 @@ SCRIPT = r"""
       .then(render).catch(function () {});
   }
   load();
-  setInterval(load, 60000);
+  vkEvery(load, 60000);
 })();
 """

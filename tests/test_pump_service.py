@@ -21,7 +21,8 @@ from unittest import mock
 
 from villa_kuppis.pump_probe import FakeClient, _unit_payload
 from villa_kuppis.pump_service import (
-    PumpService, PumpStore, make_live_service, validate_request,
+    DEFAULT_POLL_INTERVAL, PumpService, PumpStore, make_live_service,
+    validate_request,
 )
 
 SERVICE_KWARGS = dict(
@@ -174,8 +175,11 @@ class LiveStartupTests(ServiceTestCase):
         with mock.patch.dict("os.environ", self.credentials, clear=True), \
                 mock.patch("villa_kuppis.pump_service._default_client_factory",
                            side_effect=RuntimeError("offline startup failure")) as factory:
-            service = make_live_service(self.tmp, **SERVICE_KWARGS)
+            kwargs = {k: v for k, v in SERVICE_KWARGS.items() if k != "poll_interval"}
+            service = make_live_service(self.tmp, **kwargs)
             self._services.append(service)
+            # The cloud keeps its lockout-safe interval.
+            self.assertEqual(service.gateway._poll_interval, DEFAULT_POLL_INTERVAL)
             service.start()
             self.wait_for(lambda: service.view()["service"]["state"] == "error")
             self.assertIn("cloud startup failed", service.view()["service"]["error"])

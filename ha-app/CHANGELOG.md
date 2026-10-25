@@ -1,5 +1,10 @@
 # Muutokset
 
+## 0.4.14
+
+- Pumppujen tila luetaan Home Assistantista 10 sekunnin välein minuutin sijaan.
+- Sivu päivittyy heti, kun se avataan uudelleen, eikä päivitä piilossa ollessaan.
+
 ## 0.4.13
 
 - Jos pumppu ei ole käytettävissä, kortti näyttää merkinnän Ei käytettävissä, tuntemattomat arvot viivana eikä ohjaimia voi käyttää.

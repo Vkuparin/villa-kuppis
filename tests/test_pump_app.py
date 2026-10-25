@@ -338,6 +338,40 @@ assert.match(ok, /Pois päältä/);
                                 encoding="utf-8", timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_refreshes_pause_while_hidden_and_run_when_shown(self):
+        from villa_kuppis.pump_app import render_page
+        page = render_page(True)
+        source = page[page.index("var vkEvery ="):page.index("</script>", page.index("var vkEvery ="))]
+        script = """
+import assert from 'node:assert/strict';
+const timers = new Map();
+let nextId = 1;
+const setInterval = (fn, ms) => { timers.set(nextId, ms); return nextId++; };
+const clearInterval = id => timers.delete(id);
+const listeners = {};
+const document = {hidden: false,
+  addEventListener(type, fn) { listeners[type] = fn; }};
+""" + source + """
+let runs = 0;
+vkEvery(() => runs++, 5000);
+assert.deepEqual([...timers.values()], [5000]);
+document.hidden = true;
+listeners.visibilitychange();
+assert.equal(timers.size, 0);
+assert.equal(runs, 0);
+document.hidden = false;
+listeners.visibilitychange();
+assert.equal(runs, 1);                  // refreshed at once
+assert.deepEqual([...timers.values()], [5000]);
+listeners.visibilitychange();           // already running: no second timer
+assert.equal(timers.size, 1);
+assert.equal(runs, 1);
+"""
+        result = subprocess.run(["node", "--input-type=module", "-"],
+                                input=script, text=True, capture_output=True,
+                                encoding="utf-8", timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_click_on_mode_select_only_opens_list(self):
         from villa_kuppis.pump_app import render_page
         page = render_page(True)

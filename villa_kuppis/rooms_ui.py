@@ -102,6 +102,6 @@ SCRIPT = r"""
       .then(render).catch(function () {});
   }
   load();
-  setInterval(load, 600000);
+  vkEvery(load, 600000);
 })();
 """

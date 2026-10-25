@@ -238,6 +238,27 @@ _PAGE = """<!doctype html>
   document.documentElement.setAttribute("data-theme", t);
   if (a) document.documentElement.setAttribute("data-accent", a);
 })();
+// Periodic refreshes run only while the page is visible; when it is shown
+// again (another tab, the phone app reopened) each one runs at once.
+var vkEvery = (function () {
+  var tasks = [];
+  function start(t) { if (t.id === null) t.id = setInterval(t.fn, t.ms); }
+  document.addEventListener("visibilitychange", function () {
+    tasks.forEach(function (t) {
+      if (document.hidden) {
+        if (t.id !== null) { clearInterval(t.id); t.id = null; }
+      } else if (t.id === null) {
+        t.fn();
+        start(t);
+      }
+    });
+  });
+  return function (fn, ms) {
+    var t = { fn: fn, ms: ms, id: null };
+    tasks.push(t);
+    if (!document.hidden) start(t);
+  };
+})();
 </script>
 <style>
 /* Themes: light by default, dark by choice or the device setting. The
@@ -1283,7 +1304,7 @@ $auto.addEventListener("click", async () => {
   if (typeof loadPlan === "function") loadPlan();
 });
 loadAutomation();
-setInterval(loadAutomation, 15000);
+vkEvery(loadAutomation, 15000);
 $histUnit.addEventListener("change", () => {
   // Cottage rooms use the cottage's outdoor temperature; pumps the home's.
   $histSite.value = $histUnit.value.startsWith("cottage:") ? "cottage" : "home";
@@ -1308,9 +1329,9 @@ window.addEventListener("resize", () => {
 });
 refresh();
 loadIdentity();
-setInterval(refresh, POLL_MS);
-setInterval(loadHistory, 60000);
-setInterval(loadIdentity, 60000);
+vkEvery(refresh, POLL_MS);
+vkEvery(loadHistory, 60000);
+vkEvery(loadIdentity, 60000);
 if ("serviceWorker" in navigator) {
   // Offline start only; the worker never caches /api/ or touches commands.
   window.addEventListener("load", () => {
@@ -1454,8 +1475,8 @@ var vkHealth = (function () {
   }
   window.addEventListener("online", render);
   window.addEventListener("offline", render);
-  setInterval(render, 10000);
-  setInterval(loadSites, 10000);
+  vkEvery(render, 10000);
+  vkEvery(loadSites, 10000);
   loadSites();
   return {
     viewOk: function (view) { S.view = view; S.viewAt = Date.now(); S.viewFailed = false; render(); },

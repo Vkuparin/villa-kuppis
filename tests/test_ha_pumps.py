@@ -222,7 +222,7 @@ class LiveSwitchTests(unittest.TestCase):
 
     def test_live_service_runs_the_pumps_through_home_assistant(self):
         from villa_kuppis.cottage import SiteConfig
-        from villa_kuppis.pump_service import make_live_service
+        from villa_kuppis.pump_service import HA_POLL_INTERVAL, make_live_service
         loop = asyncio.new_event_loop()
         thread = threading.Thread(target=loop.run_forever, daemon=True)
         thread.start()
@@ -248,6 +248,8 @@ class LiveSwitchTests(unittest.TestCase):
             service.start()
             wait_until(lambda: service.store.unit_state(UNIT) is not None, timeout=10)
             self.assertEqual(service.store.unit_state(UNIT)["setpoint"], 24.0)
+            # The snapshot is local, so it is read more often than the cloud.
+            self.assertEqual(service.gateway._poll_interval, HA_POLL_INTERVAL)
         finally:
             service.close()
             asyncio.run_coroutine_threadsafe(ha.stop(), loop).result(10)
