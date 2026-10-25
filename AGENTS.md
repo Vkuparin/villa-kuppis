@@ -36,6 +36,7 @@ Codex, Hermes and Claude Code (through `CLAUDE.md`) all read this file. This is 
 | Startup, credential and backup tests (mock Windows/network boundaries; temporary data) | .venv\Scripts\python -m unittest discover -s tests -p "test_windows_runtime.py" -v; .venv\Scripts\python -m unittest discover -s tests -p "test_backup.py" -v |
 | Credential file tests (temporary data) | .venv\Scripts\python -m unittest discover -s tests -p "test_credential_file.py" -v |
 | Home Assistant app tests (ingress and Tailscale proxy identity, options, import; localhost only) | .venv\Scripts\python -m unittest discover -s tests -p "test_ha_app.py" -v |
+| Pump parity check, read-only (inside the app; see deploy/home-assistant-app.md) and its tests | python -m villa_kuppis.pump_parity --config /data/villa-kuppis.json compare [--bind]; .venv\Scripts\python -m unittest discover -s tests -p "test_pump_parity.py" -v |
 | Release the Home Assistant app (pins ha-app/build.yaml to HEAD, bumps the version, pushes main) | scripts/release-ha-app.sh X.Y.Z |
 | Home server image, demo only (Linux/Docker; temporary folders, see deploy/home/README.md "Try it offline") | docker compose -f deploy/home/compose.yaml -f deploy/home/compose.demo.yaml config; docker compose -f deploy/home/compose.yaml -f deploy/home/compose.demo.yaml up -d --build |
 | Check or restore a backup day (stop the service first for restore) | .venv\Scripts\python -m villa_kuppis.backup verify BACKUP_DAY_DIR; .venv\Scripts\python -m villa_kuppis.backup restore BACKUP_DAY_DIR DATA_DIR |

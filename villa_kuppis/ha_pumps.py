@@ -13,6 +13,12 @@ over. Home Assistant reports one temperature range for all modes; it is
 used for every mode. The HVAC and fan names below follow Home Assistant's
 climate conventions; the MELCloud Home integration's exact fan names are
 checked in H1.3.
+
+A climate entity that is off reports the HVAC mode ``off`` and hides the
+unit's mode, while MELCloud keeps reporting it. The cooling rules act only
+on units in Cool, including turning back on a unit they switched off, so
+the client remembers each unit's last mode while it is off (seeded from the
+pump store after a restart).
 """
 
 from __future__ import annotations
@@ -40,8 +46,10 @@ def _named(value):
     return SimpleNamespace(value=value) if value is not None else None
 
 
-def unit_from_state(state: dict):
-    """An object shaped like an aiomelcloudhome air-to-air unit."""
+def unit_from_state(state: dict, last_mode: str | None = None):
+    """An object shaped like an aiomelcloudhome air-to-air unit.
+
+    ``last_mode`` stands in for the hidden mode of a unit that is off."""
     caps = state.get("caps") or {}
     available = state.get("available") and state.get("status") in ("ok", "stale")
     modes = {HVAC_TO_MODE.get(m) for m in caps.get("modes", [])}
@@ -59,7 +67,9 @@ def unit_from_state(state: dict):
         has_fan_operation_mode="Fan" in modes,
         has_auto_operation_mode="Automatic" in modes,
     )
-    mode = HVAC_TO_MODE.get(state.get("mode")) if available else None
+    mode = None
+    if available:
+        mode = last_mode if state.get("mode") == "off" else HVAC_TO_MODE.get(state.get("mode"))
     return SimpleNamespace(
         id=state["device_id"],
         name=state.get("label") or state["device_id"],
@@ -77,8 +87,9 @@ class HAPumpClient:
     """The part of the MELCloud Home client API that PumpGateway calls."""
 
     def __init__(self, gateway, *, write_timeout: float = 20.0, poll: float = 0.2,
-                 connect_wait: float = 15.0):
+                 connect_wait: float = 15.0, last_modes: dict | None = None):
         self._gateway = gateway
+        self._last_modes = dict(last_modes or {})
         self._write_timeout = write_timeout
         self._poll = poll
         self._connect_wait = connect_wait
@@ -97,8 +108,14 @@ class HAPumpClient:
             health = self._gateway.health()
         if health["state"] not in CONNECTED:
             raise ConnectionError(f"Home Assistant {health['state']}: {health.get('error') or ''}".rstrip(": "))
-        units = [unit_from_state(s) for s in self._climates().values()
-                 if s.get("status") != "missing"]
+        units = []
+        for state in self._climates().values():
+            if state.get("status") == "missing":
+                continue
+            unit = unit_from_state(state, self._last_modes.get(state["device_id"]))
+            if unit.operation_mode is not None:
+                self._last_modes[state["device_id"]] = unit.operation_mode.value
+            units.append(unit)
         return SimpleNamespace(buildings=[SimpleNamespace(air_to_air_units=units)])
 
     def _translate(self, unit_id: str, kwargs: dict) -> tuple[str, object]:
@@ -143,13 +160,14 @@ class HAPumpClient:
             raise PumpCommandError(cmd.get("detail") or cmd["state"])
 
 
-def client_factory(gateway):
+def client_factory(gateway, last_modes=None):
     """A PumpGateway client factory: starts the HA gateway thread with the
-    pump loop and stops it at teardown."""
+    pump loop and stops it at teardown. ``last_modes`` returns the stored
+    mode of each unit, for units that are off at start."""
     def factory():
         gateway.start()
 
         async def teardown():
             await asyncio.get_running_loop().run_in_executor(None, gateway.stop)
-        return HAPumpClient(gateway), teardown
+        return HAPumpClient(gateway, last_modes=last_modes() if last_modes else None), teardown
     return factory

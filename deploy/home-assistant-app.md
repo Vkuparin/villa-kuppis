@@ -68,12 +68,31 @@ Decommission akvaario's copy after two quiet weeks.
 
 ## Pumps through Home Assistant (phase 2)
 
-After the supervised parity test (card H1.3): add the MELCloud Home
-integration in home-haos, bind each pump's climate entity with its MELCloud
-unit id (the `villa_kuppis.sites` bind command; how to run it inside the app
-is settled in that step), then set `pumps` to `home_assistant` and restart the
-app. Rollback: `melcloud`. No Home
-Assistant automations on the pumps: one writer at a time.
+1. The owner adds the MELCloud Home integration in home-haos with his own
+   sign-in (Settings > Devices & services). No Home Assistant automations on
+   the pumps: one writer at a time.
+2. Read-only comparison (card H1.3), from the HAOS root shell while the app
+   still runs with `pumps: melcloud`:
+
+   ```sh
+   docker exec addon_b51a7d83_villa_kuppis \
+     python -m villa_kuppis.pump_parity --config /data/villa-kuppis.json compare
+   ```
+
+   It reads all pumps through both routes and prints each unit as `same` or
+   its differences (room temperatures within 0.5 °C count as the same; an
+   off unit's hidden mode is expected). Nothing is sent to the pumps. Exit
+   code 0 means every unit matched an entity.
+3. When the comparison is clean, run it again with `--bind`: it stores each
+   matched entity under its MELCloud unit id in `sites.db`, so history,
+   settings and plans carry over.
+4. With the owner's go-ahead: set `pumps` to `home_assistant`, restart the
+   app, and change one setpoint and one fan speed per unit by one step from
+   the web app, then restore them. Check each event is confirmed and matches
+   the MELCloud Home app, and that the other units stay unchanged.
+
+Rollback: set `pumps` back to `melcloud` (the credentials stay in the
+options) and restart the app.
 
 ## Cottage later
 

@@ -105,6 +105,13 @@ class HAPumpServiceTests(unittest.TestCase):
                                     ("set_hvac_mode", {"hvac_mode": "dry"}),
                                     ("turn_off", {})])
 
+    def test_a_unit_switched_off_keeps_its_mode(self):
+        # Cooling turns back on only units in Cool; HA hides the mode when off.
+        self.assertEqual(self.finish("power", False)["result"], "confirmed")
+        wait_until(lambda: self.service.store.unit_state(UNIT)["power"] is False)
+        self.assertEqual(self.service.store.unit_state(UNIT)["mode"], "Cool")
+        self.assertEqual(self.finish("power", True)["result"], "confirmed")
+
     def test_refused_command_fails(self):
         self.ha.fail["set_temperature"] = ("home_assistant_error", "MELCloud returned 500")
         self.ha.apply = False
@@ -125,6 +132,12 @@ class UnitShapeTests(unittest.TestCase):
         self.assertTrue(state["in_error"])
         self.assertIsNone(state["power"])
         self.assertIsNone(state["mode"])
+
+    def test_an_off_unit_takes_the_stored_mode_after_a_restart(self):
+        state = {"device_id": "u", "label": "A", "kind": "climate", "available": True,
+                 "status": "ok", "mode": "off", "power": False, "caps": {}}
+        self.assertIsNone(unit_from_state(state).operation_mode)
+        self.assertEqual(unit_from_state(state, "Cool").operation_mode.value, "Cool")
 
 
 if __name__ == "__main__":
