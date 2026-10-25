@@ -1,5 +1,10 @@
 # Muutokset
 
+## 0.4.13
+
+- Jos pumppu ei ole käytettävissä, kortti näyttää merkinnän Ei käytettävissä, tuntemattomat arvot viivana eikä ohjaimia voi käyttää.
+- Pumpun ilmoittama laitevirhe näkyy kortissa.
+
 ## 0.4.12
 
 - Varmuuskopio kattaa nyt myös laiteliitokset ja mökkikäynnit.

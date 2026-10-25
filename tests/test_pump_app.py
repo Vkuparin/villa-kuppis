@@ -300,6 +300,44 @@ assert.equal($cards.innerHTML, '<p>3</p>');
                                 encoding="utf-8", timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_card_does_not_guess_an_unavailable_units_state(self):
+        from villa_kuppis.pump_app import render_page
+        page = render_page(True)
+        source = (page[page.index("const MODE_NAMES"):page.index("const POLL_MS")]
+                  + page[page.index("const tempFmt"):page.index("let selectHoldUntil")])
+        script = """
+import assert from 'node:assert/strict';
+""" + source + """
+const caps = {min_cool: 16, max_cool: 31, half_step: true, fan_speeds: 5,
+              modes: {}, auto_fan: true};
+const base = {id: 'u1', name: 'Olohuone', fresh: true, pending: null, caps};
+// Home Assistant reports the pump unavailable: every value is unknown.
+const gone = cardHtml({...base, power: null, mode: null, setpoint: null,
+                       fan: null, room_temp: null, in_error: true});
+assert.match(gone, /Ei käytettävissä/);
+assert.match(gone, /Ei tiedossa/);
+assert.doesNotMatch(gone, /Pois päältä/);
+assert.doesNotMatch(gone, / selected>Jäähdytys/);
+assert.equal((gone.match(/<option value="" selected disabled>–<\/option>/g) || []).length, 3);
+// The power switch and three lists, plus the three placeholders.
+assert.equal((gone.match(/ disabled>/g) || []).length, 4 + 3);
+// A unit that reports an error but still has a state stays controllable.
+const fault = cardHtml({...base, power: true, mode: 'Cool', setpoint: 23,
+                        fan: 'Auto', room_temp: 25, in_error: true});
+assert.match(fault, /Laitevirhe/);
+assert.match(fault, /Päällä/);
+assert.doesNotMatch(fault, /disabled/);
+// A healthy unit has no badge and no placeholder.
+const ok = cardHtml({...base, power: false, mode: 'Cool', setpoint: 23,
+                     fan: 'Two', room_temp: 25, in_error: false});
+assert.doesNotMatch(ok, /badge|–<\/option>/);
+assert.match(ok, /Pois päältä/);
+"""
+        result = subprocess.run(["node", "--input-type=module", "-"],
+                                input=script, text=True, capture_output=True,
+                                encoding="utf-8", timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_click_on_mode_select_only_opens_list(self):
         from villa_kuppis.pump_app import render_page
         page = render_page(True)

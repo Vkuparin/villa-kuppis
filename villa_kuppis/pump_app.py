@@ -587,6 +587,7 @@ const ERRORS = {
   bad_fan: "Laite ei tue tätä puhallusnopeutta.",
   unknown_unit: "Tuntematon laite.",
   pending: "Aiempi muutos on vielä vahvistumassa; yritä hetken kuluttua.",
+  unavailable: "Laite ei ole käytettävissä, joten komentoa ei lähetetty.",
   not_running: "Palvelu ei ole käynnissä."
 };
 function commandError(body, fallbackStatus) {
@@ -616,9 +617,11 @@ function setpointRange(unit) {
 function setpointAllowed(unit) {
   return setpointRange(unit) !== null;
 }
+// A value the unit has not reported is shown as "–", never as a guess.
+const UNKNOWN_OPTION = '<option value="" selected disabled>–</option>';
 function setpointOptions(unit, step) {
   const range = setpointRange(unit);
-  if (!range) return "";
+  if (!range) return UNKNOWN_OPTION;
   const values = [];
   for (let v = range[0]; v <= range[1] + 1e-9; v += step) values.push(v);
   if (!values.includes(unit.setpoint)) values.push(unit.setpoint);
@@ -640,14 +643,21 @@ function fanOptions(unit) {
   return list;
 }
 
+// Home Assistant reports the unit unavailable (or the cloud has no state):
+// nothing is known, so nothing is shown as known and nothing can be sent.
+function unitUnavailable(unit) {
+  return unit.power === null && unit.mode === null;
+}
 function cardHtml(unit) {
   const pending = unit.pending;
-  const dis = pending ? " disabled" : "";
+  const unavailable = unitUnavailable(unit);
+  const dis = pending || unavailable ? " disabled" : "";
   const step = unitStep(unit);
   const canStep = setpointAllowed(unit) && !pending;
   const modes = modeOptions(unit);
   const fans = fanOptions(unit);
-  const powerLabel = unit.power === true ? "Päällä" : "Pois päältä";
+  const powerLabel = unit.power === true ? "Päällä"
+    : unit.power === false ? "Pois päältä" : "Ei tiedossa";
   const rows = [];
   rows.push(
     '<div class="row"><span class="label">Käynti</span>' +
@@ -669,6 +679,7 @@ function cardHtml(unit) {
   rows.push(
     '<div class="row"><span class="label">Toimintatila</span>' +
     '<select data-action="mode" data-unit="' + esc(unit.id) + '"' + dis + ">" +
+    (modes.includes(unit.mode) ? "" : UNKNOWN_OPTION) +
     modes.map((m) =>
       '<option value="' + m + '"' + (m === unit.mode ? " selected" : "") + ">" +
       esc(MODE_NAMES[m]) + "</option>").join("") +
@@ -677,6 +688,7 @@ function cardHtml(unit) {
   rows.push(
     '<div class="row"><span class="label">Puhallus</span>' +
     '<select data-action="fan" data-unit="' + esc(unit.id) + '"' + dis + ">" +
+    (fans.includes(unit.fan) ? "" : UNKNOWN_OPTION) +
     fans.map((f) =>
       '<option value="' + f + '"' + (f === unit.fan ? " selected" : "") + ">" +
       esc(FAN_NAMES[f]) + "</option>").join("") +
@@ -695,12 +707,20 @@ function cardHtml(unit) {
       '<button type="button" data-action="resume" data-unit="' + esc(unit.id) + '"' +
       dis + ">Palauta automaatio</button></div>"
     : "";
+  const badge = !unit.fresh
+    ? '<span class="badge warn" title="Laitteelta ei ole saatu tuoretta lukemaa ' +
+      'vähään aikaan, joten näytetyt arvot voivat olla vanhoja.">Tiedot vanhentuneet</span>'
+    : unavailable
+    ? '<span class="badge err" title="Laite ei ilmoita tilaansa (esimerkiksi pilvipalvelu ' +
+      'tai laitteen verkkoyhteys on poikki), joten sen tilaa ei tiedetä eikä sitä voi ' +
+      'ohjata.">Ei käytettävissä</span>'
+    : unit.in_error
+    ? '<span class="badge err" title="Laite ilmoittaa virheestä. Tarkista laite tai ' +
+      'MELCloud Home -sovellus.">Laitevirhe</span>'
+    : "";
   return (
-    '<article class="card' + (unit.fresh ? "" : " stale") + '">' +
-    '<header class="card-head"><h3>' + esc(unit.name) + "</h3>" +
-    (unit.fresh ? "" :
-      '<span class="badge warn" title="Laitteelta ei ole saatu tuoretta lukemaa ' +
-      'vähään aikaan, joten näytetyt arvot voivat olla vanhoja.">Tiedot vanhentuneet</span>') +
+    '<article class="card' + (unit.fresh && !unavailable ? "" : " stale") + '">' +
+    '<header class="card-head"><h3>' + esc(unit.name) + "</h3>" + badge +
     "</header>" +
     rows.join("") + holdHtml + pendingHtml + "</article>"
   );

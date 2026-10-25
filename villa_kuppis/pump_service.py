@@ -1471,6 +1471,11 @@ class PumpService:
             return 404, {"error": "unknown_unit",
                          "detail": "the unit is unknown to the service"}
         actor = (actor or "").strip()[:MAX_ACTOR_LENGTH] or DEFAULT_ACTOR
+        if state["power"] is None and state["mode"] is None:
+            # Home Assistant reports the unit unavailable: refuse at once
+            # instead of failing after the read-backs.
+            return 409, {"error": "unavailable",
+                         "detail": "the unit reports no state"}
         if self.gateway.has_pending(unit_id):
             return 409, {"error": "pending",
                          "detail": "a previous change for this unit is still being confirmed"}

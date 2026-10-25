@@ -501,6 +501,21 @@ class RequestTests(ServiceTestCase):
         self.assertEqual(body["error"], "bad_power")
         self.assertEqual(len(client.control_calls), 0)
 
+    def test_unit_without_state_refused_at_once(self):
+        client = FakeClient(make_unit_payloads())
+        service, _ = self._start(client)
+        self.wait_for(lambda: len(service.view()["units"]) >= 3)
+        # What Home Assistant's "unavailable" pump looks like in the store.
+        service.store.upsert_units([{
+            "id": "gone", "name": "Olohuone", "power": None, "mode": None,
+            "setpoint": None, "fan": None, "room_temp": None, "in_error": True,
+            "caps": None, "updated_at": "2026-10-19T12:00:00+00:00"}])
+        status, body = service.request("gone", "power", True, "Ville")
+        self.assertEqual(status, 409)
+        self.assertEqual(body["error"], "unavailable")
+        self.assertEqual(len(client.control_calls), 0)
+        self.assertEqual(service.events(), [])
+
     def test_pending_conflict_409(self):
         client = SlowFake(make_unit_payloads(), delay=0.4)
         service, _ = self._start(client)
