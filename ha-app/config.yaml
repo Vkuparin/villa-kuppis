@@ -2,7 +2,7 @@
 # ha-app/Dockerfile from the commit named in build.yaml
 # (scripts/release-ha-app.sh). Data lives in /data (db, backup, secrets).
 name: Villa Kuppis
-version: "0.4.3"
+version: "0.4.4"
 slug: villa_kuppis
 description: Kodin ja mökin lämpöpumput ja lämmitys yhdessä sovelluksessa
 url: https://github.com/Vkuparin/villa-kuppis
