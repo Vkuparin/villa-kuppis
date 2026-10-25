@@ -133,6 +133,21 @@ class UnitShapeTests(unittest.TestCase):
         self.assertIsNone(state["power"])
         self.assertIsNone(state["mode"])
 
+    def test_stored_ranges_and_step_fill_what_home_assistant_omits(self):
+        # The MELCloud Home integration: one 7-35 °C range, no step, speed_N fans.
+        state = {"device_id": "u", "label": "A", "kind": "climate", "available": True,
+                 "status": "ok", "mode": "cool", "power": True, "fan": "speed_5",
+                 "caps": {"min": 7.0, "max": 35.0, "step": None, "modes": ["off", "cool"],
+                          "fan_modes": ["auto"] + [f"speed_{n}" for n in range(1, 6)]}}
+        known = {"min_cool": 16.0, "max_cool": 31.0, "min_heat": 10.0, "max_heat": 40.0,
+                 "half_step": True}
+        row = unit_state(unit_from_state(state, None, known), "2026-10-25T12:00:00+00:00")
+        self.assertEqual((row["caps"]["min_cool"], row["caps"]["max_cool"]), (16.0, 31.0))
+        self.assertEqual(row["caps"]["max_heat"], 35.0)  # within HA's range
+        self.assertEqual(row["caps"]["min_auto"], 7.0)   # nothing stored
+        self.assertTrue(row["caps"]["half_step"])
+        self.assertEqual((row["caps"]["fan_speeds"], row["fan"]), (5, "Five"))
+
     def test_an_off_unit_takes_the_stored_mode_after_a_restart(self):
         state = {"device_id": "u", "label": "A", "kind": "climate", "available": True,
                  "status": "ok", "mode": "off", "power": False, "caps": {}}

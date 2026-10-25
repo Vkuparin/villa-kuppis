@@ -6,7 +6,9 @@ Reads every pump once through the direct MELCloud Home client and once
 through the home Home Assistant's MELCloud Home climate entities, both in
 the shape the pump service stores, and prints the differences. Nothing is
 sent to either side. Units are matched by their MELCloud unit id in the
-entity's unique id, else by name. ``--bind`` then stores each matched
+entity's unique id, else by name. The Home Assistant side is shown as the
+service will see it, with the per-mode ranges and step the pump store
+keeps from the direct client. ``--bind`` then stores each matched
 entity in ``sites.db`` under its MELCloud unit id, which is what
 ``"pumps": "home_assistant"`` needs; a running service in ``melcloud`` mode
 ignores the bindings.
@@ -51,7 +53,7 @@ def ha_pumps(states: list[dict], registry: list[dict], now_iso: str) -> list[dic
         state["status"] = "ok" if state["available"] else "unavailable"
         row = unit_state(unit_from_state(state), now_iso)
         row.update(entity_id=entity_id, unique_id=str(entry.get("unique_id") or ""),
-                   ha_name=state["label"], ha_caps=state["caps"])
+                   ha_name=state["label"], ha_caps=state["caps"], reading=state)
         out.append(row)
     return out
 
@@ -85,8 +87,13 @@ def differences(direct: dict, ha: dict) -> list[str]:
             out.append(f"{name}: MELCloud {a!r}, HA {b!r}")
     dc, hc = direct.get("caps") or {}, ha.get("caps") or {}
     for name in ("min_cool", "max_cool", "half_step", "fan_speeds", "auto_fan", "modes"):
-        if dc.get(name) != hc.get(name):
-            out.append(f"caps.{name}: MELCloud {dc.get(name)!r}, HA {hc.get(name)!r}")
+        a, b = dc.get(name), hc.get(name)
+        if name == "modes" and isinstance(a, dict) and isinstance(b, dict):
+            # MELCloud leaves some modes unreported (None).
+            a = {m: v for m, v in a.items() if v is not None}
+            b = {m: v for m, v in b.items() if m in a}
+        if a != b:
+            out.append(f"caps.{name}: MELCloud {a!r}, HA {b!r}")
     return out
 
 
@@ -94,7 +101,10 @@ def report(direct: list[dict], ha: list[dict]) -> tuple[list[str], list[tuple]]:
     lines = []
     pairs, only_direct, only_ha = match(direct, ha)
     for d, h in pairs:
-        diff = differences(d, h)
+        # As the service will see it after the switch: the pump store then
+        # holds what the direct client reports now.
+        seen = unit_state(unit_from_state(h["reading"], None, d.get("caps")), d["updated_at"])
+        diff = differences(d, seen)
         lines.append(f"{d['name']} -> {h['entity_id']}: " + ("same" if not diff else "DIFFERENT"))
         lines += [f"    {x}" for x in diff]
         caps = h["ha_caps"]

@@ -1545,8 +1545,7 @@ def make_live_service(data_dir, *, credentials=None, weather_sites=None,
         gateway = HomeAssistantGateway("home", pump_site.url,
                                        lambda: read_token_file(token_file), bindings)
         service = PumpService(data_dir, client=None, client_factory=ha_client_factory(
-            gateway, lambda: {u["id"]: u["mode"] for u in service.store.unit_states()
-                              if u["mode"]}), **common)
+            gateway, lambda: service.store.unit_states()), **common)
         return service
 
     username = (credentials.username if credentials is not None else

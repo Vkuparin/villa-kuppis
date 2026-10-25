@@ -14,10 +14,15 @@ from tests.test_ha_pumps import pump_attrs
 
 NOW = "2026-10-25T12:00:00+00:00"
 UNIT = "8a7b6c5d-unit"
-CAPS = {"min_heat": 10.0, "max_heat": 31.0, "min_cool": 10.0, "max_cool": 31.0,
-        "min_auto": 10.0, "max_auto": 31.0, "half_step": True, "fan_speeds": 5,
+# As the direct client reported the owner's pumps on 25 October 2026.
+CAPS = {"min_heat": 10.0, "max_heat": 31.0, "min_cool": 16.0, "max_cool": 31.0,
+        "min_auto": 16.0, "max_auto": 31.0, "half_step": True, "fan_speeds": 5,
         "auto_fan": True, "modes": {"Cool": True, "Heat": True, "Dry": True,
-                                    "Fan": True, "Automatic": True}}
+                                    "Fan": None, "Automatic": True}}
+# What the MELCloud Home integration reported for them.
+HA_ATTRS = {"min_temp": 7.0, "max_temp": 35.0, "target_temp_step": None,
+            "hvac_modes": ["off", "heat", "cool", "auto", "dry", "fan_only"],
+            "fan_modes": ["auto", "speed_1", "speed_2", "speed_3", "speed_4", "speed_5"]}
 
 
 def direct_unit(**extra):
@@ -29,6 +34,7 @@ def direct_unit(**extra):
 
 
 def ha_side(state="cool", **attrs):
+    attrs = {**HA_ATTRS, **attrs}
     states = [{"entity_id": "climate.olohuone", "state": state, "attributes": pump_attrs(**attrs),
                "last_updated": NOW, "last_reported": NOW},
               {"entity_id": "climate.other", "state": "heat", "attributes": pump_attrs(),
@@ -49,12 +55,14 @@ class ParityTests(unittest.TestCase):
         self.assertIn("same", lines[0])
 
     def test_differences_are_listed(self):
-        diff = pump_parity.differences(direct_unit(setpoint=23.0, fan="Two"), ha_side()[0])
-        self.assertEqual(diff, ["setpoint: MELCloud 23.0, HA 24.0", "fan: MELCloud 'Two', HA 'Auto'"])
+        lines, _ = pump_parity.report([direct_unit(setpoint=23.0, fan="Two")],
+                                      ha_side(fan_mode="speed_5"))
+        self.assertEqual(lines[1:3], ["    setpoint: MELCloud 23.0, HA 24.0",
+                                      "    fan: MELCloud 'Two', HA 'Five'"])
 
     def test_an_off_unit_hides_its_mode_without_a_difference(self):
-        diff = pump_parity.differences(direct_unit(power=False), ha_side("off")[0])
-        self.assertEqual(diff, [])
+        lines, _ = pump_parity.report([direct_unit(power=False)], ha_side("off"))
+        self.assertIn("same", lines[0])
 
     def test_units_match_by_name_without_an_id(self):
         ha = ha_side()

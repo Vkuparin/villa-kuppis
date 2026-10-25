@@ -9,10 +9,13 @@ change (``pumps`` in the runtime configuration).
 
 Each pump is bound in the home site's ``sites.db`` with its existing
 MELCloud unit id as the device id, so history, settings and plans carry
-over. Home Assistant reports one temperature range for all modes; it is
-used for every mode. The HVAC and fan names below follow Home Assistant's
-climate conventions; the MELCloud Home integration's exact fan names are
-checked in H1.3.
+over. Home Assistant reports one temperature range for all modes (7-35 °C
+from the MELCloud Home integration) and no temperature step, while MELCloud
+reports a range per mode (16-31 °C for cooling) and half-degree steps. The
+pump store keeps what the direct client last reported, so those values win
+inside Home Assistant's range; without them the one range is used for every
+mode. The MELCloud Home integration names its fan speeds ``speed_1`` to
+``speed_5`` (H1.3, 25 October 2026).
 
 A climate entity that is off reports the HVAC mode ``off`` and hides the
 unit's mode, while MELCloud keeps reporting it. The cooling rules act only
@@ -30,7 +33,11 @@ HVAC_TO_MODE = {"cool": "Cool", "heat": "Heat", "dry": "Dry", "fan_only": "Fan",
                 "heat_cool": "Automatic", "auto": "Automatic"}
 FAN_WORDS = {"auto": "Auto", "one": "One", "two": "Two", "three": "Three",
              "four": "Four", "five": "Five", "1": "One", "2": "Two", "3": "Three",
-             "4": "Four", "5": "Five"}
+             "4": "Four", "5": "Five", "speed_1": "One", "speed_2": "Two",
+             "speed_3": "Three", "speed_4": "Four", "speed_5": "Five"}
+MODE_RANGES = (("min_temp_heat", "min_heat"), ("max_temp_heat", "max_heat"),
+               ("min_temp_cool", "min_cool"), ("max_temp_cool", "max_cool"),
+               ("min_temp_auto", "min_auto"), ("max_temp_auto", "max_auto"))
 CONNECTED = ("ok", "stale")
 
 
@@ -46,20 +53,36 @@ def _named(value):
     return SimpleNamespace(value=value) if value is not None else None
 
 
-def unit_from_state(state: dict, last_mode: str | None = None):
+def _within(known, lo, hi, use_min: bool):
+    if known is None:
+        return lo if use_min else hi
+    if lo is not None and known < lo:
+        return lo
+    if hi is not None and known > hi:
+        return hi
+    return known
+
+
+def unit_from_state(state: dict, last_mode: str | None = None, known_caps: dict | None = None):
     """An object shaped like an aiomelcloudhome air-to-air unit.
 
-    ``last_mode`` stands in for the hidden mode of a unit that is off."""
+    ``last_mode`` stands in for the hidden mode of a unit that is off;
+    ``known_caps`` (the pump store's caps) supplies the per-mode ranges and
+    the step that Home Assistant does not report."""
     caps = state.get("caps") or {}
     available = state.get("available") and state.get("status") in ("ok", "stale")
     modes = {HVAC_TO_MODE.get(m) for m in caps.get("modes", [])}
     fans = [fan_name(f) for f in caps.get("fan_modes", [])]
     lo, hi, step = caps.get("min"), caps.get("max"), caps.get("step")
+    known = known_caps or {}
+    ranges = {attr: _within(known.get(key), lo, hi, attr.startswith("min"))
+              for attr, key in MODE_RANGES}
     capabilities = SimpleNamespace(
-        min_temp_heat=lo, max_temp_heat=hi, min_temp_cool=lo, max_temp_cool=hi,
-        min_temp_auto=lo, max_temp_auto=hi,
-        has_half_degree_increments=(None if step is None else abs(step - 0.5) < 1e-6),
-        number_of_fan_speeds=sum(1 for f in fans if f not in (None, "Auto")) or None,
+        **ranges,
+        has_half_degree_increments=(known.get("half_step") if step is None
+                                    else abs(step - 0.5) < 1e-6),
+        number_of_fan_speeds=(sum(1 for f in fans if f not in (None, "Auto"))
+                              or known.get("fan_speeds")),
         has_automatic_fan_speed="Auto" in fans,
         has_cool_operation_mode="Cool" in modes,
         has_heat_operation_mode="Heat" in modes,
@@ -87,9 +110,10 @@ class HAPumpClient:
     """The part of the MELCloud Home client API that PumpGateway calls."""
 
     def __init__(self, gateway, *, write_timeout: float = 20.0, poll: float = 0.2,
-                 connect_wait: float = 15.0, last_modes: dict | None = None):
+                 connect_wait: float = 15.0, stored: list | None = None):
         self._gateway = gateway
-        self._last_modes = dict(last_modes or {})
+        self._last_modes = {u["id"]: u["mode"] for u in stored or [] if u.get("mode")}
+        self._known_caps = {u["id"]: u["caps"] for u in stored or [] if u.get("caps")}
         self._write_timeout = write_timeout
         self._poll = poll
         self._connect_wait = connect_wait
@@ -112,7 +136,8 @@ class HAPumpClient:
         for state in self._climates().values():
             if state.get("status") == "missing":
                 continue
-            unit = unit_from_state(state, self._last_modes.get(state["device_id"]))
+            unit = unit_from_state(state, self._last_modes.get(state["device_id"]),
+                                   self._known_caps.get(state["device_id"]))
             if unit.operation_mode is not None:
                 self._last_modes[state["device_id"]] = unit.operation_mode.value
             units.append(unit)
@@ -160,14 +185,14 @@ class HAPumpClient:
             raise PumpCommandError(cmd.get("detail") or cmd["state"])
 
 
-def client_factory(gateway, last_modes=None):
+def client_factory(gateway, stored=None):
     """A PumpGateway client factory: starts the HA gateway thread with the
-    pump loop and stops it at teardown. ``last_modes`` returns the stored
-    mode of each unit, for units that are off at start."""
+    pump loop and stops it at teardown. ``stored`` returns the pump store's
+    unit states (last mode and capabilities)."""
     def factory():
         gateway.start()
 
         async def teardown():
             await asyncio.get_running_loop().run_in_executor(None, gateway.stop)
-        return HAPumpClient(gateway, last_modes=last_modes() if last_modes else None), teardown
+        return HAPumpClient(gateway, stored=stored() if stored else None), teardown
     return factory

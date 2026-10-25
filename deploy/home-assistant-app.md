@@ -75,7 +75,7 @@ Decommission akvaario's copy after two quiet weeks.
    still runs with `pumps: melcloud`:
 
    ```sh
-   docker exec addon_b51a7d83_villa_kuppis \
+   docker exec app_b51a7d83_villa_kuppis \
      python -m villa_kuppis.pump_parity --config /data/villa-kuppis.json compare
    ```
 
