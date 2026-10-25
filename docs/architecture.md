@@ -10,7 +10,7 @@ Revised on 20 October 2026 to the two-site Home Assistant design (card H1.1), an
   - **Home (`home-server`):** an HP OmniBook laptop (Ryzen AI 5 340, 16 GB, 512 GB NVMe). Villa Kuppis runs on the host in Docker Compose; the Home Assistant VM has the MELCloud Home integration.
   - **Cottage (`cottage-server`):** an HP MP9 G4 mini-PC (Core i3-8100T, 8 GB, 256 GB NVMe, Ethernet). The Home Assistant VM has the Matter Server app and the room controller.
   - The hosts also keep the owner's photo copies and family shares; those are outside Villa Kuppis.
-- Home pumps: Home Assistant's MELCloud Home integration after a parity test (H1.3). The direct `aiomelcloudhome` client stays as the rollback path until then.
+- Home pumps: Home Assistant's MELCloud Home integration since 25 October 2026 (parity test H1.3 passed). The direct `aiomelcloudhome` client stays as the rollback path (`pumps: melcloud`).
 - Cottage: four Mill Gen 4 heaters (Matter over Wi-Fi) and two IKEA ALPSTUGA sensors (Matter over Thread) controlled locally by the cottage Home Assistant. The Google Home Speaker (2026) stays as Thread border router and secondary controller.
 - Villa Kuppis owns prices, forecasts, learning, plans, visits, history and settings. Each Home Assistant owns pairing, actual device state and immediate commands. The cottage Home Assistant also owns the local safe fallback.
 - No inbound ports, no public Home Assistant, no paid services. Tailscale (free plan), Elering and FMI.

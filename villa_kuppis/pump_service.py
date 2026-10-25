@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import sqlite3
 import threading
@@ -967,6 +968,7 @@ class PumpGateway:
                        actor: str) -> None:
         result, detail = "failed", ""
         cancelled = False
+        started = asyncio.get_running_loop().time()
         try:
             try:
                 unit = await self._read_unit(unit_id)
@@ -998,6 +1000,10 @@ class PumpGateway:
             with self._lock:
                 self._pending.pop(unit_id, None)
             if not cancelled:
+                logging.getLogger(__name__).info(
+                    "Command %s on %s: %s %r %s in %.1f s%s", event_id, unit_id, action,
+                    value, result, asyncio.get_running_loop().time() - started,
+                    f" ({detail})" if detail else "")
                 try:
                     self._store.finish_event(event_id, result, detail)
                 except sqlite3.Error:

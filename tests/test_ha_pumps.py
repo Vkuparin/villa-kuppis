@@ -95,7 +95,9 @@ class HAPumpServiceTests(unittest.TestCase):
         self.assertTrue(state["caps"]["modes"]["Automatic"])
 
     def test_commands_are_confirmed_through_home_assistant(self):
-        self.assertEqual(self.finish("setpoint", 22.5)["result"], "confirmed")
+        with self.assertLogs("villa_kuppis.pump_service", "INFO") as logs:
+            self.assertEqual(self.finish("setpoint", 22.5)["result"], "confirmed")
+        self.assertRegex(logs.output[0], r"setpoint 22\.5 confirmed in \d+\.\d s")
         self.assertEqual(self.finish("fan", "Three")["result"], "confirmed")
         self.assertEqual(self.finish("mode", "Dry")["result"], "confirmed")
         self.assertEqual(self.finish("power", False)["result"], "confirmed")

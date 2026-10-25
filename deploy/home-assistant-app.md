@@ -68,6 +68,8 @@ Decommission akvaario's copy after two quiet weeks.
 
 ## Pumps through Home Assistant (phase 2)
 
+Done on 25 October 2026; the steps stay here for a rebuild.
+
 1. The owner adds the MELCloud Home integration in home-haos with his own
    sign-in (Settings > Devices & services). No Home Assistant automations on
    the pumps: one writer at a time.

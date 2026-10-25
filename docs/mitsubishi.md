@@ -2,7 +2,7 @@
 
 ## Installation
 
-At home. Not in Google Home. Planned to move behind the home Home Assistant (card H1.3); see [Home Assistant route](#home-assistant-route-planned).
+At home. Not in Google Home. Planned to move behind the home Home Assistant (card H1.3); see [Home Assistant route](#home-assistant-route).
 
 | Indoor unit | Outdoor unit | Wi-Fi adapter | Route |
 | --- | --- | --- | --- |
@@ -33,7 +33,7 @@ Both are unofficial. No new hardware is needed, and the MELCloud Home app keeps 
 
 **Local alternative, only if the cloud proves unreliable:** replace a MAC-597 with a CN105 serial board running [ESPHome](https://esphome.io/components/climate/mitsubishi_cn105/). An [owner report](https://github.com/echavet/MitsubishiCN105ESPHome/discussions/317) confirms MSZ-LN25VG2W and MSZ-LN35VG2W. This takes the adapter's connector, so MELCloud Home stops working on that unit.
 
-## Home Assistant route (planned)
+## Home Assistant route
 
 Home Assistant's [MELCloud Home integration](https://www.home-assistant.io/integrations/melcloud_home) exposes each air-to-air indoor unit as a `climate` entity, with capabilities depending on the unit; it polls the cloud about every 60 seconds. Card H1.3 compares it with today's client on all three units before anything relies on it:
 
@@ -43,6 +43,8 @@ Home Assistant's [MELCloud Home integration](https://www.home-assistant.io/integ
 - update latency, and whether the known HTTP-500-after-success writes resolve by read-back.
 
 Only one automation writer at a time: pause the Windows service's plan before Home Assistant writes, and keep a tested switch back to the direct client. If parity fails, the direct client stays for the pumps (H1.5). No HA acceptance is claimed until it has been run.
+
+**Result, 25 October 2026:** passed on all three units (H1.3 card). The integration reports `hvac_modes` off/heat/cool/auto/dry/fan_only, fans `auto` and `speed_1`-`speed_5`, one 7-35 °C range and no temperature step, and an off unit's state is `off` without its mode. Villa Kuppis keeps MELCloud's per-mode ranges (16-31 °C for cooling), half steps and the last mode of an off unit from its own store. `climate.turn_on` brought Olohuone back in Cool. The pumps have run through Home Assistant since then.
 
 ## First functions
 
