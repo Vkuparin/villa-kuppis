@@ -17,12 +17,21 @@ Targets below `safe_setpoint` are raised to it and targets above `max_target` ar
 
 The integration has no cloud or network access of its own. Without the home server, Tailscale or the internet, the target expires and the room drops to `fallback`.
 
+## Stand-in devices until the real ones arrive
+
+`custom_components/villa_kuppis_simulator` gives the cottage Home Assistant heaters and sensors that look like what the Matter integration gives for the Mill Gen4 and the ALPSTUGA: `climate.sim_mill_<room>_<n>` (modes off/heat, 5–35 °C in 0.5 °C steps, own thermostat, `hvac_action`, a 2 s command delay, refuses commands when unreachable but keeps heating) and `sensor.sim_alpstuga_<room>_temperature`, `_humidity`, `_carbon_dioxide` and `_pm25` (written on change and at least every 5 minutes). Each room is one thermal mass losing heat to the outdoor temperature (by default the Met.no `weather.forecast_home`); the values are in [packages/villa_kuppis_simulator.yaml](packages/villa_kuppis_simulator.yaml) and the state survives restarts. Everything carries `simulated: true` and the names start with "Sim".
+
+To rehearse failures: `villa_kuppis_simulator.set_available` takes entities off the network and back (one ALPSTUGA's readings go together), `villa_kuppis_simulator.set_room_temperature` jumps a room's temperature. A change to a stand-in heater in the Home Assistant UI is a hand change, like one in Google Home.
+
+**Switching a room to the real devices:** in `/config/packages/villa_kuppis.yaml`, replace the room's `sim_` entity ids with the real ones, delete `/config/packages/villa_kuppis_simulator.yaml` and `/config/custom_components/villa_kuppis_simulator`, and restart Home Assistant. Villa Kuppis rebinds the room by itself: each status sensor publishes its room's devices (`devices` attribute) and Villa Kuppis binds them as `<room>-temperature`, `-humidity`, `-co2`, `-pm25` and `<room>-heater-N`. The device ids stay, so the room's history continues across the switch (the simulated part included).
+
 ## Install
 
-1. Copy `custom_components/villa_kuppis_cottage/` from this repository to `/config/custom_components/` on the cottage Home Assistant (Samba share or the File editor / Studio Code Server app). HACS should also work (add this repository as a custom integration repository; not tried yet).
-2. Copy [packages/villa_kuppis.yaml](packages/villa_kuppis.yaml) to `/config/packages/`, enable packages in `configuration.yaml` (see the file's header) and replace the placeholder entity ids with the real ones.
-3. Restart Home Assistant. Each room gets `sensor.villa_kuppis_<room>_target`; its attributes show the mode, the reason, the target's revision and expiry.
-4. Create a long-lived access token for a dedicated, non-admin Home Assistant user `villa-kuppis` and store it on the home server outside Git (H2.3). The home server reaches this VM through a Tailscale subnet route on `cottage-server` ([deploy/home/README.md](../home/README.md#cottage-connection)).
+1. In the Terminal & SSH app of the cottage Home Assistant, run
+   `curl -fsSL https://raw.githubusercontent.com/Vkuparin/villa-kuppis/main/deploy/cottage/install.sh | sh -s -- --with-simulator`.
+   It copies the integrations to `/config/custom_components/`, adds [packages/villa_kuppis.yaml](packages/villa_kuppis.yaml) (and the simulator's package) unless they are already there, loads packages in `configuration.yaml` (backup next to it), checks the configuration and restarts Home Assistant. Run it again without `--with-simulator` to update the integration later; edited packages are kept.
+2. Each room gets `sensor.villa_kuppis_<room>_target`; its attributes show the mode, the reason, the target's revision and expiry, and the room's devices.
+3. Create a long-lived access token for a dedicated, non-admin Home Assistant user `villa-kuppis` and put it, with `cottage_url: wss://cottage-haos.corvus-stairs.ts.net/api/websocket`, in the options of the Villa Kuppis app at home (`cottage_token`). Villa Kuppis binds the rooms' devices itself.
 
 ## Services
 
@@ -34,4 +43,4 @@ The integration has no cloud or network access of its own. Without the home serv
 - Decision logic and 24-hour room simulations: `python -m unittest discover -s tests -p "test_cottage_control.py" -v` (main environment, no Home Assistant).
 - The integration inside Home Assistant core, in a separate environment: `pip install -r tests_ha/requirements.txt`, then `python -m pytest -c tests_ha/pytest.ini tests_ha`.
 
-Still to do with the devices (H2.1, H2.2): check how often the ALPSTUGA reports (`sensor_max_age_minutes`), the heaters' real minimum and step over Matter, how a Google Home change shows up in Home Assistant, and an owner-approved test with the WAN unplugged.
+Still to do with the real devices (H2.1, H2.2): check how often the ALPSTUGA reports (`sensor_max_age_minutes`), the heaters' real minimum and step over Matter, how a Google Home change shows up in Home Assistant, and an owner-approved test with the WAN unplugged.

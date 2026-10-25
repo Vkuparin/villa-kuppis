@@ -29,6 +29,8 @@ Codex, Hermes and Claude Code (through `CLAUDE.md`) all read this file. This is 
 | Cooling optimizer tests (recorded price days, synthetic room, mock devices) | .venv\Scripts\python -m unittest discover -s tests -p "test_optimizer.py" -v |
 | Home Assistant gateway tests (fake HA WebSocket server on localhost) | .venv\Scripts\python -m unittest discover -s tests -p "test_ha_gateway.py" -v |
 | Cottage controller simulations (no Home Assistant) | .venv\Scripts\python -m unittest discover -s tests -p "test_cottage_control.py" -v |
+| Cottage stand-in devices and auto-bindings (no Home Assistant) | .venv\Scripts\python -m unittest discover -s tests -p "test_cottage_simulator.py" -v; .venv\Scripts\python -m unittest discover -s tests -p "test_cottage_bindings.py" -v |
+| Install or update the cottage integration (cottage-haos Terminal & SSH app; restarts HA) | curl -fsSL https://raw.githubusercontent.com/Vkuparin/villa-kuppis/main/deploy/cottage/install.sh \| sh -s -- [--with-simulator] |
 | Cottage integration in Home Assistant core (separate venv: pip install -r tests_ha/requirements.txt; Linux/WSL) | python -m pytest -c tests_ha/pytest.ini tests_ha |
 | Pump app tests (mock devices and localhost HTTP) | .venv\Scripts\python -m unittest discover -s tests -p "test_pump_app.py" -v |
 | Cottage readings, history and events tests (fake Home Assistant on localhost, injected clocks) | .venv\Scripts\python -m unittest discover -s tests -p "test_cottage_view.py" -v |

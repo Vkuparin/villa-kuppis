@@ -1,0 +1,25 @@
+set_available:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          multiple: true
+    available:
+      required: true
+      selector:
+        boolean:
+set_room_temperature:
+  fields:
+    room:
+      required: true
+      selector:
+        text:
+    temperature:
+      required: true
+      selector:
+        number:
+          min: -30
+          max: 40
+          step: 0.5
+          unit_of_measurement: "°C"

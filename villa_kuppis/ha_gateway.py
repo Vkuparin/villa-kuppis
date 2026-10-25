@@ -634,6 +634,12 @@ class HomeAssistantGateway:
             return "stale"
         return "ok"
 
+    def attributes(self, entity_id: str) -> dict | None:
+        """The latest attributes of any entity, bound or not (None when absent)."""
+        with self._lock:
+            raw = self._raw.get(entity_id)
+            return dict(raw.get("attributes") or {}) if raw is not None else None
+
     def snapshot(self) -> dict[str, dict]:
         """Every bound device: its latest reading, status and pending command."""
         now = self._now()

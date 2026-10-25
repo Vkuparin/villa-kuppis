@@ -22,6 +22,13 @@ Rooms are stored on the bindings (``device_binding.room``). A sensor's role
 comes from its device id (``large-temperature``, ``large-humidity``,
 ``large-co2``, ``large-pm25``) or else from the entity's device class.
 ``FakeSiteGateway`` has the same interface and drives the offline demo.
+
+Bindings follow the cottage Home Assistant: each room status sensor
+publishes the room's devices (``devices`` attribute, from the cottage
+package), and ``CottageSite`` binds them as ``<room>-status``,
+``<room>-temperature``/``-humidity``/``-co2``/``-pm25`` and
+``<room>-heater-N``. Moving from the stand-in devices to the real ones is
+an edit of the cottage package; the device ids, and so the history, stay.
 """
 
 from __future__ import annotations
@@ -40,8 +47,8 @@ from urllib.parse import urlsplit
 from .cottage_targets import ACTOR as PLAN_ACTOR
 from .cottage_targets import CottageTargetSender
 from .credential_file import read_token_file
-from .ha_gateway import (DEFAULT_ENTITY_STALE_AFTER, Binding, BindingStore,
-                         HomeAssistantGateway)
+from .ha_gateway import (DEFAULT_ENTITY_STALE_AFTER, Binding, BindingError,
+                         BindingStore, HomeAssistantGateway)
 from .pump_service import (DB_FILENAME, HISTORY_INTERVAL_SECONDS, _iso,
                            _to_epoch)
 from .visit import MAX_TARGET, MIN_TARGET, VisitError, VisitPlan, VisitStore
@@ -119,13 +126,33 @@ def make_cottage_site(data_dir, site: SiteConfig, *, now=utc_now,
     gateway = HomeAssistantGateway(SITE_ID, site.url,
                                    lambda: read_token_file(token_file), store, now=now)
     return CottageSite(data_dir, gateway, lambda: store.bindings(SITE_ID), now=now,
-                       sample_interval=sample_interval, on_close=store.close)
+                       sample_interval=sample_interval, on_close=store.close,
+                       binding_store=store)
 
 
 # --- roles ---------------------------------------------------------------------------
 
 def status_entity(room: str) -> str:
     return f"sensor.villa_kuppis_{room}_target"
+
+
+def published_bindings(room: str, devices, label_of: Callable[[str], str]) -> list:
+    """The bindings a room status sensor's ``devices`` attribute asks for."""
+    out = [Binding(SITE_ID, f"{room}-status", status_entity(room), "sensor",
+                   f"{ROOMS[room]}: tila", room)]
+    if not isinstance(devices, dict):
+        return out
+    for role in SENSOR_ROLES:
+        entity_id = devices.get(role)
+        if isinstance(entity_id, str) and entity_id.startswith("sensor."):
+            out.append(Binding(SITE_ID, f"{room}-{role}", entity_id, "sensor",
+                               label_of(entity_id), room))
+    heaters = devices.get("heaters")
+    for index, entity_id in enumerate(heaters if isinstance(heaters, list) else [], start=1):
+        if isinstance(entity_id, str) and entity_id.startswith("climate."):
+            out.append(Binding(SITE_ID, f"{room}-heater-{index}", entity_id, "climate",
+                               label_of(entity_id), room))
+    return out
 
 
 def role_of(binding: Binding, state: dict | None = None) -> str | None:
@@ -286,8 +313,10 @@ class CottageSite:
     def __init__(self, data_dir, gateway, bindings: Callable[[], list], *,
                  now=utc_now, sample_interval: float = DEFAULT_SAMPLE_INTERVAL,
                  on_close: Callable[[], None] | None = None,
-                 target_interval: float = DEFAULT_TARGET_INTERVAL):
+                 target_interval: float = DEFAULT_TARGET_INTERVAL,
+                 binding_store: BindingStore | None = None):
         self.site_id = SITE_ID
+        self._binding_store = binding_store
         self._gateway = gateway
         self._bindings = bindings
         self._now = now
@@ -500,10 +529,50 @@ class CottageSite:
             if reload is not None:
                 reload()
 
+    def follow_published(self) -> bool:
+        """Bind what the room status sensors publish; True when anything changed."""
+        attributes = getattr(self._gateway, "attributes", None)
+        store = self._binding_store
+        if store is None or attributes is None:
+            return False
+
+        def label_of(entity_id: str) -> str:
+            name = (attributes(entity_id) or {}).get("friendly_name")
+            return name if isinstance(name, str) and name else entity_id
+
+        current = {b.device_id: b for b in store.bindings(SITE_ID)}
+        changed = False
+        for room in ROOMS:
+            attrs = attributes(status_entity(room))
+            if attrs is None or "devices" not in attrs:
+                continue   # an older integration or not connected: keep what is bound
+            wanted = {b.device_id: b for b in published_bindings(room, attrs["devices"], label_of)}
+            ours = [d for d, b in current.items() if b.room == room]
+            # Unbind first, so an entity can move between device ids.
+            for device_id in ours:
+                if device_id not in wanted or current[device_id].entity_id != wanted[device_id].entity_id:
+                    store.unbind(SITE_ID, device_id)
+                    current.pop(device_id)
+                    changed = True
+            for device_id, b in wanted.items():
+                if current.get(device_id) == b:
+                    continue
+                try:
+                    store.bind(SITE_ID, device_id, b.entity_id, b.kind, b.label, room)
+                except (BindingError, ValueError) as error:
+                    logging.warning("Cottage binding %s skipped: %s", device_id, error)
+                    continue
+                if device_id not in current:
+                    logging.info("Cottage %s bound to %s", device_id, b.entity_id)
+                current[device_id] = b
+                changed = True
+        return changed
+
     def sample(self) -> int:
         """Record every fresh reading once; returns the rows written."""
         with self._sample_lock:
             now = int(self._now().timestamp())
+            self.follow_published()
             bindings = self._bindings()
             self._sync_bindings(bindings)
             snapshot = self._gateway.snapshot()

@@ -46,6 +46,11 @@ ROOM_SCHEMA = vol.Schema({
     vol.Required("name"): cv.string,
     vol.Required("sensor"): cv.entity_id,
     vol.Required("heaters"): vol.All(cv.ensure_list, [cv.entity_domain("climate")]),
+    # Other readings of the room's ALPSTUGA: not used for control, only
+    # published to Villa Kuppis with the room's devices.
+    vol.Optional("humidity"): cv.entity_id,
+    vol.Optional("co2"): cv.entity_id,
+    vol.Optional("pm25"): cv.entity_id,
 })
 
 CONFIG_SCHEMA = vol.Schema({
@@ -121,6 +126,8 @@ class Room:
         self.name = conf["name"]
         self.sensor = conf["sensor"]
         self.heaters = list(conf["heaters"])
+        self.devices = {"temperature": self.sensor, "heaters": self.heaters,
+                        **{k: conf[k] for k in ("humidity", "co2", "pm25") if k in conf}}
         self.memory = control.RoomMemory()
         self.target: control.Target | None = None
         self.decision: control.Decision | None = None

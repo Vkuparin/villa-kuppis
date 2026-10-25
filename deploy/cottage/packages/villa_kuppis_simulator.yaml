@@ -1,0 +1,38 @@
+# Stand-in Mill Gen4 heaters and IKEA ALPSTUGA sensors for the cottage Home
+# Assistant, until the real devices are commissioned (H2.1). Delete this file
+# (and /config/custom_components/villa_kuppis_simulator) when they are in.
+#
+# Entities: climate.sim_mill_<room>_<n> in the order below, and
+# sensor.sim_alpstuga_<room>_temperature / _humidity / _carbon_dioxide / _pm25.
+# Each room is one thermal mass losing heat to the outdoors; each heater runs
+# its own thermostat on a sensor that reads sensor_bias above the room.
+villa_kuppis_simulator:
+  # Outdoor temperature: a sensor's state or a weather entity's temperature
+  # (Home Assistant's default Met.no forecast is weather.forecast_home).
+  # Falls back to outdoor_temperature when the entity has no number.
+  outdoor_entity: weather.forecast_home
+  outdoor_temperature: 0
+  # Matter writes reach the heater after a moment.
+  command_delay_seconds: 2
+  rooms:
+    large:
+      name: Iso huone
+      # Loss 60 W/K and 0.8 kWh/K: 5 -> 21 °C takes about 11 hours at -10 °C.
+      loss_w_per_k: 60
+      capacity_kwh_per_k: 0.8
+      start_temperature: 6
+      heaters:
+        - name: Mill 1050 W (1)
+          power_w: 1050
+        - name: Mill 1050 W (2)
+          power_w: 1050
+        - name: Mill 500 W
+          power_w: 500
+    small:
+      name: Pieni huone
+      loss_w_per_k: 22
+      capacity_kwh_per_k: 0.3
+      start_temperature: 6
+      heaters:
+        - name: Mill 1050 W
+          power_w: 1050

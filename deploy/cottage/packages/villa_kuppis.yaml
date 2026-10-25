@@ -4,12 +4,16 @@
 #   homeassistant:
 #     packages: !include_dir_named packages
 #
-# Entity ids below are placeholders until the devices are commissioned
-# (H2.1); replace them with the ones Home Assistant shows.
+# The rooms below point at the stand-in devices of villa_kuppis_simulator.yaml
+# until the real ones are commissioned (H2.1). To switch a room to the real
+# devices: replace its entity ids with the ones Home Assistant shows for the
+# Mill heaters and the ALPSTUGA, delete villa_kuppis_simulator.yaml and
+# restart Home Assistant. Villa Kuppis rebinds the room by itself (from the
+# room status sensor's `devices` attribute) and keeps its history.
 villa_kuppis_cottage:
-  # Heater setpoint when there is no valid target from Villa Kuppis, and the
-  # lowest room target accepted. Open owner question: confirm after H2.1.
-  safe_setpoint: 7
+  # Heater setpoint when there is no valid target from Villa Kuppis (also
+  # when Automaatio is off), and the lowest room target accepted.
+  safe_setpoint: 5
   # Heater setpoint when the room is warm enough (driven low).
   low_setpoint: 5
   max_target: 25
@@ -17,6 +21,7 @@ villa_kuppis_cottage:
   boost: 3
   hysteresis: 0.3
   min_dwell_minutes: 10
+  # ALPSTUGA reports on change; the stand-in at least every 5 minutes.
   sensor_max_age_minutes: 30
   # A change made by hand (heater, Google Home, HA UI) pauses the room.
   manual_hold_minutes: 240
@@ -24,13 +29,19 @@ villa_kuppis_cottage:
   rooms:
     large:
       name: Iso huone
-      sensor: sensor.alpstuga_iso_huone_temperature
+      sensor: sensor.sim_alpstuga_large_temperature
+      humidity: sensor.sim_alpstuga_large_humidity
+      co2: sensor.sim_alpstuga_large_carbon_dioxide
+      pm25: sensor.sim_alpstuga_large_pm25
       heaters:
-        - climate.mill_iso_huone_1
-        - climate.mill_iso_huone_2
-        - climate.mill_iso_huone_500
+        - climate.sim_mill_large_1   # 1050 W
+        - climate.sim_mill_large_2   # 1050 W
+        - climate.sim_mill_large_3   # 500 W
     small:
       name: Pieni huone
-      sensor: sensor.alpstuga_pieni_huone_temperature
+      sensor: sensor.sim_alpstuga_small_temperature
+      humidity: sensor.sim_alpstuga_small_humidity
+      co2: sensor.sim_alpstuga_small_carbon_dioxide
+      pm25: sensor.sim_alpstuga_small_pm25
       heaters:
-        - climate.mill_pieni_huone
+        - climate.sim_mill_small_1   # 1050 W

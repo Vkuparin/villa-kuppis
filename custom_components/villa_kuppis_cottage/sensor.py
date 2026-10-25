@@ -2,7 +2,8 @@
 
 State: the effective room target (°C), or unknown in manual mode.
 Attributes carry what Villa Kuppis reads back after ``set_target``
-(revision, requested target, validity) and the controller's mode.
+(revision, requested target, validity), the controller's mode and the
+room's devices (``devices``), which Villa Kuppis binds automatically.
 """
 
 from __future__ import annotations
@@ -61,4 +62,7 @@ class RoomTargetSensor(SensorEntity):
             "valid_until": target.valid_until.isoformat() if target else None,
             "manual_until": memory.manual_until.isoformat() if memory.manual_until else None,
             "manual_by": memory.manual_by,
+            # Villa Kuppis binds the room's devices from this: rebinding a
+            # room is an edit of the package, nothing in Villa Kuppis.
+            "devices": room.devices,
         }

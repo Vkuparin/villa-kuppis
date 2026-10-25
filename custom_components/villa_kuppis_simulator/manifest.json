@@ -1,0 +1,10 @@
+{
+  "domain": "villa_kuppis_simulator",
+  "name": "Villa Kuppis cottage simulator",
+  "codeowners": ["@Vkuparin"],
+  "dependencies": [],
+  "documentation": "https://github.com/Vkuparin/villa-kuppis/blob/main/deploy/cottage/README.md",
+  "iot_class": "calculated",
+  "requirements": [],
+  "version": "0.1.0"
+}
