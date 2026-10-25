@@ -250,6 +250,8 @@ class LiveSwitchTests(unittest.TestCase):
             self.assertEqual(service.store.unit_state(UNIT)["setpoint"], 24.0)
             # The snapshot is local, so it is read more often than the cloud.
             self.assertEqual(service.gateway._poll_interval, HA_POLL_INTERVAL)
+            # Phone alerts go through the same home Home Assistant.
+            self.assertIsNotNone(service.alerts)
         finally:
             service.close()
             asyncio.run_coroutine_threadsafe(ha.stop(), loop).result(10)

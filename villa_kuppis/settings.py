@@ -119,6 +119,18 @@ DEFINITIONS: tuple[Definition, ...] = (
                "°C", 0, 30, help="Älykkään ylläpitolämmityksen alaraja: tämän alle lämpötila ei saa laskea (ei vielä käytössä).", kinds=("heat",)),
     Definition("smart_max_c", "Suurin varaava lämpötila", "Lämmitys",
                "number", 12.0, "°C", 0, 30, help="Älykkään ylläpitolämmityksen yläraja: halvoilla tunneilla lämmitetään enintään tähän (ei vielä käytössä).", kinds=("heat",)),
+    Definition("alert_pump", "Ilmoitus, kun pumppu ei toimi", "Ilmoitukset", "bool", True,
+               help="Puhelimeen tulee ilmoitus, kun pumppu ei ole käytettävissä tai ilmoittaa laitevirheestä 30 minuutin ajan, ja toinen, kun pumppu toimii taas. Ilmoitus menee jokaiseen puhelimeen, jonka Home Assistant -sovellus on yhdistetty kodin Home Assistantiin.",
+               kinds=("cool",)),
+    Definition("alert_cold", "Ilmoitus kylmästä huoneesta", "Ilmoitukset", "bool", True,
+               help="Puhelimeen tulee ilmoitus, kun mökin huone on kylmähälytyksen rajaa kylmempi, ja toinen, kun huone on asteen rajaa lämpimämpi. Ilmoitus menee jokaiseen puhelimeen, jonka Home Assistant -sovellus on yhdistetty kodin Home Assistantiin.",
+               kinds=("heat",)),
+    Definition("cold_alert_c", "Kylmähälytyksen raja", "Ilmoitukset", "number", 3.0,
+               "°C", -20, 20, help="Mökin huoneen lämpötila, jota kylmemmästä huoneesta tulee ilmoitus.",
+               kinds=("heat",), shown_if=("alert_cold", (True,))),
+    Definition("alert_offline", "Ilmoitus, kun mökki ei vastaa", "Ilmoitukset", "bool", True,
+               help="Puhelimeen tulee ilmoitus, kun mökin Home Assistant ei ole vastannut 30 minuuttiin, ja toinen, kun yhteys palaa. Ilmoitus menee jokaiseen puhelimeen, jonka Home Assistant -sovellus on yhdistetty kodin Home Assistantiin.",
+               kinds=("heat",)),
 )
 BY_KEY = {d.key: d for d in DEFINITIONS}
 

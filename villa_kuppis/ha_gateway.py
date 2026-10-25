@@ -211,6 +211,9 @@ class HAConnection:
                                   "event_type": "state_changed"})
         await asyncio.wait_for(fut, timeout)
 
+    async def get_services(self, timeout: float | None = None) -> dict:
+        return await self.request({"type": "get_services"}, timeout)
+
     async def call_service(self, domain: str, service: str, entity_id: str | None,
                            data: dict, timeout: float | None = None) -> Any:
         payload = {"type": "call_service", "domain": domain, "service": service,
@@ -746,6 +749,36 @@ class HomeAssistantGateway:
             with self._lock:
                 return self._finish_locked(cmd, "failed", "Home Assistant is not connected")
         return out
+
+    def services(self, domain: str) -> list[str]:
+        """Names of one domain's services in Home Assistant; blocking.
+
+        Raises HAConnectionClosed while disconnected. Not for the gateway's
+        own event loop thread.
+        """
+        result = self._run(lambda conn: conn.get_services(timeout=self._command_timeout))
+        return sorted((result or {}).get(domain) or {})
+
+    def call(self, domain: str, service: str, data: dict) -> None:
+        """Call a service that targets no bound device (a notification); blocking.
+
+        Raises HAError when Home Assistant refuses it and HAConnectionClosed
+        or TimeoutError when there is no answer.
+        """
+        self._run(lambda conn: conn.call_service(domain, service, None, data,
+                                                 timeout=self._command_timeout))
+
+    def _run(self, make):
+        with self._lock:
+            conn, loop = self._conn, self._loop
+        if conn is None or loop is None or loop.is_closed():
+            raise HAConnectionClosed("Home Assistant is not connected")
+        future = asyncio.run_coroutine_threadsafe(make(conn), loop)
+        try:
+            return future.result(self._command_timeout + 5)
+        except TimeoutError:
+            future.cancel()
+            raise
 
     def _finish_locked(self, cmd: Command, result: str, detail: str) -> dict:
         cmd.state = result

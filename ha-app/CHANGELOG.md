@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.15
+
+- Puhelinilmoitukset kodin Home Assistantin kautta: mökin huone on kylmä, mökki ei vastaa 30 minuuttiin tai kodin pumppu ei toimi 30 minuuttiin. Jokaisella ilmoituksella on oma kytkin asetuksissa.
+
 ## 0.4.14
 
 - Pumppujen tila luetaan Home Assistantista 10 sekunnin välein minuutin sijaan.

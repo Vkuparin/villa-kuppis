@@ -50,6 +50,7 @@ class FakeHA:
         self.event_delay = 0.0
         self.hang = False
         self.connections = 0
+        self.services: dict[str, dict] = {"climate": {"set_temperature": {}}}
         self._tasks: set[asyncio.Task] = set()
 
     async def start(self) -> None:
@@ -126,6 +127,9 @@ class FakeHA:
                     entry[1] = msg_id
                     await ws.send_json({"id": msg_id, "type": "result", "success": True,
                                         "result": None})
+                elif kind == "get_services":
+                    await ws.send_json({"id": msg_id, "type": "result", "success": True,
+                                        "result": self.services})
                 elif kind == "call_service":
                     await self._call(ws, data)
         finally:
@@ -133,7 +137,7 @@ class FakeHA:
         return ws
 
     async def _call(self, ws, data) -> None:
-        entity_id = data["target"]["entity_id"]
+        entity_id = (data.get("target") or {}).get("entity_id")
         service = data["service"]
         self.calls.append((data["domain"], service, entity_id, data["service_data"]))
         if self.hang:
@@ -145,7 +149,7 @@ class FakeHA:
             return
         await ws.send_json({"id": data["id"], "type": "result", "success": True,
                             "result": {"context": {}}})
-        if self.apply:
+        if self.apply and entity_id is not None:
             task = asyncio.ensure_future(self._apply(entity_id, service, data["service_data"]))
             self._tasks.add(task)
             task.add_done_callback(self._tasks.discard)

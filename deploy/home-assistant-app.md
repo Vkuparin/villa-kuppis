@@ -96,6 +96,16 @@ Done on 25 October 2026; the steps stay here for a rebuild.
 Rollback: set `pumps` back to `melcloud` (the credentials stay in the
 options) and restart the app.
 
+## Phone alerts
+
+With the pumps through Home Assistant, Villa Kuppis sends phone alerts through
+home-haos: a cold cottage room, the cottage Home Assistant unreachable for 30
+minutes, and a home pump unavailable or in error for 30 minutes, each once
+when it starts and once when it is over. They go to every
+`notify.mobile_app_*` service, that is every phone whose Home Assistant
+companion app is signed in to home-haos. Each alert has its own switch under
+Asetukset > Ilmoitukset. The app log says when no phone is found.
+
 ## Cottage later
 
 `cottage-haos` is on the tailnet itself, so no subnet route is needed.

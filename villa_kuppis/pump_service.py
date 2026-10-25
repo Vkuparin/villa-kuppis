@@ -1078,7 +1078,8 @@ class PumpService:
                  automation_default_on: bool = True,
                  price_transport=None,
                  price_fetch_enabled: bool = True,
-                 cottage_factory=None):
+                 cottage_factory=None,
+                 notifier=None):
         self._data_dir = Path(data_dir)
         self._now = now
         self._stale_after = stale_after
@@ -1124,6 +1125,11 @@ class PumpService:
             self.cottage.configure_targets(
                 prices_db=self._prices_db, overrides=settings_store.overrides,
                 automation_on=self.automation.automation_on)
+        # Phone alerts (alerts.py) when a notifier is given.
+        self.alerts = None
+        if notifier is not None:
+            from .alerts import AlertMonitor
+            self.alerts = AlertMonitor(self, notifier, SettingsStore(self.store.path), now=now)
         self._closed = False
 
     # -- lifecycle --
@@ -1146,6 +1152,8 @@ class PumpService:
         self.automation.start()
         if self.cottage is not None:
             self.cottage.start()
+        if self.alerts is not None:
+            self.alerts.start()
 
     def close(self) -> None:
         if self._closed:
@@ -1156,6 +1164,8 @@ class PumpService:
         if self._weather_thread is not None:
             self._weather_thread.join(timeout=10.0)
             self._weather_thread = None
+        if self.alerts is not None:
+            self.alerts.stop()
         self.automation.stop()
         self.gateway.stop()
         if self.cottage is not None:
@@ -1527,10 +1537,12 @@ def make_live_service(data_dir, *, credentials=None, weather_sites=None,
                       sites=None, pump_site=None) -> PumpService:
     """Live service with explicit credentials, or development environment values.
 
-    The unattended runner supplies credentials from Windows Credential Manager.
+    The runtime supplies MELCloud credentials from its credential file.
     Values are never printed or logged. The pumps are read every
     DEFAULT_POLL_INTERVAL seconds from the cloud, or every HA_POLL_INTERVAL
     seconds through Home Assistant, unless ``poll_interval`` says otherwise.
+    With the pumps through Home Assistant, phone alerts go through the same
+    home Home Assistant.
     """
     import os
 
@@ -1562,8 +1574,10 @@ def make_live_service(data_dir, *, credentials=None, weather_sites=None,
         token_file = pump_site.token_file
         gateway = HomeAssistantGateway("home", pump_site.url,
                                        lambda: read_token_file(token_file), bindings)
+        from .alerts import HomeAssistantNotifier
         service = PumpService(data_dir, client=None, client_factory=ha_client_factory(
-            gateway, lambda: service.store.unit_states()), **common)
+            gateway, lambda: service.store.unit_states()),
+            notifier=HomeAssistantNotifier(gateway), **common)
         return service
 
     username = (credentials.username if credentials is not None else
