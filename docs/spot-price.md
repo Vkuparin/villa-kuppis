@@ -48,20 +48,29 @@ The pumps matter mostly for summer cooling, and they can be tested before the co
 | Setting | Default |
 | --- | --- |
 | Maximum temperature: cool at any price above this | 25 °C |
+| Price control (`Hintaohjaus`): off / fixed thresholds / optimized | Optimized. Off: the target is always the maximum and the price is not used; use it in the heating season so cooling does not compete with radiators |
 | Precooling temperature: cool down to this when the price is low | 21 °C |
-| Low and high price | Set by the owner |
-| Precooling in use (`Esijäähdytys käytössä`) | On. Off: the target is always the maximum and the optimizer does not precool; use it in the heating season so cooling does not compete with radiators |
-| Switch off when the price is high | Allowed |
-| Minimum off time, to protect the compressor | 30 minutes |
-| Run pump power by room temperature (`Ohjaa pumpun käyntiä lämpötilan mukaan`) | Off |
+| Low and high price (shown only with price control on) | 5 and 15 c/kWh |
+| The automation may switch the pump on and off (`Automaatio saa käynnistää ja sammuttaa pumpun`) | On |
+| Minimum time between power changes, to protect the compressor | 30 minutes |
+| Manual pause (`Käsiohjauksen tauko`) | 3 hours |
 
-- **Fixed thresholds:** as in mode 1, with the lowest matching temperature winning, never above the maximum. A rule may switch a unit off.
-- **Optimizer:** as in mode 2, in reverse. It precools in cheap periods, lets rooms warm towards the maximum in expensive ones, and switches units off when that is cheapest. It uses each room's learned warm-up and cool-down rates and the FMI forecast.
-- **Switching off:** a unit that was switched off comes back on when its room nears the maximum or the price drops, but not before the minimum off time.
-- **Power by temperature:** with the setting on, a unit in cooling mode is switched off when its room is 0.5 °C below the maximum and switched on when the room rises above the maximum (and the price is not high). Nothing is started when there is no need to cool. The minimum off time also limits how soon a unit that the automation started or stopped is switched the other way. It applies to units the household switched too. With the setting off, a unit the household switched off stays off, and only units the automation itself switched off for a high price come back.
+One controller per unit decides each minute (audit 2026-10-20, section 2.1):
+
+1. It leaves the unit alone while the automation is off, the unit is not in cooling mode, a command is waiting for confirmation, or the manual pause is on.
+2. The target is the plan's: the maximum, the precooling temperature in a cheap period, the optimizer's target, or the away maximum. In an expensive period the target is the maximum.
+3. With power control on, a unit that is on is switched off once its room is 0.5 °C below the target, and a unit that is off is switched on when its room is above the target. So in an expensive period a precooled room switches off and comes back only above the maximum. Every power change waits the minimum time after the unit's previous one. Nothing is started when there is no need to cool.
+4. A unit that is on gets the target as its setpoint whenever they differ.
+
+- **Fixed thresholds:** the lowest matching temperature wins, never above the maximum.
+- **Optimizer:** precools in cheap periods, lets rooms warm towards the maximum in expensive ones, and plans switch-offs when that is cheapest. It uses each room's learned warm-up and cool-down rates and the FMI forecast.
+- **Manual pause:** when the household changes a unit's power, setpoint or mode, in this app, in MELCloud Home or with the remote, the automation leaves that unit alone for the pause time. The card shows `Käsiohjaus klo 21.30 asti` and a `Palauta automaatio` button that ends the pause at once. A change counts as manual when someone other than `Suunnitelma` logged a command for the unit, or the unit changed with no command of the automation's to explain it. Fan changes do not pause. Pause 0 turns the pause off. To keep a unit off for good, set its mode to something other than cooling or turn power control off for that room.
+- **Without prices:** the target is the maximum (the away maximum when away), so the temperature control keeps working.
 - **Cooling only:** pump plans adjust only units that are in cooling mode and never change a unit's mode. In winter, rooms stay below the cooling setpoints and the pumps stay quiet. Because plans never change modes, the two units on the shared outdoor unit cannot be put in conflicting modes.
 
-**Automation switch:** the `Automaatio` switch in the page header turns the whole price and temperature automation on or off. Off, it sends no commands (cooling, precooling, optimizer, power management, night mode); the devices stay as they are, including a unit the automation had switched off for a high price. The switch is stored with the data and starts off unless the service configuration says `"plan": true`. Turning it on applies the plan at once, then every minute. A changed setting reaches the pumps in the next pass: the plan sends a target only when it differs from the last one it sent.
+**Automation switch:** the `Automaatio` switch in the page header turns the whole price and temperature automation on or off. Off, it sends no commands (cooling, precooling, optimizer, power control, night mode); the devices stay as they are, including a unit the automation had switched off. The switch is stored with the data and starts off unless the service configuration says `"plan": true`. Turning it on ends every manual pause and applies the plan at once, then every minute. A changed setting reaches the pumps in the next pass.
+
+**Settings migration (2026-10-25):** the old `Ohjaustapa`, `Esijäähdytys käytössä`, `Optimoitu jäähdytys`, `Sammuta kalliilla hinnalla` and `Ohjaa pumpun käyntiä lämpötilan mukaan` overrides are replaced once, at start, by `Hintaohjaus` and the power switch: precooling off becomes price control off and keeps only the old temperature switch; otherwise optimizer off becomes fixed thresholds, and either old power switch keeps power control on.
 
 **Home away:** a separate button (`Poissa kotoa`) switches home to an away setting. The default is to cool only above 28 °C, with no precooling. Pressing it again restores normal cooling. It is independent of the cottage visit.
 
@@ -89,13 +98,11 @@ The fit uses the last 28 days of stored readings in 15-minute steps and ordinary
 
 ## Cooling optimizer
 
-Card F5.4, in `villa_kuppis/optimizer.py`; `cooling.py` applies it. The setting `Optimoitu jäähdytys` (on by default, per site or room) uses it once the room's cooling rate is learned; until then, in away mode or with the setting off, the fixed thresholds apply.
+Card F5.4, in `villa_kuppis/optimizer.py`; `cooling.py` applies it. `Hintaohjaus: Optimoitu` (the default, per site or room) uses it once the room's cooling rate is learned; until then and in away mode the fixed thresholds apply.
 
-From the current period to the end of the known prices (today, and tomorrow once fetched) it picks a setpoint between the precooling temperature and the maximum, or off, for each 15-minute period. Off is allowed only where the fixed rule allows it (price at or above the high price, `Sammuta kalliilla hinnalla` on) and lasts at least the minimum off time. The cost is the compressor's share of each period at a nominal 1 kW plus a small fan load while on, so the estimates are relative. A room above the maximum carries a large penalty, so the plan stays within it whenever the unit can hold it. The cold left in the room when the prices run out is valued at the horizon's median price.
+From the current period to the end of the known prices (today, and tomorrow once fetched) it picks a setpoint between the precooling temperature and the maximum, or off, for each 15-minute period. Off is allowed only where the fixed rule allows it (price at or above the high price, power control on) and lasts at least the minimum off time. The cost is the compressor's share of each period at a nominal 1 kW plus a small fan load while on, so the estimates are relative. A room above the maximum carries a large penalty, so the plan stays within it whenever the unit can hold it. The cold left in the room when the prices run out is valued at the horizon's median price.
 
-Dynamic programming on a 0.1 °C grid finds the plan, which is then simulated with the learned model and compared with the fixed-threshold plan simulated the same way; the cheaper one is used, so the optimizer never plans to cost more than the fixed thresholds. It replans at each new period from the room's measured temperature, and the same switch-off safeguards as the fixed thresholds apply. Tests run both on the recorded Elering days in `tests/fixtures`.
-
-A unit brought back on because its room reached the maximum now holds the maximum until the expensive stretch ends, instead of being switched off again on the next pass.
+Dynamic programming on a 0.1 °C grid finds the plan, which is then simulated with the learned model and compared with the fixed-threshold plan simulated the same way; the cheaper one is used, so the optimizer never plans to cost more than the fixed thresholds. It replans at each new period from the room's measured temperature, and the unit's controller applies its plan like the fixed one: a planned off period means the target is the maximum and the unit may be switched off. Tests run both on the recorded Elering days in `tests/fixtures`.
 
 ## Plan view
 

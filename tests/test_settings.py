@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -38,7 +39,10 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(res["away_max_c"]["value"], 28.0)
         self.assertEqual(res["night_start"]["value"], "22:00")
         self.assertEqual(res["night_end"]["value"], "07:00")
-        self.assertEqual(S.resolve({}, "cottage")["kind"]["value"], "heat")
+        self.assertEqual(res["price_control"]["value"], "optimized")
+        self.assertIs(res["cool_power"]["value"], True)
+        self.assertEqual(res["manual_hold_hours"]["value"], 3.0)
+        self.assertNotIn("kind", res)
         self.store.set("site:home", "cool_max_c", 26, "Ville")
         self.store.set("room:home/r1", "cool_max_c", 24.5, "Ville")
         o = self.store.overrides()
@@ -63,6 +67,8 @@ class StoreTests(unittest.TestCase):
             ("site:home", "cool_max_c", 99), ("site:home", "cool_max_c", float("nan")),
             ("site:home", "min_off_minutes", 1.5), ("site:home", "night_start", "25:00"),
             ("site:home", "night_enabled", 1), ("site:home", "kind", "steam"),
+            ("site:home", "price_control", "maybe"),
+            ("site:home", "manual_hold_hours", 25),
         ]:
             with self.assertRaises(ValueError, msg=(scope, key, value)):
                 self.store.set(scope, key, value, "x")
@@ -98,11 +104,83 @@ class StoreTests(unittest.TestCase):
         self.assertEqual([p.temperature_c for p in after["r2"]],
                          [Decimal("19.0"), Decimal("19.0"), Decimal("25.0")])
 
+    def test_price_control_off_plans_only_the_maximum(self):
+        self.store.set("site:home", "price_control", "off", "Ville")
+        plan = plan_day(_periods([3, 20]), S.plan_settings(
+            self.store.overrides(), "home", ["r1"]))["r1"]
+        self.assertEqual([p.temperature_c for p in plan],
+                         [Decimal("25.0"), Decimal("25.0")])
+
     def test_cottage_defaults_heat(self):
         plan = plan_day(_periods([4, 6, 9]),
                         S.plan_settings({}, "cottage", ["sauna"]))["sauna"]
         self.assertEqual([p.temperature_c for p in plan],
                          [Decimal("12.0"), Decimal("8.0"), Decimal("5.0")])
+
+
+class MigrationTests(unittest.TestCase):
+    """Overrides of the keys replaced on 2026-10-25 (audit 2.2)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(prefix="vk-settings-mig-")
+        self.path = Path(self._tmp.name) / "pumps.db"
+        S.SettingsStore(self.path)               # creates the table
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def migrate(self, rows):
+        conn = sqlite3.connect(self.path)
+        conn.executemany(
+            "INSERT INTO setting VALUES (?, ?, ?, '2026-10-20T10:00:00+00:00', 'Ville')",
+            [(scope, key, json.dumps(value)) for scope, key, value in rows])
+        conn.commit()
+        conn.close()
+        store = S.SettingsStore(self.path)
+        conn = sqlite3.connect(self.path)
+        keys = {r[0] for r in conn.execute("SELECT key FROM setting")}
+        conn.close()
+        self.assertFalse(keys & set(S.LEGACY_KEYS))
+        return store
+
+    def effective(self, store, room=None):
+        values = S.resolve(store.overrides(), "home", room)
+        return values["price_control"]["value"], values["cool_power"]["value"]
+
+    def test_heating_season_settings(self):
+        # Precooling off and the temperature switch on (the owner's setup).
+        store = self.migrate([
+            ("site:home", "precool_enabled", False),
+            ("site:home", "cool_manage_power", True),
+            ("site:home", "cool_max_c", 25.0),
+            ("site:cottage", "kind", "heat")])
+        self.assertEqual(self.effective(store), ("off", True))
+        self.assertEqual(store.overrides()["site:home"]["cool_max_c"], 25.0)
+        self.assertEqual(store.audit()["site:home"]["price_control"]["updated_by"],
+                         S.MIGRATION_ACTOR)
+
+    def test_precooling_off_drops_the_expensive_switch_off(self):
+        store = self.migrate([("site:home", "precool_enabled", False)])
+        self.assertEqual(self.effective(store), ("off", False))
+
+    def test_fixed_thresholds_and_room_overrides(self):
+        store = self.migrate([
+            ("site:home", "cool_optimizer", False),
+            ("room:home/r1", "cool_off_when_expensive", False),
+            ("room:home/r2", "cool_optimizer", True)])
+        self.assertEqual(self.effective(store), ("fixed", True))
+        self.assertEqual(self.effective(store, "r1"), ("fixed", False))
+        self.assertEqual(self.effective(store, "r2"), ("optimized", True))
+        self.assertEqual(self.effective(store, "r3"), ("fixed", True))
+
+    def test_defaults_need_no_override(self):
+        store = self.migrate([("site:home", "cool_off_when_expensive", True),
+                              ("site:home", "kind", "cool")])
+        self.assertEqual(store.overrides(), {})
+        # A second start finds nothing to migrate and changes nothing.
+        S.SettingsStore(self.path).set("site:home", "cool_power", False, "Ville")
+        self.assertEqual(self.effective(S.SettingsStore(self.path)),
+                         ("optimized", False))
 
 
 class ApiTests(unittest.TestCase):
@@ -143,6 +221,11 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(ids[:2], ["site:home", "site:cottage"])
         room = next(i for i in ids if i.startswith("room:home/"))
         self.assertEqual(data["effective"]["site:home"]["cool_max_c"]["value"], 25.0)
+        self.assertEqual({s["id"]: s["kind"] for s in data["scopes"]}["site:cottage"],
+                         "heat")
+        precool = next(d for d in data["definitions"] if d["key"] == "precool_c")
+        self.assertEqual(precool["shown_if"],
+                         {"key": "price_control", "values": ["fixed", "optimized"]})
 
         status, body = http_json("POST", self.url(),
                                  {"scope": room, "key": "cool_max_c", "value": 27})

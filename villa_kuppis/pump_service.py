@@ -1179,9 +1179,11 @@ class PumpService:
             })
         # Overlay pending slots on the matching units.
         pending_by_unit = self.gateway._pending_snapshot()
+        holds = self.automation.holds() if self.automation.enabled else {}
         for unit in units:
             if unit["id"] in pending_by_unit:
                 unit["pending"] = pending_by_unit[unit["id"]]
+            unit["hold_until"] = holds.get(unit["id"])
         return {"service": self.gateway.status(), "units": units}
 
     def events(self, limit: int = 100) -> list[dict]:
@@ -1239,6 +1241,14 @@ class PumpService:
     def automation_state(self) -> dict:
         return {"on": self.automation.automation_on(),
                 "available": self.automation.available}
+
+    def resume_automation(self, unit_id: str) -> tuple[int, dict]:
+        """End a unit's manual pause (Palauta automaatio)."""
+        if self.store.unit_state(unit_id) is None:
+            return 404, {"error": "unknown_unit",
+                         "detail": "the unit is unknown to the service"}
+        self.automation.resume(unit_id)
+        return 200, self.view()
 
     def set_automation(self, on: bool, actor: str) -> dict:
         """Master switch of the price and temperature automation."""

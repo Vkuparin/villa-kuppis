@@ -1,59 +1,46 @@
-"""Fixed price thresholds for pump cooling (card F4.1).
+"""Cooling control for the home pumps (cards F4.1, F5.4, F6.1, F6.2).
 
 ``plan_day`` (planning.py) turns the stored settings into a target per room
-and 15-minute period. This module adds the cooling rules around it and
-applies them to the pumps:
+and 15-minute period; ``build_plan`` adds the cooling rules, and the
+optimizer (card F5.4, optimizer.py) replaces the plan from the current
+period on for rooms with ``price_control`` "optimized" once the room's
+cooling rate is learned (card F5.1). With ``price_control`` "off" the
+target is always the maximum and the price is not used.
 
-* Only units in cooling mode are touched, and a unit's mode is never
-  changed.
-* A period is "off" when the price is at or above the high price and the
-  room's ``cool_off_when_expensive`` is on; otherwise the unit cools to the
-  planned target (the maximum, or the precooling temperature when the price
-  is below the low price).
-* The automation switches off only what it can switch back on: it records
-  when it switched a unit off and brings only those units back, never
-  before ``min_off_minutes`` have passed (compressor protection), when the
-  price is no longer high or the room has reached the maximum. A unit the
-  household switched off is left alone.
-* Away mode (card F6.1, ``set_away``): every cooling unit targets its
-  ``away_max_c`` with no precooling; the expensive-price switch-off still
-  applies, and a unit comes back when the room reaches the away maximum.
-  Switching away off restores the normal plan on the next pass.
-* A unit brought back on because its room reached the maximum holds the
-  maximum until the expensive stretch ends, instead of being switched off
-  again on the next pass.
-* It acts on changes of the plan, not on every pass, so a manual setpoint
-  stays until the plan moves to another target.
+One controller per unit then applies the current period (audit 2.1):
 
-* The optimizer (card F5.4, optimizer.py) replaces the fixed plan from the
-  current period to the end of the known prices (today and, once fetched,
-  tomorrow) for rooms with ``cool_optimizer`` on, once the room's cooling
-  rate is learned (card F5.1). It is not used in away mode. Its plan is
-  applied with the same rules as above, and it is planned again at each
-  new period from the room's current temperature.
+1. Nothing is touched while the automation is off, the unit is not in
+   cooling mode, a command is pending, or the manual pause is on. A unit's
+   mode is never changed.
+2. The target is the plan's: the maximum, the precooling temperature, the
+   optimizer's target or, in away mode (card F6.1), the away maximum. In an
+   expensive period (``off`` in the plan) the target is the maximum.
+3. Power, only with ``cool_power``: a unit that is on is switched off once
+   the room is ``STOP_BAND_C`` below the target; a unit that is off is
+   switched on when the room is above the target. Every power change waits
+   ``min_off_minutes`` from the unit's previous power change.
+4. A unit that is on gets the target as its setpoint when they differ.
 
-* ``cool_manage_power`` (off by default) lets the automation run the
-  units' power by the room temperature: a cooling-mode unit that is off is
-  switched on when its room is above the maximum (and the price is not
-  high); a unit that is on is switched off once the room is ``STOP_BAND_C``
-  below the maximum. The minimum off time also bounds how soon a unit the
-  automation started or stopped is switched the other way. Nothing is
-  started when there is no need to cool.
+Manual pause: when the household changes a unit's power, setpoint or mode
+(in this app, in MELCloud Home or by remote), the controller leaves the
+unit alone for ``manual_hold_hours``. A change counts as manual when an
+event by someone other than ``ACTOR`` was logged for the unit, or the unit
+changed without any logged command. ``resume`` ends the pause at once, and
+switching the automation on starts afresh.
 
-* Without a price for the current period (nothing stored, or a gap) a
-  cooling-mode unit is still handled: it targets the maximum (the away
-  maximum in away mode) with the same rules, so power management, away mode
-  and the return of a unit the automation switched off keep working.
-  Nothing is written to the stored plan for such periods.
+Without a price for the current period the target is the maximum (the away
+maximum in away mode), so the temperature control keeps working; nothing
+is written to the stored plan for such periods.
 
-* Night mode (card F6.2) is separate from the prices: in rooms with
-  ``night_enabled`` the fan is set to its quietest speed between
-  ``night_start`` and ``night_end`` (Helsinki time, may cross midnight) and
-  the earlier fan setting is put back afterwards, unless the household
-  changed it meanwhile.
+Night mode (card F6.2) is separate from the prices: in rooms with
+``night_enabled`` the fan is set to its quietest speed between
+``night_start`` and ``night_end`` (Helsinki time, may cross midnight) and
+the earlier fan setting is put back afterwards, unless the household
+changed it meanwhile.
 
-Every command goes through ``PumpService.request`` with the actor
-``Suunnitelma``, so it is validated, confirmed and logged like any other.
+The state is one ``control_state`` row per unit. Every command goes
+through ``PumpService.request`` with the actor ``Suunnitelma``, so it is
+validated, confirmed and logged like any other.
 """
 
 from __future__ import annotations
@@ -72,7 +59,9 @@ from .planning import Period, plan_day
 from .prices import HELSINKI, INTERVAL_SECONDS, helsinki_day_bounds
 from .storage import PriceStore
 
-STOP_BAND_C = 0.5    # with power management a unit stops this far below the maximum
+STOP_BAND_C = 0.5    # a unit stops this far below its target
+SETPOINT_TOLERANCE_C = 0.05
+WATCHED_ACTIONS = ("power", "setpoint", "mode")
 ACTOR = "Suunnitelma"
 SITE = "home"
 DEFAULT_INTERVAL = 60.0
@@ -109,27 +98,31 @@ def _setting_values(overrides, room: str) -> dict:
 
 
 def build_plan(overrides, unit_ids, periods, away: bool = False) -> dict[str, list[CoolPeriod]]:
-    """Cooling plan per unit; units whose room is set to heating are left out."""
+    """Cooling plan per unit.
+
+    An expensive period is ``off`` (the unit may be switched off) when the
+    automation may switch the unit's power; its target is the maximum.
+    """
     if not periods:
         return {}
     plan = plan_day(periods, app_settings.plan_settings(overrides, SITE, unit_ids))
     out: dict[str, list[CoolPeriod]] = {}
     for unit_id in unit_ids:
         values = _setting_values(overrides, unit_id)
-        if values["kind"] != "cool":
-            continue
         high = Decimal(str(values["high_price_c_kwh"]))
-        off_allowed = bool(values["cool_off_when_expensive"])
+        off_allowed = (bool(values["cool_power"])
+                       and values["price_control"] != "off")
+        limit = float(values["away_max_c" if away else "cool_max_c"])
         rows = []
         for room_plan in plan[unit_id]:
             off = off_allowed and room_plan.price_c_kwh >= high
-            if away:
-                target, reason = float(values["away_max_c"]), "away"
+            if off:
+                target, reason = limit, "off"
+            elif away:
+                target, reason = limit, "away"
             else:
                 target = float(room_plan.temperature_c)
                 reason = "precool" if room_plan.reason == "threshold" else "max"
-            if off:
-                reason = "off"
             rows.append(CoolPeriod(room_plan.ts_utc, room_plan.price_c_kwh,
                                    target, off, reason))
         out[unit_id] = rows
@@ -140,7 +133,7 @@ def merge_windows(rows: list[CoolPeriod]) -> list[dict]:
     """Consecutive periods with the same decision as [start, end) windows."""
     windows: list[dict] = []
     for row in rows:
-        key = (None if row.off else row.target_c, row.off)
+        key = (row.target_c, row.off)
         end = row.ts_utc + INTERVAL_SECONDS
         if windows and windows[-1]["_key"] == key and windows[-1]["_end"] == row.ts_utc:
             windows[-1]["_end"] = end
@@ -156,7 +149,7 @@ def _iso(epoch: int) -> str:
 
 
 class CoolingAutomation:
-    """Plans and applies the fixed-threshold cooling for the home pumps."""
+    """Plans the cooling and runs one controller per home pump."""
 
     def __init__(self, service, settings_store, prices_db, *, now,
                  interval: float | None = None, default_on: bool = True):
@@ -173,15 +166,6 @@ class CoolingAutomation:
         conn = self._connect()
         try:
             conn.execute(
-                "CREATE TABLE IF NOT EXISTS plan_state ("
-                "unit_id TEXT PRIMARY KEY, off_since_utc TEXT, "
-                "last_target REAL)")
-            try:
-                conn.execute("ALTER TABLE plan_state ADD COLUMN "
-                             "hold_on INTEGER NOT NULL DEFAULT 0")
-            except sqlite3.OperationalError:
-                pass                       # column exists already
-            conn.execute(
                 "CREATE TABLE IF NOT EXISTS away_state ("
                 "id INTEGER PRIMARY KEY CHECK (id = 1), away INTEGER NOT NULL, "
                 "changed_utc TEXT, actor TEXT)")
@@ -190,14 +174,30 @@ class CoolingAutomation:
                 "id INTEGER PRIMARY KEY CHECK (id = 1), on_ INTEGER NOT NULL, "
                 "changed_utc TEXT, actor TEXT)")
             conn.execute(
-                "CREATE TABLE IF NOT EXISTS power_state ("
-                "unit_id TEXT PRIMARY KEY, kind TEXT NOT NULL, "
-                "changed_utc TEXT NOT NULL)")
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS night_state ("
-                "unit_id TEXT PRIMARY KEY, saved_fan TEXT)")
+                "CREATE TABLE IF NOT EXISTS control_state ("
+                "unit_id TEXT PRIMARY KEY, "
+                "seen_utc TEXT, seen_power INTEGER, seen_setpoint REAL, "
+                "seen_mode TEXT, "             # the unit as last observed
+                "seen_event INTEGER, "         # the newest event by then
+                "power_changed_utc TEXT, "     # its last observed power change
+                "hold_until_utc TEXT, "        # manual pause
+                "rejected_target REAL, "       # a setpoint the unit refused
+                "night INTEGER NOT NULL DEFAULT 0, saved_fan TEXT)")
+            self._migrate(conn)
         finally:
             conn.close()
+
+    @staticmethod
+    def _migrate(conn) -> None:
+        """Carry a quiet-fan night over from the old tables, then drop them."""
+        tables = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if "night_state" in tables:
+            conn.execute(
+                "INSERT OR IGNORE INTO control_state (unit_id, night, saved_fan) "
+                "SELECT unit_id, 1, saved_fan FROM night_state")
+        for table in ("plan_state", "power_state", "night_state"):
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
 
     # -- lifecycle --
 
@@ -225,6 +225,8 @@ class CoolingAutomation:
         """Switch the whole automation on or off; on applies the plan at once.
 
         Switching off only stops further commands: pumps stay as they are.
+        Switching on starts afresh: what the household did meanwhile is not
+        a manual change, and every manual pause ends.
         """
         conn = self._connect()
         try:
@@ -233,6 +235,9 @@ class CoolingAutomation:
                 "VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
                 "on_ = excluded.on_, changed_utc = excluded.changed_utc, "
                 "actor = excluded.actor", (int(on), self._now().isoformat(), actor))
+            if on:
+                conn.execute("UPDATE control_state SET seen_utc = NULL, "
+                             "hold_until_utc = NULL")
         finally:
             conn.close()
         if on and self.available:
@@ -273,29 +278,100 @@ class CoolingAutomation:
         conn.execute("PRAGMA busy_timeout = 5000")
         return conn
 
-    def _load(self, unit_id: str) -> tuple[str | None, float | None, bool]:
+    def _load(self, unit_id: str) -> dict:
         conn = self._connect()
+        conn.row_factory = sqlite3.Row
         try:
-            row = conn.execute(
-                "SELECT off_since_utc, last_target, hold_on FROM plan_state "
-                "WHERE unit_id = ?", (unit_id,)).fetchone()
+            row = conn.execute("SELECT * FROM control_state WHERE unit_id = ?",
+                               (unit_id,)).fetchone()
         finally:
             conn.close()
-        return (row[0], row[1], bool(row[2])) if row else (None, None, False)
+        if row is None:
+            return {"unit_id": unit_id, "seen_utc": None, "seen_power": None,
+                    "seen_setpoint": None, "seen_mode": None, "seen_event": None,
+                    "power_changed_utc": None, "hold_until_utc": None,
+                    "rejected_target": None, "night": 0, "saved_fan": None}
+        return dict(row)
 
-    def _save(self, unit_id: str, off_since: str | None,
-              last_target: float | None, hold: bool = False) -> None:
+    def _save(self, row: dict) -> None:
+        keys = list(row)
         conn = self._connect()
         try:
             conn.execute(
-                "INSERT INTO plan_state (unit_id, off_since_utc, last_target, "
-                "hold_on) VALUES (?, ?, ?, ?) ON CONFLICT(unit_id) DO UPDATE "
-                "SET off_since_utc = excluded.off_since_utc, "
-                "last_target = excluded.last_target, "
-                "hold_on = excluded.hold_on",
-                (unit_id, off_since, last_target, int(hold)))
+                f"INSERT OR REPLACE INTO control_state ({', '.join(keys)}) "
+                f"VALUES ({', '.join('?' * len(keys))})",
+                [row[k] for k in keys])
         finally:
             conn.close()
+
+    # -- manual pause --
+
+    def holds(self) -> dict[str, str]:
+        """Units on a manual pause now: unit id -> end of the pause (UTC ISO)."""
+        now = self._now()
+        conn = self._connect()
+        try:
+            rows = conn.execute("SELECT unit_id, hold_until_utc FROM control_state "
+                                "WHERE hold_until_utc IS NOT NULL").fetchall()
+        finally:
+            conn.close()
+        return {unit: until for unit, until in rows
+                if _after(until, now)}
+
+    def resume(self, unit_id: str) -> None:
+        """End a unit's manual pause; the next pass controls it again."""
+        row = self._load(unit_id)
+        row.update(hold_until_utc=None, seen_utc=None)
+        self._save(row)
+        if self.enabled:
+            try:
+                self.run_once()
+            except Exception:
+                logging.exception("Cooling plan pass after resume failed")
+
+    def _observe(self, state, row: dict, values, events, now: datetime) -> bool:
+        """Compare the unit with how it was last seen; True while paused.
+
+        A change is manual when someone other than the automation logged a
+        command for the unit since then, or a power, setpoint or mode change
+        has no command of the automation's to explain it (MELCloud Home, the
+        remote). ``events`` is the event log, newest first.
+        """
+        power = None if state["power"] is None else int(state["power"])
+        newest = events[0]["id"] if events else 0
+        if row["seen_utc"] is not None:
+            new = [e for e in events
+                   if e["id"] > (row["seen_event"] or 0)
+                   and e["unit"] == state["id"]
+                   and e["action"] in WATCHED_ACTIONS]
+            ours = {e["action"] for e in new if e["actor"] == ACTOR}
+            setpoint_moved = (
+                (state["setpoint"] is None) != (row["seen_setpoint"] is None)
+                or (state["setpoint"] is not None
+                    and row["seen_setpoint"] is not None
+                    and abs(state["setpoint"] - row["seen_setpoint"])
+                    > SETPOINT_TOLERANCE_C))
+            changed = {action for action, moved in (
+                ("power", power != row["seen_power"]),
+                ("setpoint", setpoint_moved),
+                ("mode", state["mode"] != row["seen_mode"])) if moved}
+            manual = (any(e["actor"] != ACTOR for e in new)
+                      or bool(changed - ours))
+            hours = float(values["manual_hold_hours"])
+            if manual and hours > 0:
+                row["hold_until_utc"] = (now + timedelta(hours=hours)).isoformat()
+                logging.info("Manual change on %s: automation paused until %s",
+                             state["name"], row["hold_until_utc"])
+            if "power" in changed and "power" not in ours:
+                row["power_changed_utc"] = now.isoformat()
+            if setpoint_moved:
+                row["rejected_target"] = None
+        if row["hold_until_utc"] is not None and not _after(row["hold_until_utc"], now):
+            row["hold_until_utc"] = None
+        row.update(seen_utc=now.isoformat(), seen_power=power,
+                   seen_setpoint=state["setpoint"], seen_mode=state["mode"],
+                   seen_event=newest)
+        return row["hold_until_utc"] is not None
 
     # -- away mode (card F6.1) --
 
@@ -366,7 +442,7 @@ class CoolingAutomation:
         (card F5.4); planned once per period and cached."""
         unit_id = state["id"]
         values = _setting_values(overrides, unit_id)
-        if not values["cool_optimizer"] or state["room_temp"] is None:
+        if values["price_control"] != "optimized" or state["room_temp"] is None:
             return None
         rows = plan[unit_id]
         now_ts = int(now.timestamp())
@@ -374,15 +450,13 @@ class CoolingAutomation:
                   if r.ts_utc <= now_ts < r.ts_utc + INTERVAL_SECONDS), None)
         if i is None:
             return None
-        off_since, _target, _hold = self._load(unit_id)
+        changed = self._load(unit_id)["power_changed_utc"]
         need = max(1, -(-int(values["min_off_minutes"]) * 60 // INTERVAL_SECONDS))
         start_off = 0
-        if not state["power"] and off_since is not None:
-            try:
-                since = datetime.fromisoformat(off_since)
-                start_off = 1 + int((now - since).total_seconds()) // INTERVAL_SECONDS
-            except ValueError:
-                start_off = need
+        if not state["power"] and changed is not None:
+            since = _parse(changed)
+            start_off = (need if since is None else
+                         1 + int((now - since).total_seconds()) // INTERVAL_SECONDS)
         key = (rows[i].ts_utc, len(rows), rows[-1].ts_utc,
                tuple(sorted(values.items())), min(start_off, need))
         cached = self._optimized.get(unit_id)
@@ -392,11 +466,9 @@ class CoolingAutomation:
             models, (_observed, future), _ahead = self._service.learned_models(SITE)
             model = models.get(unit_id)
             limits = optimizer.Limits(
-                float(values["cool_max_c"]),
-                float(values["precool_c"] if values["precool_enabled"]
-                      else values["cool_max_c"]),
+                float(values["cool_max_c"]), float(values["precool_c"]),
                 float(values["low_price_c_kwh"]), float(values["high_price_c_kwh"]),
-                bool(values["cool_off_when_expensive"]), need)
+                bool(values["cool_power"]), need)
             result = None if model is None else optimizer.optimize(
                 model, float(state["room_temp"]), start_off,
                 [(r.ts_utc, float(r.price_c_kwh)) for r in rows[i:]],
@@ -413,6 +485,8 @@ class CoolingAutomation:
         now = self._now()
         units, plan, results = self._plan(now)
         _start, end = helsinki_day_bounds(now.astimezone(HELSINKI).date())
+        holds = self.holds()
+        overrides = self._settings.overrides()
         shown = []
         for u in units:
             if u["id"] not in plan:
@@ -421,6 +495,8 @@ class CoolingAutomation:
             shown.append({
                 "id": u["id"], "name": u["name"],
                 "active": u["mode"] == "Cool",
+                "hold_until": holds.get(u["id"]),
+                "price_control": _setting_values(overrides, u["id"])["price_control"],
                 "windows": merge_windows([r for r in plan[u["id"]]
                                           if r.ts_utc < end]),
                 "optimizer": None if result is None else {
@@ -439,7 +515,7 @@ class CoolingAutomation:
     # -- apply --
 
     def run_once(self) -> list[dict]:
-        """Write today's plan targets and apply the current period.
+        """Write today's plan targets and run each unit's controller.
 
         Returns the commands it tried, as dicts with unit, action, value
         and the HTTP-style status of the request.
@@ -448,82 +524,66 @@ class CoolingAutomation:
             return []
         now = self._now()
         units, plan, _results = self._plan(now)
-        fresh = {u["id"]: u["fresh"] for u in self._service.view()["units"]}
+        view = {u["id"]: u for u in self._service.view()["units"]}
         overrides = self._settings.overrides()
+        away = self.away()
+        events = self._service.store.events(200)
         sent: list[dict] = []
         now_ts = int(now.timestamp())
         for state in units:
-            if fresh.get(state["id"]) and not state["in_error"]:
-                sent.extend(self._night(state, overrides, now))
-        for state in units:
             unit_id = state["id"]
             rows = plan.get(unit_id)
-            values = _setting_values(overrides, unit_id)
             if rows:
                 self._service.store.plan_upsert(
                     unit_id, [(_iso(r.ts_utc), r.target_c)
                               for r in rows if not r.off])
-            elif values["kind"] != "cool":
+            shown = view.get(unit_id)
+            if (shown is None or not shown["fresh"] or shown["pending"]
+                    or state["in_error"]):
                 continue
-            if state["mode"] != "Cool" or not fresh.get(unit_id) \
-                    or state["in_error"]:
-                continue
-            current = next((r for r in rows or []
-                            if r.ts_utc <= now_ts < r.ts_utc + INTERVAL_SECONDS),
-                           None)
-            if current is None:
-                # No price for this period: keep cooling to the maximum (or
-                # the away maximum) so power management, away mode and the
-                # return of a unit switched off for a high price still work.
-                # Nothing is written to the stored plan.
-                away = self.away()
-                current = CoolPeriod(
-                    now_ts - now_ts % INTERVAL_SECONDS, Decimal(0),
-                    float(values["away_max_c" if away else "cool_max_c"]),
-                    False, "away" if away else "noprice")
-            if current.reason in ("away", "off") and self.away():
-                values["cool_max_c"] = values["away_max_c"]
-            sent.extend(self._apply(state, current, values, now))
+            values = _setting_values(overrides, unit_id)
+            row = self._load(unit_id)
+            paused = self._observe(state, row, values, events, now)
+            try:
+                if paused:
+                    continue
+                sent.extend(self._night(state, row, values, now))
+                if state["mode"] != "Cool" or any(
+                        s["unit"] == unit_id and s["status"] == 202 for s in sent):
+                    continue
+                current = next((r for r in rows or []
+                                if r.ts_utc <= now_ts < r.ts_utc + INTERVAL_SECONDS),
+                               None)
+                if current is None:
+                    # No price for this period: cool to the maximum (or the
+                    # away maximum). Nothing is written to the stored plan.
+                    current = CoolPeriod(
+                        now_ts - now_ts % INTERVAL_SECONDS, Decimal(0),
+                        float(values["away_max_c" if away else "cool_max_c"]),
+                        False, "away" if away else "noprice")
+                sent.extend(self._control(state, row, current, values, now))
+            finally:
+                self._save(row)
         return sent
 
-    def _night(self, state, overrides, now) -> list[dict]:
+    def _night(self, state, row: dict, values, now) -> list[dict]:
         """Quiet fan during the night hours; restore it when they end."""
-        unit_id = state["id"]
-        active = in_night(_setting_values(overrides, unit_id), now)
-        conn = self._connect()
-        try:
-            row = conn.execute("SELECT saved_fan FROM night_state "
-                               "WHERE unit_id = ?", (unit_id,)).fetchone()
-        finally:
-            conn.close()
-        if active and row is None and state["fan"] != QUIET_FAN:
+        active = in_night(values, now)
+        if active and not row["night"] and state["fan"] != QUIET_FAN:
             result = self._command(state, "fan", QUIET_FAN)
             if result["status"] == 202:
-                self._set_night(unit_id, state["fan"])
+                row.update(night=1, saved_fan=state["fan"])
             return [result]
-        if not active and row is not None:
+        if not active and row["night"]:
             sent = []
             # Restore only what we set; a fan the household changed stays.
-            if state["fan"] == QUIET_FAN and row[0] is not None:
-                sent.append(self._command(state, "fan", row[0]))
+            if state["fan"] == QUIET_FAN and row["saved_fan"] is not None:
+                sent.append(self._command(state, "fan", row["saved_fan"]))
                 if sent[0]["status"] != 202:
                     return sent
-            self._set_night(unit_id, None, clear=True)
+            row.update(night=0, saved_fan=None)
             return sent
         return []
-
-    def _set_night(self, unit_id, fan, clear=False) -> None:
-        conn = self._connect()
-        try:
-            if clear:
-                conn.execute("DELETE FROM night_state WHERE unit_id = ?",
-                             (unit_id,))
-            else:
-                conn.execute("INSERT OR REPLACE INTO night_state "
-                             "(unit_id, saved_fan) VALUES (?, ?)",
-                             (unit_id, fan))
-        finally:
-            conn.close()
 
     def _command(self, state, action, value) -> dict:
         status, body = self._service.request(state["id"], action, value, ACTOR)
@@ -534,114 +594,49 @@ class CoolingAutomation:
                          value, state["name"], body.get("detail", status))
         return entry
 
-    def _apply(self, state, current: CoolPeriod, values, now) -> list[dict]:
-        unit_id = state["id"]
-        off_since, last_target, hold = self._load(unit_id)
-        sent: list[dict] = []
-        if state["power"] and off_since is not None:
-            # Switched on again (by us or by the household).
-            off_since = None
-            self._save(unit_id, None, last_target, hold)
-
-        manage = values["cool_manage_power"]
-        mark = self._power_mark(unit_id)       # (kind, when_utc) or None
-        if mark is not None and not manage:
-            self._set_power_mark(unit_id, None)
-            mark = None
-        if manage and not current.off and state["room_temp"] is not None:
-            room = state["room_temp"]
-            limit = float(values["cool_max_c"])
-            if state["power"]:
-                if mark is not None and mark[0] == "idle":
-                    # Somebody switched it on again: the idle mark is stale.
-                    self._set_power_mark(unit_id, None)
-                    mark = None
-                ran_long_enough = (mark is None or mark[0] != "started"
-                                   or self._off_time_over(mark[1], values, now))
-                if room <= limit - STOP_BAND_C and ran_long_enough:
-                    result = self._command(state, "power", False)
-                    if result["status"] == 202:
-                        self._set_power_mark(unit_id, "idle", now.isoformat())
-                    return [result]
-            else:
-                if mark is not None and mark[0] == "started":
-                    # Switched off by the household after we started it.
-                    self._set_power_mark(unit_id, None)
-                    mark = None
-                rested = (mark is None or mark[0] != "idle"
-                          or self._off_time_over(mark[1], values, now))
-                if room > limit and off_since is None and rested:
-                    result = self._command(state, "power", True)
-                    if result["status"] == 202:
-                        self._set_power_mark(unit_id, "started", now.isoformat())
-                    return [result]
-
-        if current.off and not (hold and state["power"]):
-            if state["power"]:
-                result = self._command(state, "power", False)
-                sent.append(result)
+    def _control(self, state, row: dict, current: CoolPeriod, values,
+                 now) -> list[dict]:
+        """One unit's controller: power by the room, then the setpoint."""
+        target = float(current.target_c)
+        room = state["room_temp"]
+        if values["cool_power"] and room is not None:
+            changed = _parse(row["power_changed_utc"])
+            rested = changed is None or now - changed >= timedelta(
+                minutes=float(values["min_off_minutes"]))
+            switch = None
+            if state["power"] and room <= target - STOP_BAND_C:
+                switch = False
+            elif not state["power"] and room > target:
+                switch = True
+            if switch is not None and rested:
+                # The setpoint follows on the next pass, once the unit is on.
+                result = self._command(state, "power", switch)
                 if result["status"] == 202:
-                    self._save(unit_id, now.isoformat(), None)
-            elif off_since is not None:
-                # Off by us during an expensive period: back on only when the
-                # room has reached the maximum and the minimum off time is up;
-                # it then holds the maximum until the stretch ends.
-                room = state["room_temp"]
-                if (self._off_time_over(off_since, values, now)
-                        and room is not None
-                        and room >= float(values["cool_max_c"])):
-                    sent.append(self._power_on(state, last_target, hold=True))
-            return sent
-        if not current.off and hold:
-            hold = False
-            self._save(unit_id, off_since, last_target)
-
+                    row["power_changed_utc"] = now.isoformat()
+                return [result]
         if not state["power"]:
-            if off_since is not None and self._off_time_over(off_since, values, now):
-                sent.append(self._power_on(state, last_target))
-            return sent
+            return []
+        if (state["setpoint"] is not None
+                and abs(state["setpoint"] - target) <= SETPOINT_TOLERANCE_C):
+            return []
+        if row["rejected_target"] == target:
+            return []                       # refused before; wait for a change
+        result = self._command(state, "setpoint", target)
+        if result["status"] == 400:
+            row["rejected_target"] = target
+        return [result]
 
-        if last_target != current.target_c:
-            result = self._command(state, "setpoint", current.target_c)
-            sent.append(result)
-            if result["status"] == 202:
-                self._save(unit_id, None, current.target_c, hold)
-        return sent
 
-    def _power_mark(self, unit_id: str) -> tuple[str, str] | None:
-        conn = self._connect()
-        try:
-            row = conn.execute("SELECT kind, changed_utc FROM power_state "
-                               "WHERE unit_id = ?", (unit_id,)).fetchone()
-        finally:
-            conn.close()
-        return (row[0], row[1]) if row else None
+def _parse(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
-    def _set_power_mark(self, unit_id: str, kind: str | None,
-                        when: str | None = None) -> None:
-        conn = self._connect()
-        try:
-            if kind is None:
-                conn.execute("DELETE FROM power_state WHERE unit_id = ?",
-                             (unit_id,))
-            else:
-                conn.execute("INSERT OR REPLACE INTO power_state "
-                             "(unit_id, kind, changed_utc) VALUES (?, ?, ?)",
-                             (unit_id, kind, when))
-        finally:
-            conn.close()
 
-    def _power_on(self, state, last_target, hold: bool = False) -> dict:
-        result = self._command(state, "power", True)
-        if result["status"] == 202:
-            # The setpoint is set again on the next pass, once on.
-            self._save(state["id"], None, None, hold)
-        return result
-
-    @staticmethod
-    def _off_time_over(off_since: str, values, now: datetime) -> bool:
-        try:
-            since = datetime.fromisoformat(off_since)
-        except ValueError:
-            return True
-        return now - since >= timedelta(minutes=float(values["min_off_minutes"]))
+def _after(value: str | None, now: datetime | None) -> bool:
+    """True when the ISO time ``value`` is later than ``now``."""
+    when = _parse(value)
+    return when is not None and now is not None and when > now

@@ -73,7 +73,9 @@ SCRIPT = r"""
       .catch(function () { $pricesNote.textContent = "Hintojen haku epäonnistui."; })
       .then(function () { $prices.disabled = false; });
   });
-  function optimizerText(o) {
+  function optimizerText(u) {
+    var o = u.optimizer;
+    if (u.price_control === "off") return "Hintaohjaus pois: tavoite on aina enimmäislämpötila.";
     if (!o) return "Kiinteät hintarajat (optimointi pois tai huoneen jäähdytysnopeutta ei ole vielä opittu).";
     if (!o.optimized) return "Optimoija käytössä: kiinteät hintarajat ovat nyt yhtä edulliset, joten niitä noudatetaan.";
     var text = "Optimoitu opituilla nopeuksilla";
@@ -95,12 +97,14 @@ SCRIPT = r"""
       : "Suunnitelma on vain esitys: sitä ei toteuteta pumpuissa.");
     data.units.forEach(function (u) {
       var h = document.createElement("h3");
-      h.textContent = u.name + (u.active ? "" : " (ei jäähdytystilassa, ei ohjata)");
+      h.textContent = u.name + (!u.active ? " (ei jäähdytystilassa, ei ohjata)"
+        : u.hold_until ? " (käsiohjaus klo " + hm(u.hold_until) + " asti)" : "");
       var ul = document.createElement("ul");
       u.windows.forEach(function (w) {
         var li = document.createElement("li");
+        var temp = String(w.target_c).replace(".", ",") + " °C";
         li.textContent = hm(w.start) + "–" + hm(w.end) + " " +
-          (w.off ? "pois päältä" : String(w.target_c).replace(".", ",") + " °C");
+          (w.off ? "kallis: pumppu sammuksissa, ellei huone ylitä " + temp : temp);
         if (w.off) li.className = "plan-off";
         ul.appendChild(li);
       });
@@ -108,7 +112,7 @@ SCRIPT = r"""
       if (!data.away) {
         var p = document.createElement("p");
         p.className = "detail";
-        p.textContent = optimizerText(u.optimizer);
+        p.textContent = optimizerText(u);
         $body.appendChild(p);
       }
       $body.appendChild(ul);

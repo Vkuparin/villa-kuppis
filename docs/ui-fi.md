@@ -31,8 +31,9 @@ Käyttöliittymän kieli on suomi. Sovellusta käytetään selaimella tietokonee
 | Automation switch | Automaatio |
 | Add VAT to the price | Lisää ALV sähkönhintaan |
 | Forecast | Sääennuste |
-| Precooling in use | Esijäähdytys käytössä |
-| Run pump power by room temperature | Ohjaa pumpun käyntiä lämpötilan mukaan |
+| Price control: off / fixed thresholds / optimized | Hintaohjaus: Pois / Kiinteät rajat / Optimoitu |
+| The automation may switch the pump on and off | Automaatio saa käynnistää ja sammuttaa pumpun |
+| Manual pause / until / resume automation | Käsiohjauksen tauko / Käsiohjaus klo 21.30 asti / Palauta automaatio |
 | Last observed | Päivitetty 5 min sitten |
 | Spot-price control | Pörssisähköohjaus |
 | Cheap / expensive period | Halpa jakso / Kallis jakso |
@@ -51,8 +52,7 @@ Käyttöliittymän kieli on suomi. Sovellusta käytetään selaimella tietokonee
 | Maximum temperature | Enimmäislämpötila |
 | Away from home | Poissa kotoa |
 | Night mode | Yötila |
-| Minimum off time | Vähimmäistaukoaika |
-| Cooling optimizer | Optimoitu jäähdytys |
+| Minimum time between power changes | Vähimmäisaika käynnistysten välillä |
 
 Laitteen ilmoittama tila ja pyydetty muutos näytetään erikseen, kunnes laite vahvistaa muutoksen. Kun pörssisähköohjaus muuttaa asetusta, tapahtumissa näkyy syy, esimerkiksi `Pörssisähköohjaus: halpa jakso`.
 

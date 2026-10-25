@@ -129,10 +129,13 @@ SCRIPT = r"""
     var group = null;
     // A value set at this very level needs no label; only inherited ones do.
     var level = scope.indexOf("room:") === 0 ? "room" : "site";
-    var kind = eff.kind.value;
+    var kind = null;
+    data.scopes.forEach(function (s) { if (s.id === scope) kind = s.kind; });
     data.definitions.forEach(function (d, i) {
-      // Settings of the other control kind do nothing, so they are hidden.
+      // Settings of the other site's control kind do nothing, so they are hidden,
+      // as are settings that depend on a switch or choice that is off.
       if (d.kinds.indexOf(kind) < 0) return;
+      if (d.shown_if && d.shown_if.values.indexOf(eff[d.shown_if.key].value) < 0) return;
       if (d.group !== group) {
         group = d.group;
         $body.appendChild(make("h3", { textContent: group }));

@@ -18,6 +18,7 @@ fully offline) plus a small JSON API on top of PumpService:
 * GET  /api/sites     connection health of each Home Assistant site
 * POST /api/settings  {"scope", "key", "value" | "reset"} (card F3.5)
 * GET/POST /api/away  home-away button, {"away": bool} (card F6.1)
+* POST /api/automation/resume  {"unit"}: end a unit's manual pause
 * POST /api/prices/refresh  fetch today's and tomorrow's prices if missing
 * POST /api/command   {"unit", "action", "value"} -> the service
 
@@ -346,6 +347,8 @@ button.switch[aria-checked="true"] .track::after { transform: translateX(22px); 
 .stepper button { min-width: 44px; font-size: 1.15rem; font-weight: 700; }
 .pending { margin-top: .8rem; padding: .55rem .75rem; border: 1px dashed var(--accent);
            border-radius: .5rem; background: var(--info-bg); color: var(--info); }
+.hold { margin-top: .8rem; display: flex; flex-wrap: wrap; align-items: center;
+        justify-content: space-between; gap: .4rem .8rem; }
 section.events { background: var(--surface); border: 1px solid var(--line);
                  border-radius: .75rem; padding: 1rem 1.1rem; }
 section.events h2 { margin: 0 0 .6rem; font-size: 1.15rem; }
@@ -691,6 +694,14 @@ function cardHtml(unit) {
       esc(changeText(pending.action, pending.requested)) +
       " &mdash; uusi arvo näytetään vasta, kun laite ilmoittaa sen</div>"
     : "";
+  // Manual pause: the automation leaves the unit alone until then.
+  const holdHtml = unit.hold_until
+    ? '<div class="hold"><span class="label" title="Pumppua säädettiin käsin, joten ' +
+      'automaatio jättää sen rauhaan tauon ajan.">Käsiohjaus klo ' +
+      esc(fmtClock(unit.hold_until)) + " asti</span>" +
+      '<button type="button" data-action="resume" data-unit="' + esc(unit.id) + '"' +
+      dis + ">Palauta automaatio</button></div>"
+    : "";
   return (
     '<article class="card' + (unit.fresh ? "" : " stale") + '">' +
     '<header class="card-head"><h3>' + esc(unit.name) + "</h3>" +
@@ -698,7 +709,7 @@ function cardHtml(unit) {
       '<span class="badge warn" title="Laitteelta ei ole saatu tuoretta lukemaa ' +
       'vähään aikaan, joten näytetyt arvot voivat olla vanhoja.">Tiedot vanhentuneet</span>') +
     "</header>" +
-    rows.join("") + pendingHtml + "</article>"
+    rows.join("") + holdHtml + pendingHtml + "</article>"
   );
 }
 
@@ -1178,6 +1189,26 @@ function onControl(e) {
     sendCommand(unitId, "setpoint", next);
   } else if (action === "power") {
     sendCommand(unitId, "power", el.dataset.value === "true");
+  } else if (action === "resume") {
+    resumeAutomation(unitId);
+  }
+}
+
+async function resumeAutomation(unitId) {
+  if (sending) return;
+  sending = true;
+  try {
+    const res = await fetch("api/automation/resume", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ unit: unitId })
+    });
+    if (!res.ok) alert("Automaation palautus epäonnistui.");
+    refresh();
+  } catch (err) {
+    alert("Yhteys palveluun epäonnistui. Automaatiota ei palautettu; yritä uudelleen, kun yhteys toimii.");
+  } finally {
+    sending = false;
   }
 }
 
@@ -1727,6 +1758,16 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
                 return
             self._json(200, self.app.service.set_automation(body["on"],
                                                             identity["actor"]))
+        elif parts.path == "/api/automation/resume":
+            body = self._read_json_object()
+            if body is None:
+                return
+            if not isinstance(body.get("unit"), str):
+                self._json(400, {"error": "bad_body",
+                                 "detail": "unit must be a string"})
+                return
+            status, payload = self.app.service.resume_automation(body["unit"])
+            self._json(status, payload)
         elif parts.path == "/api/visit":
             self._post_visit(identity)
         elif parts.path == "/api/visit/end":
@@ -1875,10 +1916,12 @@ class PumpAppServer(ThreadingHTTPServer):
     def _scopes(self) -> list[dict]:
         """Every scope the settings can apply to: sites, then home rooms."""
         scopes = [{"id": f"site:{site}", "site": site,
+                   "kind": app_settings.SITE_KIND[site],
                    "label": app_settings.SITE_LABELS[site]}
                   for site in app_settings.SITES]
         for unit in self.service.view()["units"]:
             scopes.append({"id": f"room:home/{unit['id']}", "site": "home",
+                           "kind": app_settings.SITE_KIND["home"],
                            "label": f"Koti · {unit['name']}"})
         return scopes
 

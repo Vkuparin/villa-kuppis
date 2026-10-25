@@ -16,7 +16,7 @@ maximum in expensive ones and switches the unit off when that is cheapest:
 * Setpoints run from the precooling temperature to the maximum in
   ``SETPOINT_STEP_C`` steps, so the unit never cools below the precooling
   temperature. "Off" is allowed only where the fixed rule allows it: the
-  room's ``cool_off_when_expensive`` is on and the price is at or above
+  room may switch the pump (``cool_power``) and the price is at or above
   the high price. Once off, the unit stays off for the minimum off time.
 * A room above the maximum costs ``OVER_MAX_PENALTY`` cents per °C·h, far
   more than any energy, so the plan stays at or below the maximum whenever

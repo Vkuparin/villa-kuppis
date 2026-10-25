@@ -365,6 +365,33 @@ class ViewApiTests(AppTestCase):
         self.assertEqual(events, [])
 
 
+class ManualPauseApiTests(AppTestCase):
+    def test_manual_change_shows_the_pause_and_resume_ends_it(self):
+        server, _ = self._start_app(FakeClient(make_unit_payloads()),
+                                    automation_interval=3600.0)
+        service = server.service
+        # The automation's first pass sets unit-1 to the 25 °C maximum.
+        self.wait_for(lambda: self._unit(self._view(server), "unit-1")["setpoint"] == 25.0)
+        self.wait_for(lambda: not any(u["pending"] for u in self._view(server)["units"]))
+        status, _ = self._post(server, "unit-1", "setpoint", 23.0)
+        self.assertEqual(status, 202)
+        self.wait_for(lambda: self._unit(self._view(server), "unit-1")["setpoint"] == 23.0)
+        # A pass skips a unit whose reading is stale, so pass until it is seen.
+        self.wait_for(lambda: service.automation.run_once() is not None
+                      and self._unit(self._view(server), "unit-1")["hold_until"])
+        page = http("GET", self._url(server, "/"))[2].decode("utf-8")
+        self.assertIn("Palauta automaatio", page)
+
+        url = self._url(server, "/api/automation/resume")
+        self.assertEqual(http_json("POST", url, {"unit": "ghost"})[0], 404)
+        self.assertEqual(http_json("POST", url, {"unit": 5})[0], 400)
+        status, view = http_json("POST", url, {"unit": "unit-1"})
+        self.assertEqual(status, 200)
+        self.assertIsNone(self._unit(view, "unit-1")["hold_until"])
+        # Resuming runs the plan again: back to the maximum.
+        self.wait_for(lambda: self._unit(self._view(server), "unit-1")["setpoint"] == 25.0)
+
+
 class HistoryApiTests(AppTestCase):
     """The /api/history endpoint (card F3.3) over HTTP."""
 

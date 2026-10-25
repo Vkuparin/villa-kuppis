@@ -144,7 +144,10 @@ DAY = date(2026, 10, 19)          # the FakeClock's Helsinki day (15:00 local)
 
 
 class OptimizerServiceTests(ServiceTestCase):
-    def start(self, model=STEADY):
+    def start(self, model=STEADY, **settings):
+        store = SettingsStore(f"{self.tmp}/pumps.db")
+        for key, value in settings.items():
+            store.set("site:home", key, value, "test")
         service, clock = self._start(FakeClient(make_unit_payloads()))
         self.wait_for(lambda: len(service.view()["units"]) == 3)
         models = {"unit-1": model, "unit-2": model}
@@ -173,7 +176,9 @@ class OptimizerServiceTests(ServiceTestCase):
         sent = service.automation.run_once()
         self.wait_for(lambda: not any(u["pending"]
                                       for u in service.view()["units"]))
-        return [(s["unit"], s["action"], s["value"]) for s in sent]
+        # unit-2 is off in a hot room, so it is switched on; only unit-1 matters here.
+        return [(s["unit"], s["action"], s["value"]) for s in sent
+                if s["unit"] == "unit-1"]
 
     def test_precools_ahead_of_the_expensive_stretch(self):
         service, _ = self.start()
@@ -196,7 +201,7 @@ class OptimizerServiceTests(ServiceTestCase):
     def test_room_setting_turns_the_optimizer_off(self):
         service, _ = self.start()
         SettingsStore(service.store.path).set(
-            "room:home/unit-1", "cool_optimizer", False, "test")
+            "room:home/unit-1", "price_control", "fixed", "test")
         self.set_prices()
         self.assertEqual(self.run_plan(service), [("unit-1", "setpoint", 25.0)])
         view = next(u for u in service.plan_view()["units"]
@@ -204,7 +209,7 @@ class OptimizerServiceTests(ServiceTestCase):
         self.assertIsNone(view["optimizer"])
 
     def test_away_mode_uses_the_away_maximum(self):
-        service, _ = self.start()
+        service, _ = self.start(cool_power=False)
         self.set_prices(0, 0)
         service.set_away(True, "Ville")
         self.assertEqual(self.run_plan(service), [("unit-1", "setpoint", 28.0)])
@@ -214,18 +219,12 @@ class OptimizerServiceTests(ServiceTestCase):
         self.set_prices()
         self.assertEqual(self.run_plan(service), [("unit-1", "setpoint", 25.0)])
 
-    def test_fixed_plan_holds_the_maximum_after_coming_back_on(self):
-        service, clock = self._start(FakeClient(make_unit_payloads()))
-        self.wait_for(lambda: len(service.view()["units"]) == 3)
-        SettingsStore(service.store.path).set(
-            "site:home", "cool_optimizer", False, "test")
+    def test_fixed_plan_keeps_a_hot_room_at_the_maximum_when_expensive(self):
+        service, clock = self.start(price_control="fixed")
         self.set_prices(0, 24)                 # expensive all day
-        self.assertEqual(self.run_plan(service), [("unit-1", "power", False)])
-        # The room (26 °C) is above the maximum once the off time is over.
-        clock.advance(31 * 60)
-        self.assertEqual(self.run_plan(service), [("unit-1", "power", True)])
-        # It now holds the maximum instead of switching off again.
+        # The room (26 °C) is above the maximum: no switching off.
         self.assertEqual(self.run_plan(service), [("unit-1", "setpoint", 25.0)])
+        clock.advance(31 * 60)
         self.assertEqual(self.run_plan(service), [])
         self.assertTrue(self._unit(service, "unit-1")["power"])
 
