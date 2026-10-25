@@ -5,12 +5,12 @@ Answers go into the relevant design doc; then remove the question here. Never se
 Two-site Home Assistant (20 October 2026), none blocking the documentation or the mocked gateway:
 
 1. ~~Hardware~~ Settled 20 October 2026: HP MP9 G4 mini-PC at the cottage, HP OmniBook laptop at home, both Debian 13 hosts with a Home Assistant OS virtual machine. See [deployment](architecture.md#deployment).
-2. **Safe fallback setpoint** per cottage room, once the heaters' real minimum over Matter is known (H2.1).
-3. **The partly work-managed phone:** does its VPN policy allow Tailscale? Test before H3.1.
+2. **The partly work-managed phone:** does its VPN policy allow Tailscale? Test before H3.1.
 
 ## Settled
 
 - `Automaatio` off at the cottage (owner, 25 October 2026): heating optimization stops and the heaters fall back to the active fallback setpoint (for example 5 °C).
+- Cottage fallback setpoint (owner, 25 October 2026): 5 °C in both rooms; the integration's `safe_setpoint` default.
 - Name Villa Kuppis; public repository [Vkuparin/villa-kuppis](https://github.com/Vkuparin/villa-kuppis) under Apache License 2.0. Finnish UI; technical docs in English.
 - The goal is one app instead of many; take the simplest working route to each device, cloud included.
 - Two-site Home Assistant (20 October 2026): Villa Kuppis (Compose) and a Home Assistant OS virtual machine on an always-on Debian home server, another Home Assistant OS VM on a Debian cottage mini-PC (revised the same evening from Home Assistant Container and bare-metal HAOS). Browser/PWA, no Android app. Tailscale between browsers, the home server and the cottage Home Assistant (free plan). Until the cutover, the service runs on the home Windows 11 PC.

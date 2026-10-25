@@ -42,7 +42,7 @@ OFF = "off"
 
 @dataclass(frozen=True)
 class Settings:
-    safe_setpoint: float = 7.0       # fallback; also the lowest room target
+    safe_setpoint: float = 5.0       # fallback; also the lowest room target
     low_setpoint: float = 5.0        # heater setpoint when driven low
     max_target: float = 25.0
     boost: float = 3.0               # high drive = target + boost
