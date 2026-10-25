@@ -31,7 +31,7 @@ To rehearse failures: `villa_kuppis_simulator.set_available` takes entities off 
    `curl -fsSL https://raw.githubusercontent.com/Vkuparin/villa-kuppis/main/deploy/cottage/install.sh | sh -s -- --with-simulator`.
    It copies the integrations to `/config/custom_components/`, adds [packages/villa_kuppis.yaml](packages/villa_kuppis.yaml) (and the simulator's package) unless they are already there, loads packages in `configuration.yaml` (backup next to it), checks the configuration and restarts Home Assistant. Run it again without `--with-simulator` to update the integration later; edited packages are kept.
 2. Each room gets `sensor.villa_kuppis_<room>_target`; its attributes show the mode, the reason, the target's revision and expiry, and the room's devices.
-3. Create a long-lived access token for a dedicated, non-admin Home Assistant user `villa-kuppis` and put it, with `cottage_url: wss://cottage-haos.corvus-stairs.ts.net/api/websocket`, in the options of the Villa Kuppis app at home (`cottage_token`). Villa Kuppis binds the rooms' devices itself.
+3. Create a long-lived access token for a dedicated, non-admin Home Assistant user `villa-kuppis` and put it, with `cottage_url: ws://100.89.234.42/api/websocket`, in the options of the Villa Kuppis app at home (`cottage_token`). Use the Tailscale IP: apps in home-haos reach the tailnet but do not resolve `.ts.net` names (checked 2026-10-25); the traffic is still encrypted by Tailscale. Villa Kuppis binds the rooms' devices itself.
 
 ## Services
 

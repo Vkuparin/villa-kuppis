@@ -7,10 +7,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-import pytest
-
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
@@ -100,9 +97,11 @@ async def test_dropouts(hass, freezer):
     await hass.async_block_till_done()
     assert hass.states.get("sensor.sim_alpstuga_large_humidity").state == "unavailable"
     assert hass.states.get("climate.sim_mill_large_2").state == "unavailable"
-    with pytest.raises(HomeAssistantError):
-        await hass.services.async_call("climate", "set_temperature", {
-            "entity_id": "climate.sim_mill_large_2", "temperature": 20}, blocking=True)
+    # Home Assistant skips an unavailable entity, as with a real Matter device.
+    await hass.services.async_call("climate", "set_temperature", {
+        "entity_id": "climate.sim_mill_large_2", "temperature": 20}, blocking=True)
+    await hass.async_block_till_done()
+    assert hass.data[SIM].entities["climate.sim_mill_large_2"][1].setpoint == 5.0
     await hass.services.async_call(COTTAGE, "set_target", {
         "room": "large", "target": 15, "revision": 1}, blocking=True)
     await hass.async_block_till_done()
