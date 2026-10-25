@@ -89,7 +89,7 @@ It is implemented as a small custom integration, `custom_components/villa_kuppis
 
 Mill heaters also have built-in frost protection. There are no water pipes. A cached whole-day plan at the cottage is not part of the first version (later card H3.3).
 
-**`Automaatio` switch:** off stops economic control (prices, optimizer). The cottage's local safe fallback keeps running. The exact wording is an open owner question.
+**`Automaatio` switch:** off stops economic control (prices, optimizer). Villa Kuppis stops sending cottage targets; when the last one expires the heaters fall back to the room's fallback setpoint (for example 5 °C). Owner's rule, 25 October 2026.
 
 ## Home control
 
