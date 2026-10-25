@@ -21,7 +21,10 @@ A climate entity that is off reports the HVAC mode ``off`` and hides the
 unit's mode, while MELCloud keeps reporting it. The cooling rules act only
 on units in Cool, including turning back on a unit they switched off, so
 the client remembers each unit's last mode while it is off (seeded from the
-pump store after a restart).
+pump store after a restart). For the same reason a mode change on an off
+unit is not sent: ``climate.set_hvac_mode`` would switch the unit on,
+while MELCloud changes the mode and leaves the unit off. The remembered
+mode is accepted without a write; any other mode is refused.
 """
 
 from __future__ import annotations
@@ -174,6 +177,14 @@ class HAPumpClient:
         accepted-but-unconfirmed (``unknown``) command raises like an HTTP
         error after a write that may have succeeded.
         """
+        if "operation_mode" in kwargs:
+            state = self._climates().get(unit_id) or {}
+            if state.get("mode") == "off":
+                wanted = getattr(kwargs["operation_mode"], "value", kwargs["operation_mode"])
+                if wanted == self._last_modes.get(unit_id):
+                    return
+                raise PumpCommandError("the unit is off; Home Assistant would switch "
+                                       "it on to change the mode")
         action, value = self._translate(unit_id, kwargs)
         cmd = self._gateway.submit(unit_id, action, value, "Villa Kuppis")
         loop = asyncio.get_running_loop()

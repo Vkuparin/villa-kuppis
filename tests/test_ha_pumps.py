@@ -114,6 +114,16 @@ class HAPumpServiceTests(unittest.TestCase):
         self.assertEqual(self.service.store.unit_state(UNIT)["mode"], "Cool")
         self.assertEqual(self.finish("power", True)["result"], "confirmed")
 
+    def test_a_mode_change_never_switches_an_off_unit_on(self):
+        self.assertEqual(self.finish("power", False)["result"], "confirmed")
+        wait_until(lambda: self.service.store.unit_state(UNIT)["power"] is False)
+        calls = len(self.ha.calls)
+        # The remembered mode (a tap on the mode list) needs no write.
+        self.assertEqual(self.finish("mode", "Cool")["result"], "confirmed")
+        self.assertEqual(self.finish("mode", "Heat")["result"], "failed")
+        self.assertEqual(len(self.ha.calls), calls)
+        self.assertIs(self.service.store.unit_state(UNIT)["power"], False)
+
     def test_refused_command_fails(self):
         self.ha.fail["set_temperature"] = ("home_assistant_error", "MELCloud returned 500")
         self.ha.apply = False
