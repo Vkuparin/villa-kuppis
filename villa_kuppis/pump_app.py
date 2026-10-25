@@ -702,16 +702,25 @@ function cardHtml(unit) {
   );
 }
 
+let selectHoldUntil = 0;
+let lastCardsHtml = null;
 function renderView(view) {
   const svc = view.service;
   vkHealth.viewOk(view);
   const text = vkHealth.homeText(svc.state);
   document.title = svc.state === "ok" ? "Pumput" : "Pumput — " + text;
-  // Rebuilding the cards would close a list the user is choosing from.
+  // Rebuilding the cards would close a list the user is choosing from. Some
+  // browsers (Android, HA's iframe) blur the select while its list is open, so
+  // a recent touch of a select also holds the rebuild back.
   const active = document.activeElement;
   if (active && active.tagName === "SELECT" && $cards.contains(active)) return;
-  $cards.innerHTML = view.units.map(cardHtml).join("") ||
+  if (Date.now() < selectHoldUntil) return;
+  const html = view.units.map(cardHtml).join("") ||
     '<p class="badge info">Ei yksiköitä tiedossa vielä.</p>';
+  if (html !== lastCardsHtml) {
+    $cards.innerHTML = html;
+    lastCardsHtml = html;
+  }
 }
 
 function renderEvents(events) {
@@ -1187,8 +1196,16 @@ renderView = function (view) {
 
 $cards.addEventListener("click", onControl);
 $cards.addEventListener("change", onControl);
-$cards.addEventListener("focusout", () => {
-  setTimeout(() => { if (lastView) renderView(lastView); }, 0);
+// A select being used keeps its list open for up to 30 s; choosing a value
+// (change) or the next refresh after that releases the hold.
+const SELECT_HOLD_MS = 30000;
+function holdSelect(e) {
+  if (e.target.tagName === "SELECT") selectHoldUntil = Date.now() + SELECT_HOLD_MS;
+}
+["pointerdown", "touchstart", "focusin", "keydown"].forEach((type) =>
+  $cards.addEventListener(type, holdSelect, { passive: true }));
+$cards.addEventListener("change", (e) => {
+  if (e.target.tagName === "SELECT") selectHoldUntil = 0;
 });
 // Master switch of the automation, in the page header.
 const $auto = document.getElementById("auto-btn");

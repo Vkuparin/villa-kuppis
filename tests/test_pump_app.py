@@ -258,6 +258,43 @@ assert.equal($histStatus.textContent, '');
                                 encoding="utf-8", timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_cards_not_rebuilt_while_select_list_is_open(self):
+        from villa_kuppis.pump_app import render_page
+        page = render_page(True)
+        source = page[page.index("let selectHoldUntil"):page.index("function renderEvents(")]
+        hold = page[page.index("const SELECT_HOLD_MS"):page.index("// Master switch of the automation")]
+        script = """
+import assert from 'node:assert/strict';
+let now = 1000;
+const Date = {now: () => now};
+const vkHealth = {viewOk() {}, homeText: () => ''};
+const document = {title: '', activeElement: null};
+const $cards = {innerHTML: '', sets: 0, handlers: {}, contains: () => false,
+  addEventListener(t, f) { this.handlers[t] = f; }};
+const cardHtml = u => '<p>' + u.v + '</p>';
+""" + source + hold + """
+const view = v => ({service: {state: 'ok'}, units: [{v}]});
+renderView(view(1));
+assert.equal($cards.innerHTML, '<p>1</p>');
+// The list is opened; the browser blurs the select, a refresh arrives.
+$cards.handlers.pointerdown({target: {tagName: 'SELECT'}});
+renderView(view(2));
+assert.equal($cards.innerHTML, '<p>1</p>');
+// A value was picked: rebuilding is allowed again.
+$cards.handlers.change({target: {tagName: 'SELECT'}});
+renderView(view(2));
+assert.equal($cards.innerHTML, '<p>2</p>');
+// Abandoned list: the hold expires.
+$cards.handlers.focusin({target: {tagName: 'SELECT'}});
+now += 31000;
+renderView(view(3));
+assert.equal($cards.innerHTML, '<p>3</p>');
+"""
+        result = subprocess.run(["node", "--input-type=module", "-"],
+                                input=script, text=True, capture_output=True,
+                                encoding="utf-8", timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_serves_finnish_page(self):
         server, _ = self._start_app(FakeClient(make_unit_payloads()))
         status, ctype, raw = http("GET", self._url(server, "/"))
