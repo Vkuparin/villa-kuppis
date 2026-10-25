@@ -284,6 +284,11 @@ assert.equal($cards.innerHTML, '<p>1</p>');
 $cards.handlers.change({target: {tagName: 'SELECT'}});
 renderView(view(2));
 assert.equal($cards.innerHTML, '<p>2</p>');
+// The chosen value was not accepted: the same view redraws the old value.
+$cards.innerHTML = '<p>picked</p>';
+$cards.handlers.change({target: {tagName: 'SELECT'}});
+renderView(view(2));
+assert.equal($cards.innerHTML, '<p>2</p>');
 // Abandoned list: the hold expires.
 $cards.handlers.focusin({target: {tagName: 'SELECT'}});
 now += 31000;

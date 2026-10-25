@@ -1,5 +1,10 @@
 # Muutokset
 
+## 0.4.10
+
+- Erillinen tavoitelämpötila-arvo poistettu, koska lista näyttää sen.
+- Jos tavoitelämpötilan (tai tilan, puhalluksen) muutos epäonnistuu, lista palaa edelliseen arvoon.
+
 ## 0.4.9
 
 - Tavoitelämpötilan − ja + -painikkeet poistettu, lämpötila valitaan listasta.

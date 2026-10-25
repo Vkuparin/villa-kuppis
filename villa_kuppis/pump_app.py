@@ -662,7 +662,6 @@ function cardHtml(unit) {
   );
   rows.push(
     '<div class="row"><span class="label">Tavoitelämpötila</span>' +
-    '<span class="value">' + fmtTemp(unit.setpoint) + "</span>" +
     '<select data-action="setpoint-select" data-unit="' + esc(unit.id) +
     '" aria-label="Valitse tavoitelämpötila"' + (canStep ? "" : " disabled") + ">" +
     setpointOptions(unit, step) + "</select></div>"
@@ -1134,6 +1133,14 @@ async function loadIdentity() {
   }
 }
 
+// The lists show a chosen value before the unit confirms it; redraw from the
+// last known state so a failed change puts the old value back.
+function restoreCards() {
+  selectHoldUntil = 0;
+  lastCardsHtml = null;
+  if (lastView) renderView(lastView);
+}
+
 let sending = false;
 async function sendCommand(unitId, action, value) {
   if (sending) return;
@@ -1146,11 +1153,13 @@ async function sendCommand(unitId, action, value) {
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
+      restoreCards();
       alert(commandError(body, res.status));
     } else {
       refresh();
     }
   } catch (err) {
+    restoreCards();
     alert("Yhteys palveluun epäonnistui. Komentoa ei lähetetty eikä sitä lähetetä myöhemmin; yritä uudelleen, kun yhteys toimii.");
   } finally {
     sending = false;
@@ -1226,7 +1235,10 @@ function holdSelect(e) {
 ["pointerdown", "touchstart", "focusin", "keydown"].forEach((type) =>
   $cards.addEventListener(type, holdSelect, { passive: true }));
 $cards.addEventListener("change", (e) => {
-  if (e.target.tagName === "SELECT") selectHoldUntil = 0;
+  if (e.target.tagName === "SELECT") {
+    selectHoldUntil = 0;
+    lastCardsHtml = null;   // the page now differs from the markup last drawn
+  }
 });
 // Master switch of the automation, in the page header.
 const $auto = document.getElementById("auto-btn");
