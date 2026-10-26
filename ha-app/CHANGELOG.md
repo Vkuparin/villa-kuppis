@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.18
+
+- Mökin huoneet oppivat lämpenemis- ja jäähtymisnopeutensa lukemista; ne näkyvät kodin pumppujen kanssa kohdassa Huoneiden opitut nopeudet. Tämä on ensimmäinen vaihe mökin älykkäästä ylläpitolämmityksestä.
+
 ## 0.4.17
 
 - Mökin lämmitysasetusten selitykset kertovat, mitä asetukset nyt tekevät.

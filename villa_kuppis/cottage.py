@@ -47,6 +47,7 @@ from urllib.parse import urlsplit
 from .cottage_targets import ACTOR as PLAN_ACTOR
 from .cottage_targets import CottageTargetSender
 from .credential_file import read_token_file
+from . import learning
 from .ha_gateway import (DEFAULT_ENTITY_STALE_AFTER, Binding, BindingError,
                          BindingStore, HomeAssistantGateway)
 from .pump_service import (DB_FILENAME, HISTORY_INTERVAL_SECONDS, _iso,
@@ -79,6 +80,8 @@ _STATUS_ORDER = ("missing", "unavailable", "stale", "unknown", "ok")
 _CONNECTION = {"ok": "ok", "stale": "stale", "auth_failed": "auth_failed"}
 MAX_ERROR_LENGTH = 200
 MODES = ("follow", "thermostat", "fallback", "manual")
+# Controller modes in which the heaters work towards the target in force.
+HEATING_MODES = ("follow", "thermostat", "fallback")
 
 
 def utc_now() -> datetime:
@@ -255,6 +258,37 @@ class CottageStore:
                 "INSERT INTO site_event (ts_utc, site_id, room, actor, action, "
                 "old_value, new_value, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (_iso(ts), site_id, room, actor, action, old_value, new_value, detail))
+
+    def learning_readings(self, site_id: str, temperature: str, status: str,
+                          start, end) -> list:
+        """One room's history as learning.Reading rows (card F5.2).
+
+        The room temperature is the temperature sensor's; the control is
+        the status sensor's target in force, heating while the controller
+        runs the room (follow, thermostat or fallback). In manual mode, or
+        without a recent status row, the control is unknown, so learning
+        skips those steps.
+        """
+        s, e = _to_epoch(start), _to_epoch(end)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT ts_utc, device_id, value, mode FROM site_reading "
+                "WHERE site_id = ? AND device_id IN (?, ?) AND ts_utc >= ? "
+                "AND ts_utc < ? ORDER BY ts_utc, id",
+                (site_id, temperature, status, s, e)).fetchall()
+        out, room, control = [], None, None
+        for ts, device, value, mode in rows:
+            if device == temperature:
+                room = (ts, value)
+            else:
+                control = (ts, value, mode)
+            room_c = room[1] if room and ts - room[0] <= learning.MAX_READING_AGE else None
+            if (control and ts - control[0] <= learning.MAX_READING_AGE
+                    and control[2] in HEATING_MODES and control[1] is not None):
+                out.append(learning.Reading(ts, room_c, control[1], True, "Heat"))
+            else:
+                out.append(learning.Reading(ts, room_c, None, None, None))
+        return out
 
     def events(self, limit: int = 100) -> list[dict]:
         with self._lock:
@@ -511,6 +545,17 @@ class CottageSite:
                 "reason_text": PLAN_REASONS.get(target.reason, target.reason),
                 "price": float(target.price_c_kwh) if target.price_c_kwh is not None else None,
                 "acked_at": self._acked.get(room_id)}
+
+    def learning_readings(self, room_id: str, start, end) -> list:
+        """The room's history for learning its rates (card F5.2)."""
+        found = {}
+        for binding in sorted(self._bindings(), key=lambda b: b.device_id):
+            if binding.room == room_id:
+                found.setdefault(self._role(binding), binding.device_id)
+        if "temperature" not in found or "status" not in found:
+            return []
+        return self._store.learning_readings(SITE_ID, found["temperature"],
+                                             found["status"], start, end)
 
     def _role(self, binding: Binding, state: dict | None = None) -> str | None:
         role = role_of(binding, state) or self._roles.get(binding.device_id)

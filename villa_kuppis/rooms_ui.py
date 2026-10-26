@@ -49,25 +49,33 @@ SCRIPT = r"""
     $note.textContent = "Opittu viimeisten " + data.learn_days +
       " päivän lukemista. Hyväksytty virhe: keskimäärin enintään " +
       num(data.limit_c, 1) + " °C edellisen päivän ennusteessa.";
+    function range(rows) {
+      var temps = rows.map(function (p) { return p[1]; });
+      return num(Math.min.apply(null, temps), 0) + "…" +
+        num(Math.max.apply(null, temps), 0) + " °C";
+    }
     if (data.forecast.length) {
-      var temps = data.forecast.map(function (p) { return p[1]; });
       $forecast.textContent = "Ilmatieteen laitoksen ennuste seuraavalle vuorokaudelle: " +
-        num(Math.min.apply(null, temps), 0) + "…" +
-        num(Math.max.apply(null, temps), 0) + " °C.";
+        range(data.forecast) + (data.cottage_forecast && data.cottage_forecast.length
+          ? ", mökillä " + range(data.cottage_forecast) : "") + ".";
     } else {
       $forecast.textContent = "Sääennustetta ei ole vielä haettu.";
     }
     data.units.forEach(function (u) {
+      // A cottage room is heated by its Mill heaters, a home room by its pump.
+      var cot = u.site === "cottage";
       var h = document.createElement("h3");
       h.textContent = u.name;
       var ul = document.createElement("ul");
       var m = u.model;
       if (!m.ready) {
-        item(ul, "Opitaan vielä: lukemia on " + u.hours +
-          " tunnilta, tarvitaan vähintään vuorokausi ilman laitteen ohjausta.");
+        item(ul, "Opitaan vielä: lukemia on " + u.hours + " tunnilta, tarvitaan vähintään " +
+          (cot ? "vuorokausi aikaa, jolloin patterit eivät lämmitä."
+               : "vuorokausi ilman laitteen ohjausta."));
       } else {
         if (u.now) {
-          item(ul, "Laite pois päältä: " + signed(u.now.off_c_per_h) +
+          item(ul, (cot ? "Patterit eivät lämmitä: " : "Laite pois päältä: ") +
+            signed(u.now.off_c_per_h) +
             " °C/h nyt (" + (u.now.outdoor_c === null ? "ulkolämpötila ei tiedossa"
               : "ulkona " + num(u.now.outdoor_c, 1) + " °C") + ").");
           if (u.now.cooling_c_per_h !== null)
@@ -76,9 +84,11 @@ SCRIPT = r"""
             item(ul, "Lämmittäessä: " + signed(u.now.heating_c_per_h) + " °C/h.");
         }
         if (m.cool_c_per_h === null && m.heat_c_per_h === null)
-          item(ul, "Laitteen teho opitaan, kun se on jäähdyttänyt tai lämmittänyt vähintään kaksi tuntia.");
+          item(ul, cot ? "Patterien teho opitaan, kun ne ovat lämmittäneet vähintään kaksi tuntia."
+                       : "Laitteen teho opitaan, kun se on jäähdyttänyt tai lämmittänyt vähintään kaksi tuntia.");
         if (u.predicted)
-          item(ul, "Ennuste: jos laite on pois päältä, huone on " +
+          item(ul, "Ennuste: jos " + (cot ? "patterit eivät lämmitä" : "laite on pois päältä") +
+            ", huone on " +
             u.predicted.hours + " tunnin päästä noin " +
             num(u.predicted.off_c, 1) + " °C.");
         if (!m.uses_outdoor)

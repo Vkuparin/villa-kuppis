@@ -157,6 +157,84 @@ class ValidationTests(unittest.TestCase):
         self.assertIsNone(check)
 
 
+def cottage_rows(days=DAYS, a=0.05, heat=1.5):
+    """A cottage room heated to 15 °C on most evenings, 5 °C otherwise, as
+    the stored temperature and status sensor rows of the large room."""
+    out = Outdoor(outdoor_curve(mean=0.0, swing=4.0, days=days))
+    rows, room = [], 8.0
+    for k in range(days * 288):
+        ts = START + k * 300
+        hour = (k // 12) % 24
+        target = 15.0 if 16 <= hour < 22 and (k // 288) % 3 != 2 else 5.0
+        free = room + a * (out.at(ts) - room) * 300 / 3600
+        room = min(target, free + heat * 300 / 3600) if free < target else free
+        rows.append(("cottage", "large-temperature", ts, round(room, 1), None))
+        rows.append(("cottage", "large-status", ts, target, "follow"))
+    return rows, out
+
+
+class CottageLearningTests(unittest.TestCase):
+    """Card F5.2: the cottage rooms learn from their sensor and target rows."""
+
+    def setUp(self):
+        from villa_kuppis.cottage import CottageSite, FakeSiteGateway
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.now = after(DAYS)
+        now = lambda: self.now
+
+        def factory(data):
+            gateway = FakeSiteGateway(now=now)
+            return CottageSite(data, gateway, gateway.bindings, now=now, sample_interval=3600)
+        self.service = PumpService(Path(self._tmp.name), client=FakeClient([]), now=now,
+                                   cottage_factory=factory)
+        self.addCleanup(self.service.close)
+        self.store = self.service.cottage._store
+
+    def insert(self, rows):
+        with self.store._lock, self.store._conn:
+            self.store._conn.executemany(
+                "INSERT INTO site_reading (site_id, device_id, ts_utc, value, mode) "
+                "VALUES (?, ?, ?, ?, ?)", rows)
+
+    def test_readings_join_the_room_temperature_and_the_target_in_force(self):
+        t = START
+        self.insert([("cottage", "large-temperature", t, 6.0, None),
+                     ("cottage", "large-status", t + 60, 12.0, "follow"),
+                     ("cottage", "large-status", t + 600, None, "manual"),
+                     ("cottage", "large-status", t + 3000, 5.0, "fallback")])
+        start = datetime.fromtimestamp(START, timezone.utc)
+        end = start + timedelta(seconds=4000)
+        rows = self.service.cottage.learning_readings("large", start, end)
+        self.assertEqual([(r.room_c, r.setpoint_c, r.power, r.mode) for r in rows], [
+            (6.0, None, None, None),          # no target yet
+            (6.0, 12.0, True, "Heat"),
+            (6.0, None, None, None),          # manual: unknown control
+            (None, 5.0, True, "Heat")])       # the temperature is too old
+        self.assertEqual(self.service.cottage.learning_readings("small", start, end), [])
+
+    def test_cottage_rooms_learn_their_heating_rates(self):
+        rows, out = cottage_rows()
+        self.insert(rows)
+        self.service.store.outdoor_upsert("cottage", [
+            (datetime.fromtimestamp(ts, timezone.utc), v)
+            for ts, v in outdoor_curve(mean=0.0, swing=4.0)])
+        units = {u["id"]: u for u in self.service.room_rates()["units"]}
+        large, small = units["cottage:large"], units["cottage:small"]
+        self.assertEqual((large["site"], large["name"]), ("cottage", "Mökki: Iso huone"))
+        self.assertTrue(large["model"]["ready"])
+        self.assertTrue(large["model"]["uses_outdoor"])
+        self.assertAlmostEqual(large["model"]["loss_per_h"], 0.05, delta=0.01)
+        self.assertAlmostEqual(large["model"]["heat_c_per_h"], 1.5, delta=0.3)
+        self.assertTrue(large["validation"]["passed"])
+        self.assertFalse(small["model"]["ready"])
+        models, _outdoor, _ahead = self.service.learned_models("cottage")
+        self.assertEqual(set(models), {"large", "small"})
+        self.assertTrue(models["large"].ready)
+        # The home units are learned apart from the cottage rooms.
+        self.assertEqual(self.service.learned_models("home")[0], {})
+
+
 def _state(unit_id, name, room, updated):
     return {"id": unit_id, "name": name, "power": True, "mode": "Cool",
             "setpoint": 22.0, "fan": "Auto", "room_temp": room,

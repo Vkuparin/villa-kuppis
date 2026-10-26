@@ -1,8 +1,9 @@
 """Learned room warm-up and cool-down rates (card F5.1).
 
 Pure functions: stored readings in, a small room model and its held-out
-error out. No I/O. The pump service feeds it the home pumps' history; the
-cottage readings from the Android app can use the same code later.
+error out. No I/O. The pump service feeds it the home pumps' history and
+the cottage rooms' temperature and target rows (card F5.2), where the
+target in force is the setpoint and the Mill heaters are the heating unit.
 
 The model is a first-order room, per hour::
 

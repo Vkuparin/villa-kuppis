@@ -1104,7 +1104,7 @@ class PumpService:
         self._forecast_fetcher = forecast_fetcher
         self._room_rates_cache: tuple[datetime, dict] | None = None
         self._room_rates_lock = threading.Lock()
-        self._models_cache: tuple[datetime, tuple] | None = None
+        self._models_cache: dict[str, tuple[datetime, tuple]] = {}
         self._models_lock = threading.Lock()
         self._prices_db = (Path(prices_db) if prices_db is not None
                            else self._data_dir / PRICE_DB_FILENAME)
@@ -1383,24 +1383,44 @@ class PumpService:
 
     # -- learned room rates (card F5.1) ----------------------------------------
 
-    def room_rates(self, site: str = "home") -> dict:
-        """Learned rates, held-out error and a short prediction per unit."""
+    def room_rates(self) -> dict:
+        """Learned rates, held-out error and a short prediction per home
+        unit and, with a cottage, per cottage room."""
         now = self._now()
         with self._room_rates_lock:
             cached = self._room_rates_cache
             if cached is not None and 0 <= (now - cached[0]).total_seconds() \
                     < ROOM_RATES_CACHE_SECONDS:
                 return cached[1]
-            payload = self._compute_room_rates(site, now)
+            payload = self._compute_room_rates("home", now)
+            if self.cottage is not None:
+                cottage = self._compute_room_rates("cottage", now)
+                payload["units"] += cottage["units"]
+                payload["cottage_forecast"] = cottage["forecast"]
             self._room_rates_cache = (now, payload)
             return payload
 
+    def _learning_subjects(self, site: str) -> list[tuple[str, str]]:
+        """(id, name) of what is learned at a site: home units, cottage rooms."""
+        if site == "cottage":
+            if self.cottage is None:
+                return []
+            from .cottage import ROOMS
+            return list(ROOMS.items())
+        return [(state["id"], state["name"]) for state in self.store.unit_states()]
+
+    def _learning_readings(self, site: str, subject: str, start, end) -> list:
+        if site == "cottage":
+            return self.cottage.learning_readings(subject, start, end)
+        return self.store.learning_readings(subject, start, end)
+
     def learned_models(self, site: str = "home") -> tuple[dict, tuple, list]:
-        """Fitted room model per unit, (observed, forecast-ahead) outdoor and
-        the forecast rows; cached like the rates (cards F5.1 and F5.4)."""
+        """Fitted room model per home unit or cottage room, (observed,
+        forecast-ahead) outdoor and the forecast rows; cached like the rates
+        (cards F5.1, F5.2 and F5.4)."""
         now = self._now()
         with self._models_lock:
-            cached = self._models_cache
+            cached = self._models_cache.get(site)
             if cached is not None and 0 <= (now - cached[0]).total_seconds() \
                     < ROOM_RATES_CACHE_SECONDS:
                 return cached[1]
@@ -1416,12 +1436,11 @@ class PumpService:
                 [r for r in observed if r[0] < _to_epoch(now)]
                 + [r for r in ahead if r[0] >= _to_epoch(now)])
             models = {
-                state["id"]: learning.fit(
-                    self.store.learning_readings(state["id"], start, now),
-                    outdoor)
-                for state in self.store.unit_states()}
+                subject: learning.fit(self._learning_readings(site, subject, start, now),
+                                      outdoor)
+                for subject, _name in self._learning_subjects(site)}
             result = (models, (outdoor, future), ahead)
-            self._models_cache = (now, result)
+            self._models_cache[site] = (now, result)
             return result
 
     def _compute_room_rates(self, site: str, now: datetime) -> dict:
@@ -1429,11 +1448,18 @@ class PumpService:
         models, (outdoor, future), ahead = self.learned_models(site)
         now_ts = _to_epoch(now)
         units = []
-        for state in self.store.unit_states():
-            readings = self.store.learning_readings(state["id"], start, now)
-            model = models.get(state["id"]) or learning.fit(readings, outdoor)
+        rooms_now = ({} if site == "cottage" else
+                     {state["id"]: state["room_temp"] for state in self.store.unit_states()})
+        for subject, name in self._learning_subjects(site):
+            readings = self._learning_readings(site, subject, start, now)
+            model = models.get(subject) or learning.fit(readings, outdoor)
             _trained, check = learning.validate(readings, outdoor, now)
-            room = state["room_temp"]
+            if site == "cottage":
+                last = readings[-1] if readings else None
+                room = (last.room_c if last is not None and now_ts - last.ts
+                        <= learning.MAX_READING_AGE else None)
+            else:
+                room = rooms_now.get(subject)
             out_now = future.at(now_ts)
             if out_now is None:
                 out_now = future.last_before(now_ts)
@@ -1455,7 +1481,9 @@ class PumpService:
                              "off_c": round(path[-1][1], 1),
                              "forecast": bool(ahead)}
             units.append({
-                "id": state["id"], "name": state["name"],
+                "id": subject if site == "home" else f"{site}:{subject}",
+                "site": site,
+                "name": name if site == "home" else f"Mökki: {name}",
                 "hours": (round((readings[-1].ts - readings[0].ts) / 3600)
                           if readings else 0),
                 "model": model.public(),
