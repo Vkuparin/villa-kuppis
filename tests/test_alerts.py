@@ -9,6 +9,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from villa_kuppis.alerts import AlertMonitor, HomeAssistantNotifier
+from villa_kuppis.ha_gateway import HAError
+from villa_kuppis.ha_pumps import SessionReloader
 from villa_kuppis.settings import SettingsStore
 
 from tests.test_ha_gateway import GatewayTestCase
@@ -154,6 +156,82 @@ class MonitorTests(unittest.TestCase):
                          ["Mökki: Iso huone on taas lämpimämpi"] * 2)
 
 
+class FakeGateway:
+    def __init__(self):
+        self.state = "ok"
+        self.calls = []
+        self.error = None
+
+    def health(self):
+        return {"state": self.state}
+
+    def snapshot(self):
+        return {"u1": {"entity_id": "climate.olohuone"}, "u2": {"entity_id": "climate.makuuhuone"}}
+
+    def call(self, domain, service, data, entity_id=None):
+        self.calls.append((domain, service, entity_id))
+        if self.error:
+            raise self.error
+
+
+class ReloaderTests(unittest.TestCase):
+    def setUp(self):
+        self.now = datetime(2026, 1, 10, 12, 0, tzinfo=timezone.utc)
+        self.gateway = FakeGateway()
+        self.reloader = SessionReloader(self.gateway, now=lambda: self.now)
+        self.down = [unit(power=None, mode=None, in_error=True),
+                     unit("u2", "Makuuhuone", power=None, mode=None, in_error=True)]
+
+    def check(self, minutes, units=None, enabled=True):
+        self.now += minutes * MINUTE
+        self.reloader.check(self.down if units is None else units, enabled)
+        return len(self.gateway.calls)
+
+    def test_reloads_after_ten_minutes_and_at_most_hourly(self):
+        self.assertEqual(self.check(0), 0)
+        self.assertEqual(self.check(9), 0)
+        with self.assertLogs("villa_kuppis.ha_pumps", "INFO"):
+            self.assertEqual(self.check(1), 1)
+        self.assertEqual(self.gateway.calls[0],
+                         ("homeassistant", "reload_config_entry", "climate.olohuone"))
+        self.assertTrue(self.reloader.tried)
+        self.assertEqual(self.check(59), 1)
+        self.assertEqual(self.check(1), 2)
+        self.check(1, [unit(), unit("u2", "Makuuhuone")])
+        self.assertFalse(self.reloader.tried)
+
+    def test_no_reload_for_one_pump_when_off_or_when_home_assistant_is_down(self):
+        self.check(0, [self.down[0], unit("u2", "Makuuhuone")])
+        self.assertEqual(self.check(15, [self.down[0], unit("u2", "Makuuhuone")]), 0)
+        self.assertEqual(self.check(15, enabled=False), 0)
+        self.gateway.state = "disconnected"
+        self.assertEqual(self.check(15), 0)
+        self.gateway.state = "ok"
+        self.assertEqual(self.check(1), 1)
+
+    def test_refused_reload_says_why(self):
+        self.gateway.error = HAError("unauthorized", "Unauthorized")
+        self.check(0)
+        with self.assertLogs("villa_kuppis.ha_pumps", "WARNING") as logs:
+            self.check(10)
+        self.assertIn("administrator", logs.output[0])
+
+    def test_pump_alert_says_when_the_reload_did_not_help(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        service, notifier = FakeService(), FakeNotifier()
+        service.cottage = None
+        service.units = self.down
+        monitor = AlertMonitor(service, notifier, SettingsStore(Path(tmp.name) / "pumps.db"),
+                               reloader=self.reloader, now=lambda: self.now)
+        for _ in range(31):
+            monitor.check()
+            self.now += MINUTE
+        self.assertEqual(len(self.gateway.calls), 1)
+        self.assertEqual(len(notifier.sent), 2)
+        self.assertIn("Uusi kirjautuminen MELCloud Homeen ei auttanut", notifier.sent[0][1])
+
+
 class NotifierTests(GatewayTestCase):
     async def send(self, notifier):
         return await asyncio.get_running_loop().run_in_executor(
@@ -175,6 +253,18 @@ class NotifierTests(GatewayTestCase):
         notifier = HomeAssistantNotifier(await self.start_gateway())
         with self.assertLogs("villa_kuppis.alerts", "WARNING"):
             self.assertTrue(await self.send(notifier))
+
+    async def test_reload_targets_a_pump_entity(self):
+        later = [self.clock()]   # the gateway's own clock stays, so it stays fresh
+        reloader = SessionReloader(await self.start_gateway(), now=lambda: later[0])
+        down = [unit("pump-living", power=None, mode=None, in_error=True)]
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, reloader.check, down, True)
+        later[0] += timedelta(seconds=600)
+        with self.assertLogs("villa_kuppis.ha_pumps", "INFO"):
+            await loop.run_in_executor(None, reloader.check, down, True)
+        self.assertIn(("homeassistant", "reload_config_entry", "climate.olohuone", {}),
+                      self.ha.calls)
 
     async def test_no_phone_or_no_connection_is_not_sent(self):
         notifier = HomeAssistantNotifier(self.make_gateway())

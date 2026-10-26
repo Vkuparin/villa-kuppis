@@ -759,13 +759,15 @@ class HomeAssistantGateway:
         result = self._run(lambda conn: conn.get_services(timeout=self._command_timeout))
         return sorted((result or {}).get(domain) or {})
 
-    def call(self, domain: str, service: str, data: dict) -> None:
-        """Call a service that targets no bound device (a notification); blocking.
+    def call(self, domain: str, service: str, data: dict,
+             entity_id: str | None = None) -> None:
+        """Call a service outside the device commands (a notification, a
+        reload); blocking.
 
         Raises HAError when Home Assistant refuses it and HAConnectionClosed
         or TimeoutError when there is no answer.
         """
-        self._run(lambda conn: conn.call_service(domain, service, None, data,
+        self._run(lambda conn: conn.call_service(domain, service, entity_id, data,
                                                  timeout=self._command_timeout))
 
     def _run(self, make):

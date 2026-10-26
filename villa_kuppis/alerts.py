@@ -13,7 +13,9 @@ problem starts, and another when it is over:
 
 Each alert has its own switch setting, named above. Open problems live in
 memory, so a problem that persists over a restart is reported again. A
-notice that cannot be sent is retried at the next check.
+notice that cannot be sent is retried at the next check. The same check
+runs the pumps' session reloader (``ha_pumps.SessionReloader``, setting
+``pump_relogin``), so a pump alert comes only when the reload did not help.
 """
 
 from __future__ import annotations
@@ -88,10 +90,11 @@ class HomeAssistantNotifier:
 class AlertMonitor:
     """Checks the sites every minute and sends notices when problems start and end."""
 
-    def __init__(self, service, notifier, settings, *, now=utc_now,
+    def __init__(self, service, notifier, settings, *, reloader=None, now=utc_now,
                  interval: float = CHECK_INTERVAL):
         self._service = service
         self._notifier = notifier
+        self._reloader = reloader
         self._settings = settings
         self._now = now
         self._interval = interval
@@ -102,15 +105,18 @@ class AlertMonitor:
 
     # -- checks --
 
-    def problems(self, overrides) -> list[Problem]:
+    def problems(self, overrides, units) -> list[Problem]:
         out = []
-        for unit in self._service.view()["units"]:
+        for unit in units:
             unavailable = unit["power"] is None and unit["mode"] is None
             if not unavailable and not unit["in_error"]:
                 continue
             name = unit["name"]
             text = ("Pumppu ei ole ollut käytettävissä 30 minuuttiin." if unavailable
                     else "Pumppu on ilmoittanut laitevirheestä 30 minuutin ajan.")
+            if unavailable and self._reloader is not None and self._reloader.tried:
+                text += (" Uusi kirjautuminen MELCloud Homeen ei auttanut; tarkista"
+                         " integraatio Home Assistantissa.")
             out.append(Problem(f"pump:{unit['id']}", "alert_pump", "home", unit["id"],
                                (f"Koti: pumppu {name} ei toimi", text),
                                (f"Koti: pumppu {name} toimii taas",
@@ -150,7 +156,10 @@ class AlertMonitor:
         def enabled(problem):
             return app_settings.resolve(overrides, problem.site, problem.room)[problem.setting]["value"]
 
-        current = {p.key: p for p in self.problems(overrides)}
+        units = self._service.view()["units"]
+        if self._reloader is not None:
+            self._reloader.check(units, app_settings.resolve(overrides, "home")["pump_relogin"]["value"])
+        current = {p.key: p for p in self.problems(overrides, units)}
         for key in [k for k in self._since if k not in current]:
             del self._since[key]
         for key, problem in current.items():

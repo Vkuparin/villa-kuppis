@@ -106,6 +106,16 @@ when it starts and once when it is over. They go to every
 companion app is signed in to home-haos. Each alert has its own switch under
 Asetukset > Ilmoitukset. The app log says when no phone is found.
 
+MELCloud Home sessions can expire ("Session expired", HTTP 401), which leaves
+every pump unavailable until a new sign-in. When every pump has been
+unavailable for 10 minutes while home-haos answers, Villa Kuppis reloads the
+pumps' integration (`homeassistant.reload_config_entry`), which signs in again
+with the stored e-mail and password, at most once an hour. Home Assistant
+allows this only for an administrator, so the Villa Kuppis user in home-haos
+must be one; otherwise the app log says so. The pump alert then says that the
+new sign-in did not help. Switch: Asetukset > Koti > Kirjaudu MELCloud Homeen
+uudelleen.
+
 ## Cottage later
 
 `cottage-haos` is on the tailnet itself, so no subnet route is needed.

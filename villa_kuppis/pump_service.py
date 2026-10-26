@@ -1079,7 +1079,7 @@ class PumpService:
                  price_transport=None,
                  price_fetch_enabled: bool = True,
                  cottage_factory=None,
-                 notifier=None):
+                 notifier=None, reloader=None):
         self._data_dir = Path(data_dir)
         self._now = now
         self._stale_after = stale_after
@@ -1129,7 +1129,8 @@ class PumpService:
         self.alerts = None
         if notifier is not None:
             from .alerts import AlertMonitor
-            self.alerts = AlertMonitor(self, notifier, SettingsStore(self.store.path), now=now)
+            self.alerts = AlertMonitor(self, notifier, SettingsStore(self.store.path),
+                                       reloader=reloader, now=now)
         self._closed = False
 
     # -- lifecycle --
@@ -1542,7 +1543,8 @@ def make_live_service(data_dir, *, credentials=None, weather_sites=None,
     DEFAULT_POLL_INTERVAL seconds from the cloud, or every HA_POLL_INTERVAL
     seconds through Home Assistant, unless ``poll_interval`` says otherwise.
     With the pumps through Home Assistant, phone alerts go through the same
-    home Home Assistant.
+    home Home Assistant, which also reloads the pumps' integration when every
+    pump drops out (an expired MELCloud Home session).
     """
     import os
 
@@ -1575,9 +1577,10 @@ def make_live_service(data_dir, *, credentials=None, weather_sites=None,
         gateway = HomeAssistantGateway("home", pump_site.url,
                                        lambda: read_token_file(token_file), bindings)
         from .alerts import HomeAssistantNotifier
+        from .ha_pumps import SessionReloader
         service = PumpService(data_dir, client=None, client_factory=ha_client_factory(
             gateway, lambda: service.store.unit_states()),
-            notifier=HomeAssistantNotifier(gateway), **common)
+            notifier=HomeAssistantNotifier(gateway), reloader=SessionReloader(gateway), **common)
         return service
 
     username = (credentials.username if credentials is not None else

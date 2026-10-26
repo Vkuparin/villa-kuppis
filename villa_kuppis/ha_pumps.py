@@ -30,7 +30,13 @@ mode is accepted without a write; any other mode is refused.
 from __future__ import annotations
 
 import asyncio
+import logging
+from datetime import datetime, timezone
 from types import SimpleNamespace
+
+from .ha_gateway import HAError
+
+log = logging.getLogger(__name__)
 
 HVAC_TO_MODE = {"cool": "Cool", "heat": "Heat", "dry": "Dry", "fan_only": "Fan",
                 "heat_cool": "Automatic", "auto": "Automatic"}
@@ -42,6 +48,8 @@ MODE_RANGES = (("min_temp_heat", "min_heat"), ("max_temp_heat", "max_heat"),
                ("min_temp_cool", "min_cool"), ("max_temp_cool", "max_cool"),
                ("min_temp_auto", "min_auto"), ("max_temp_auto", "max_auto"))
 CONNECTED = ("ok", "stale")
+RELOAD_AFTER = 600.0     # every pump unavailable this long
+RELOAD_EVERY = 3600.0    # at most one reload an hour
 
 
 class PumpCommandError(RuntimeError):
@@ -207,3 +215,51 @@ def client_factory(gateway, stored=None):
             await asyncio.get_running_loop().run_in_executor(None, gateway.stop)
         return HAPumpClient(gateway, stored=stored() if stored else None), teardown
     return factory
+
+
+class SessionReloader:
+    """Reloads the pumps' Home Assistant integration when every pump drops out.
+
+    A MELCloud Home session can expire (HTTP 401, "Session expired") and leave
+    every pump unavailable until someone signs in again; reloading the config
+    entry signs in again with the e-mail and password it stores. The reload
+    waits until every pump has been unavailable for RELOAD_AFTER seconds while
+    Home Assistant itself answers, and runs at most every RELOAD_EVERY
+    seconds. Home Assistant allows it only for an administrator user.
+    """
+
+    def __init__(self, gateway, *, now=lambda: datetime.now(timezone.utc)):
+        self._gateway = gateway
+        self._now = now
+        self._since: datetime | None = None
+        self._last: datetime | None = None
+        self.tried = False   # reloaded during the current outage
+
+    def check(self, units: list[dict], enabled: bool) -> None:
+        now = self._now()
+        if not units or not all(u["power"] is None and u["mode"] is None for u in units):
+            self._since, self.tried = None, False
+            return
+        if self._since is None:
+            self._since = now
+        if (not enabled or self._gateway.health()["state"] != "ok"
+                or (now - self._since).total_seconds() < RELOAD_AFTER
+                or (self._last is not None
+                    and (now - self._last).total_seconds() < RELOAD_EVERY)):
+            return
+        entity = (self._gateway.snapshot().get(units[0]["id"]) or {}).get("entity_id")
+        if entity is None:
+            return
+        self._last, self.tried = now, True
+        try:
+            self._gateway.call("homeassistant", "reload_config_entry", {}, entity_id=entity)
+            log.info("Every pump was unavailable; reloaded their Home Assistant integration")
+        except HAError as error:
+            if error.code == "unauthorized":
+                log.warning("Reloading the pumps' integration needs an administrator "
+                            "user in Home Assistant")
+            else:
+                log.warning("Home Assistant refused to reload the pumps' integration: %s",
+                            error.message or error.code)
+        except Exception as error:
+            log.warning("Reloading the pumps' integration failed: %s", type(error).__name__)
