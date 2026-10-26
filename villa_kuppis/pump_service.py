@@ -326,6 +326,12 @@ CREATE TABLE IF NOT EXISTS outdoor_forecast (
     temp_c REAL NOT NULL,
     PRIMARY KEY (site, ts_utc)
 );
+CREATE TABLE IF NOT EXISTS cottage_automation (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    on_ INTEGER NOT NULL,
+    changed_utc TEXT,
+    actor TEXT
+);
 CREATE TABLE IF NOT EXISTS pump_energy (
     unit_id TEXT NOT NULL,
     ts_utc INTEGER NOT NULL,
@@ -392,6 +398,22 @@ class PumpStore:
                 "SELECT * FROM unit_state ORDER BY rowid"
             ).fetchall()
         return [self._row_to_state(r) for r in rows]
+
+    def cottage_automation(self) -> bool | None:
+        """The cottage's own Automaatio switch; None until first used."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT on_ FROM cottage_automation WHERE id = 1").fetchone()
+        return None if row is None else bool(row[0])
+
+    def set_cottage_automation(self, on: bool, actor: str, at: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO cottage_automation (id, on_, changed_utc, actor) "
+                "VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+                "on_ = excluded.on_, changed_utc = excluded.changed_utc, "
+                "actor = excluded.actor", (int(on), at, actor))
+            self._conn.commit()
 
     def unit_states_with_last_mode(self) -> list[dict]:
         """``unit_states`` where an off unit's missing mode is its last
@@ -1141,7 +1163,7 @@ class PumpService:
             settings_store = SettingsStore(self.store.path)
             self.cottage.configure_targets(
                 prices_db=self._prices_db, overrides=settings_store.overrides,
-                automation_on=self.automation.automation_on,
+                automation_on=self.cottage_automation_on,
                 models=self.cottage_heating_models)
         # Phone alerts (alerts.py) when a notifier is given.
         self.alerts = None
@@ -1276,8 +1298,16 @@ class PumpService:
                                "detail": d.detail} for d in days]}
 
     def automation_state(self) -> dict:
+        """Home and cottage each have their own Automaatio switch."""
         return {"on": self.automation.automation_on(),
-                "available": self.automation.available}
+                "available": self.automation.available,
+                "cottage": {"on": self.cottage_automation_on(),
+                            "available": self.cottage is not None}}
+
+    def cottage_automation_on(self) -> bool:
+        """The cottage switch; until first used it follows the home switch."""
+        on = self.store.cottage_automation()
+        return self.automation.automation_on() if on is None else on
 
     def resume_automation(self, unit_id: str) -> tuple[int, dict]:
         """End a unit's manual pause (Palauta automaatio)."""
@@ -1287,9 +1317,18 @@ class PumpService:
         self.automation.resume(unit_id)
         return 200, self.view()
 
-    def set_automation(self, on: bool, actor: str) -> dict:
-        """Master switch of the price and temperature automation."""
-        self.automation.set_automation(on, actor)
+    def set_automation(self, on: bool, actor: str, site: str = "home") -> dict:
+        """Automaatio switch of one site (home pumps or cottage heaters)."""
+        if site == "cottage":
+            self.store.set_cottage_automation(on, actor, self._now().isoformat())
+            if on and self.cottage is not None:
+                try:
+                    self.cottage.tick_targets()
+                except Exception as error:
+                    logging.error("Cottage target tick failed: %s",
+                                  type(error).__name__)
+        else:
+            self.automation.set_automation(on, actor)
         return self.automation_state()
 
     # -- history (card F3.3) ---------------------------------------------------

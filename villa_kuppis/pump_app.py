@@ -18,6 +18,7 @@ fully offline) plus a small JSON API on top of PumpService:
 * GET  /api/sites     connection health of each Home Assistant site
 * POST /api/settings  {"scope", "key", "value" | "reset"} (card F3.5)
 * GET/POST /api/away  home-away button, {"away": bool} (card F6.1)
+* GET/POST /api/automation  Automaatio switches; {"on": bool, "site": "home" | "cottage"}
 * POST /api/automation/resume  {"unit"}: end a unit's manual pause
 * POST /api/prices/refresh  fetch today's and tomorrow's prices if missing
 * POST /api/command   {"unit", "action", "value"} -> the service
@@ -221,7 +222,7 @@ _PAGE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pumput</title>
+<title>Villa Kuppis</title>
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#0b5fff">
 <meta name="mobile-web-app-capable" content="yes">
@@ -298,6 +299,16 @@ var vkEvery = (function () {
 header.top { border-bottom: 3px solid var(--accent) !important; }
 header.top .auto-switch { margin-left: auto; align-self: center; }
 button.auto-switch[hidden] { display: none; }
+/* Koti and Mökki are separate pages (#koti, #mokki) of one document. */
+nav.pages { display: flex; gap: .4rem; padding: .6rem 1.25rem 0; }
+nav.pages a { padding: .45rem 1.1rem; border: 1px solid var(--line);
+              border-radius: .6rem .6rem 0 0; border-bottom: 0; color: var(--text2);
+              text-decoration: none; background: var(--surface2); min-height: 44px;
+              display: inline-flex; align-items: center; }
+nav.pages a[aria-current="page"] { background: var(--surface); color: var(--accent);
+                                   font-weight: 600; }
+body[data-page="mokki"] #cards, body[data-page="mokki"] section.plan { display: none; }
+body[data-page="koti"] section.cottage { display: none; }
 h1 { color: var(--accent); }
 * { box-sizing: border-box; }
 body { margin: 0; font: 16px/1.45 system-ui, "Segoe UI", sans-serif;
@@ -445,7 +456,7 @@ td.result-observed { color: var(--text2); }
 </head>
 <body data-demo="0">
 <header class="top">
-  <h1>Pumput</h1>
+  <h1>Villa Kuppis</h1>
   <span id="app-version" class="app-version" title="Sovelluksen versio"></span>
   <span id="identity" class="identity" title="Kirjautunut käyttäjä"></span>
   <span id="health" class="health" role="status" aria-label="Kohteiden tila">
@@ -456,12 +467,23 @@ td.result-observed { color: var(--text2); }
   <button type="button" class="switch auto-switch" role="switch" aria-checked="false"
           id="auto-btn" title="Hinta- ja lämpötilaohjattu automaatio. Pois päältä se ei lähetä pumpuille komentoja; pumput jäävät siihen tilaan, jossa ne ovat."><span class="track"></span><span>Automaatio</span></button>
 </header>
+<nav class="pages" aria-label="Sivut">
+  <a href="#koti" data-page="koti" aria-current="page">Koti</a>
+  <a href="#mokki" data-page="mokki">Mökki</a>
+</nav>
+<script>
+// The page (Koti or Mökki) comes from the address, so it survives a reload.
+function vkPage() { return location.hash === "#mokki" ? "mokki" : "koti"; }
+function vkSite() { return vkPage() === "mokki" ? "cottage" : "home"; }
+document.body.dataset.page = vkPage();
+</script>
 <div id="health-detail" class="health-detail" role="status" hidden></div>
 <div id="offline-banner" class="offline-banner" role="status" hidden></div>
 <div id="demo-banner">Esittelytila: näytetyt arvot ovat keksittyjä ja toiminnot
 ohjaavat vain esittelyyksiköitä.</div>
 <main>
   <section id="cards" aria-label="Pumppulaitteet"></section>
+<!--COTTAGE_SECTION-->
   <section class="history" aria-label="Historia ja kaaviot">
     <h2>Historia</h2>
     <div class="hist-controls">
@@ -497,7 +519,6 @@ ohjaavat vain esittelyyksiköitä.</div>
       <a href="https://en.ilmatieteenlaitos.fi/open-data-licence">avoin data (CC BY 4.0)</a>.
       Sähkönhinta: Elering. Käyrät on harvennettu näytölle.</p>
   </section>
-<!--COTTAGE_SECTION-->
 <!--PLAN_SECTION-->
 <!--ROOMS_SECTION-->
 <!--SETTINGS_SECTION-->
@@ -753,7 +774,7 @@ function renderView(view) {
   const svc = view.service;
   vkHealth.viewOk(view);
   const text = vkHealth.homeText(svc.state);
-  document.title = svc.state === "ok" ? "Pumput" : "Pumput — " + text;
+  document.title = svc.state === "ok" ? "Villa Kuppis" : "Villa Kuppis — " + text;
   // Rebuilding the cards would close a list the user is choosing from. Some
   // browsers (Android, HA's iframe) blur the select while its list is open, so
   // a recent touch of a select also holds the rebuild back.
@@ -768,7 +789,10 @@ function renderView(view) {
   }
 }
 
-function renderEvents(events) {
+let lastEvents = [];
+function renderEvents(all) {
+  lastEvents = all;
+  const events = all.filter((ev) => (ev.site || "home") === vkSite());
   if (!events.length) {
     $rows.innerHTML = '<tr><td colspan="5" id="no-events">Ei tapahtumia.</td></tr>';
     return;
@@ -1132,7 +1156,8 @@ function setExtraHistUnits(units) {
 }
 // Rebuilt only when the choices change, so an open list is not closed.
 function populateUnits(units) {
-  const all = units.concat(extraHistUnits);
+  // Koti lists the pumps, Mökki the cottage rooms.
+  const all = vkSite() === "cottage" ? extraHistUnits : units;
   const html = all.map((u) =>
     '<option value="' + esc(u.id) + '">' + esc(u.name) + "</option>").join("");
   if (html === $histUnit.dataset.options) return;
@@ -1140,6 +1165,7 @@ function populateUnits(units) {
   $histUnit.innerHTML = html;
   $histUnit.dataset.options = html;
   if (current && all.some((u) => u.id === current)) $histUnit.value = current;
+  if (!current && $histUnit.value) loadHistory();
 }
 
 async function refresh() {
@@ -1253,16 +1279,11 @@ async function resumeAutomation(unitId) {
 }
 
 let lastView = null;
-let histAutoLoaded = false;
 const _renderView = renderView;
 renderView = function (view) {
   lastView = view;
   _renderView(view);
   populateUnits(view.units || []);
-  if (!histAutoLoaded && view.units && view.units.length) {
-    histAutoLoaded = true;
-    loadHistory();
-  }
 };
 
 $cards.addEventListener("click", onControl);
@@ -1282,10 +1303,18 @@ $cards.addEventListener("change", (e) => {
   }
 });
 // Master switch of the automation, in the page header.
+// Each page has its own switch: Koti drives the pumps, Mökki the heaters.
 const $auto = document.getElementById("auto-btn");
+const AUTO_TITLES = {
+  home: "Kodin hinta- ja lämpötilaohjattu automaatio. Pois päältä se ei lähetä pumpuille komentoja; pumput jäävät siihen tilaan, jossa ne ovat.",
+  cottage: "Mökin hintaohjattu lämmitys. Pois päältä mökille ei lähetetä tavoitteita, ja patterit pitävät varalämpötilan." };
+let autoState = null;
 function showAutomation(state) {
-  $auto.hidden = !state.available;
-  $auto.setAttribute("aria-checked", state.on ? "true" : "false");
+  autoState = state;
+  const site = vkSite() === "cottage" ? state.cottage || { on: false, available: false } : state;
+  $auto.hidden = !site.available;
+  $auto.title = AUTO_TITLES[vkSite()];
+  $auto.setAttribute("aria-checked", site.on ? "true" : "false");
 }
 async function loadAutomation() {
   try { showAutomation(await fetch("api/automation").then((r) => r.json())); }
@@ -1297,14 +1326,30 @@ $auto.addEventListener("click", async () => {
   try {
     const r = await fetch("api/automation", { method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ on: on }) });
+      body: JSON.stringify({ on: on, site: vkSite() }) });
     if (r.ok) showAutomation(await r.json());
   } catch (err) { /* keep the old state */ }
   $auto.disabled = false;
   if (typeof loadPlan === "function") loadPlan();
+  if (vkSite() === "cottage" && typeof loadCottage === "function") loadCottage();
 });
 loadAutomation();
 vkEvery(loadAutomation, 15000);
+function showPage() {
+  document.body.dataset.page = vkPage();
+  document.querySelectorAll("nav.pages a").forEach((a) => {
+    if (a.dataset.page === vkPage()) a.setAttribute("aria-current", "page");
+    else a.removeAttribute("aria-current");
+  });
+  if (autoState) showAutomation(autoState);
+  populateUnits(lastView ? lastView.units || [] : []);
+  $histSite.value = vkSite();
+  histEnd = null;
+  loadHistory();
+  renderEvents(lastEvents);
+  document.dispatchEvent(new Event("vk-page"));
+}
+window.addEventListener("hashchange", showPage);
 $histUnit.addEventListener("change", () => {
   // Cottage rooms use the cottage's outdoor temperature; pumps the home's.
   $histSite.value = $histUnit.value.startsWith("cottage:") ? "cottage" : "home";
@@ -1327,6 +1372,7 @@ window.addEventListener("resize", () => {
   if (histResizeTimer) clearTimeout(histResizeTimer);
   histResizeTimer = setTimeout(loadHistory, 200);
 });
+$histSite.value = vkSite();
 refresh();
 loadIdentity();
 vkEvery(refresh, POLL_MS);
@@ -1796,12 +1842,13 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             body = self._read_json_object()
             if body is None:
                 return
-            if not isinstance(body.get("on"), bool):
+            site = body.get("site", "home")
+            if not isinstance(body.get("on"), bool) or site not in ("home", "cottage"):
                 self._json(400, {"error": "bad_body",
-                                 "detail": "on must be true or false"})
+                                 "detail": "on must be true or false, site home or cottage"})
                 return
-            self._json(200, self.app.service.set_automation(body["on"],
-                                                            identity["actor"]))
+            self._json(200, self.app.service.set_automation(
+                body["on"], identity["actor"], site))
         elif parts.path == "/api/automation/resume":
             body = self._read_json_object()
             if body is None:

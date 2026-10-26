@@ -1192,6 +1192,7 @@ SCRIPT = r"""
     fetch("api/cottage").then(function (r) { return r.json(); })
       .then(function (d) { render(d); if (d.configured) loadVisit(); }).catch(function () {});
   }
+  window.loadCottage = load;
   load();
   vkEvery(load, 10000);
 })();

@@ -61,7 +61,10 @@ SCRIPT = r"""
     } else {
       $forecast.textContent = "Sääennustetta ei ole vielä haettu.";
     }
-    data.units.forEach(function (u) {
+    data.units.filter(function (u) {
+      // Koti shows the home rooms, Mokki the cottage rooms.
+      return typeof vkSite !== "function" || (u.site || "home") === vkSite();
+    }).forEach(function (u) {
       // A cottage room is heated by its Mill heaters, a home room by its pump.
       var cot = u.site === "cottage";
       var h = document.createElement("h3");
@@ -111,6 +114,7 @@ SCRIPT = r"""
     fetch("api/rooms").then(function (r) { return r.json(); })
       .then(render).catch(function () {});
   }
+  document.addEventListener("vk-page", load);
   load();
   vkEvery(load, 600000);
 })();

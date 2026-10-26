@@ -199,7 +199,10 @@ SCRIPT = r"""
         data = j;
         var prev = keepScope ? $scope.value : null;
         $scope.textContent = "";
-        j.scopes.forEach(function (s) {
+        // Each page shows its own site's settings (all when no page is known).
+        j.scopes.filter(function (s) {
+          return typeof vkSite !== "function" || s.site === vkSite();
+        }).forEach(function (s) {
           $scope.appendChild(make("option", { value: s.id, textContent: s.label }));
         });
         if (prev) $scope.value = prev;
@@ -221,6 +224,7 @@ SCRIPT = r"""
       .catch(function () { say("Tallennus epäonnistui.", true); });
   }
   $scope.addEventListener("change", render);
+  document.addEventListener("vk-page", function () { load(false); });
   load(false);
 
   // Look and feel: per browser, applied at once (the page head applies it at load).

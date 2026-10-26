@@ -1,5 +1,12 @@
 # Muutokset
 
+## 0.4.22
+
+- Kodilla ja Mökillä on omat sivunsa ja kummallakin oma Automaatio-kytkin. Mökin kytkin seuraa aluksi kodin kytkintä.
+- Otsikko on nyt Villa Kuppis.
+- Sammutetun pumpun tavoitelämpötilan voi taas asettaa: tila haetaan pumpun historiasta, koska Home Assistant ei kerro sammutetun pumpun tilaa.
+- Mökin lukemat eivät enää näy vanhentuneina, kun arvo pysyy samana. Vaatii mökin integraation version 0.3.1.
+
 ## 0.4.21
 
 - Mökin huoneet saavat tavoitteen mukana koko tunnetun suunnitelman (myös mökkikäynnin lämmityksen). Jos yhteys kotiin katkeaa, mökki noudattaa suunnitelmaa loppuun asti ja vasta sitten siirtyy 5 °C:n varalämpöön. Vaatii mökin integraation version 0.3.0.

@@ -404,7 +404,7 @@ assert.equal(blurred, 1);
         self.assertIn("text/html", ctype)
         self.assertIn("utf-8", ctype)
         page = raw.decode("utf-8")
-        for needle in ('lang="fi"', "<title>Pumput</title>",
+        for needle in ('lang="fi"', "<title>Villa Kuppis</title>", "Villa Kuppis</h1>", 'href="#mokki"',
                        "Mitattu lämpötila", "Tavoitelämpötila",
                        "Toimintatila", "Puhallus", "Tapahtumat",
                        "Tiedot vanhentuneet", "Lähetetään",
@@ -492,6 +492,28 @@ class ManualPauseApiTests(AppTestCase):
         self.assertIsNone(self._unit(view, "unit-1")["hold_until"])
         # Resuming runs the plan again: back to the maximum.
         self.wait_for(lambda: self._unit(self._view(server), "unit-1")["setpoint"] == 25.0)
+
+
+class AutomationSwitchTests(AppTestCase):
+    def test_home_and_cottage_switches_are_separate(self):
+        server, _ = self._start_app(FakeClient(make_unit_payloads()),
+                                    automation_interval=3600.0)
+        url = self._url(server, "/api/automation")
+        status, state = http_json("GET", url)
+        self.assertEqual(status, 200)
+        # Until first used the cottage follows the home switch.
+        self.assertEqual(state["cottage"]["on"], state["on"])
+        status, state = http_json("POST", url, {"on": False, "site": "cottage"})
+        self.assertEqual(status, 200)
+        self.assertFalse(state["cottage"]["on"])
+        self.assertTrue(state["on"])
+        status, state = http_json("POST", url, {"on": False})
+        self.assertFalse(state["on"])
+        status, state = http_json("POST", url, {"on": True, "site": "cottage"})
+        self.assertTrue(state["cottage"]["on"])
+        self.assertFalse(state["on"])
+        self.assertTrue(server.service.cottage_automation_on())
+        self.assertEqual(http_json("POST", url, {"on": True, "site": "sauna"})[0], 400)
 
 
 class HistoryApiTests(AppTestCase):
