@@ -1,5 +1,10 @@
 # Muutokset
 
+## 0.4.17
+
+- Mökin lämmitysasetusten selitykset kertovat, mitä asetukset nyt tekevät.
+- Älykäs ylläpitolämmitys on piilotettu, kunnes se on valmis.
+
 ## 0.4.16
 
 - Jos kaikki pumput ovat 10 minuuttia poissa käytöstä mutta kodin Home Assistant vastaa, MELCloud Home -integraatio ladataan uudelleen, jolloin se kirjautuu uudelleen (enintään kerran tunnissa). Kytkin asetuksissa.
