@@ -119,8 +119,11 @@ uudelleen.
 ## Cottage later
 
 `cottage-haos` is on the tailnet itself, so no subnet route is needed.
-`cottage_url` is `ws://100.89.234.42/api/websocket` with the token of its
-`villa-kuppis` user. Checked 2026-10-25 from inside the app: the Tailscale IP
-answers, but `cottage-haos.corvus-stairs.ts.net` does not resolve there, so
-use the IP (Tailscale encrypts the traffic). Installing the cottage side:
-[deploy/cottage/README.md](cottage/README.md#install).
+`cottage_url` is `wss://cottage-haos.corvus-stairs.ts.net/api/websocket` with a
+long-lived token of the owner's user (profile > Security). Apps in home-haos
+resolve `.ts.net` names only when Home Assistant's DNS asks Tailscale's
+MagicDNS: `nslookup cottage-haos.corvus-stairs.ts.net 100.100.100.100`, then
+`ha dns options --servers dns://100.100.100.100`, `ha dns restart` and restart
+the app (done 2026-10-26; the Tailscale app must not use userspace
+networking). Without that, `ws://100.89.234.42/api/websocket` also works.
+Installing the cottage side: [deploy/cottage/README.md](cottage/README.md#install).
