@@ -1,7 +1,8 @@
 """Visit heating for the cottage (card F4.3).
 
-A visit has an arrival time and a target temperature. Until the room heating
-rates are learned (F5.3), the heat-up is assumed to take ``LEAD_HOURS`` at
+A visit has an arrival time and a target temperature. A room whose rates are
+learned is planned by ``heat_optimizer`` to reach the target at the arrival
+(F5.3, in ``cottage_targets``). For the other rooms the heat-up is assumed to take ``LEAD_HOURS`` at
 full heating. The start is chosen from a few hours' window before
 ``arrival - LEAD_HOURS`` so that the heat-up and the hold until arrival cost
 the least at the known prices; holding a warm room is assumed to take

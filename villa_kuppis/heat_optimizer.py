@@ -109,13 +109,13 @@ def _energy_cost(price: float, heating: float) -> float:
     return heating * HEAT_KW * PERIOD_SECONDS / 3600 * price
 
 
-def _stage_cost(price: float, heating: float, room: float, limits: HeatLimits) -> float:
-    under = max(0.0, limits.min_c - room) * PERIOD_SECONDS / 3600
+def _stage_cost(price: float, heating: float, room: float, floor: float) -> float:
+    under = max(0.0, floor - room) * PERIOD_SECONDS / 3600
     return _energy_cost(price, heating) + under * UNDER_MIN_PENALTY
 
 
 def _run(model, start_room: float, prices: Sequence[tuple[int, float]],
-         outdoors: Sequence[float | None], limits: HeatLimits,
+         outdoors: Sequence[float | None], floors: Sequence[float],
          choose: Callable[[int, float], float]) -> HeatResult:
     """Simulate a policy; ``choose(i, room)`` -> target."""
     hours = PERIOD_SECONDS / 3600
@@ -124,7 +124,7 @@ def _run(model, start_room: float, prices: Sequence[tuple[int, float]],
         target = choose(i, room)
         room, share = period_step(model, room, outdoors[i], target)
         cost += _energy_cost(price, share)
-        under += max(0.0, limits.min_c - room) * hours
+        under += max(0.0, floors[i] - room) * hours
         steps.append(HeatStep(ts, price, target, room, share))
     return HeatResult(steps, cost, under, room)
 
@@ -136,12 +136,17 @@ def _score(result: HeatResult, ref_end: float, heat_value: float) -> float:
 
 def optimize_heating(model: learning.RoomModel, start_room: float | None,
                      prices: Sequence[tuple[int, float]], outdoor: learning.Outdoor,
-                     limits: HeatLimits, fixed: Sequence[float]) -> HeatPlan | None:
+                     limits: HeatLimits, fixed: Sequence[float],
+                     visit: tuple[int, float] | None = None) -> HeatPlan | None:
     """Cheapest plan from now to the end of the known prices.
 
     ``prices`` are (ts, c/kWh) from the current period on and ``fixed`` the
-    fixed thresholds' target for the same periods. Returns None when the
-    room's heating rate is not learned yet or its temperature is unknown.
+    baseline's target for the same periods (the fixed thresholds, or the
+    fixed-lead visit plan). ``visit`` is (arrival ts, target): from the
+    period ending at the arrival on, the target is the visit's and the room counts as too
+    cold below it, so the plan reaches it by the arrival (card F5.3); before
+    it the plan may also store heat up to the visit target. Returns None when
+    the room's heating rate is not learned yet or its temperature is unknown.
     """
     if (not prices or not model.ready or not model.heat_c_per_h
             or start_room is None):
@@ -151,13 +156,19 @@ def optimize_heating(model: learning.RoomModel, start_room: float | None,
         value = outdoor.at(ts)
         outdoors.append(value if value is not None else outdoor.last_before(ts))
     n = len(prices)
+    top = max(limits.max_c, visit[1]) if visit else limits.max_c
+    storing = targets(HeatLimits(limits.min_c, top))
+    # Warm at the arrival: the period ending at it already holds the target.
+    arrived = [visit is not None and ts + PERIOD_SECONDS >= visit[0] for ts, _ in prices]
+    floors = [visit[1] if a else limits.min_c for a in arrived]
+    choices = [[visit[1]] if a else storing for a in arrived]
 
-    base = _run(model, start_room, prices, outdoors, limits, lambda i, _room: fixed[i])
+    base = _run(model, start_room, prices, outdoors, floors, lambda i, _room: fixed[i])
     ref_end = base.end_c
     heat_value = HEAT_KW * median(p for _, p in prices) / model.heat_c_per_h
 
     lo = min(limits.min_c, start_room) - 5.0
-    hi = max(limits.max_c, start_room) + 3.0
+    hi = max(top, start_room) + 3.0
     bins = int(round((hi - lo) / GRID_C)) + 1
     temps = [lo + b * GRID_C for b in range(bins)]
 
@@ -168,7 +179,6 @@ def optimize_heating(model: learning.RoomModel, start_room: float | None,
         w = x - b
         return table[b] * (1 - w) + table[b + 1] * w
 
-    candidates = targets(limits)
     # value[b]: cheapest score from period i on with the room in bin b.
     value = [(ref_end - t) * heat_value for t in temps]
     tables = [None] * n
@@ -177,9 +187,9 @@ def optimize_heating(model: learning.RoomModel, start_room: float | None,
         new = []
         for t in temps:
             best = None
-            for target in candidates:
+            for target in choices[i]:
                 room, share = period_step(model, t, out_c, target)
-                c = _stage_cost(price, share, room, limits) + at(value, room)
+                c = _stage_cost(price, share, room, floors[i]) + at(value, room)
                 if best is None or c < best:
                     best = c
             new.append(best)
@@ -189,14 +199,14 @@ def optimize_heating(model: learning.RoomModel, start_room: float | None,
     def choose(i, room):
         # Coldest first, and a tie keeps the colder target: stored heat leaks.
         best, pick = None, None
-        for target in candidates:
+        for target in choices[i]:
             r, share = period_step(model, room, outdoors[i], target)
-            c = _stage_cost(prices[i][1], share, r, limits) + at(tables[i], r)
+            c = _stage_cost(prices[i][1], share, r, floors[i]) + at(tables[i], r)
             if best is None or c < best - 1e-9:
                 best, pick = c, target
         return pick
 
-    opt = _run(model, start_room, prices, outdoors, limits, choose)
+    opt = _run(model, start_room, prices, outdoors, floors, choose)
     use_opt = _score(opt, ref_end, heat_value) <= _score(base, ref_end, heat_value) + 1e-9
     chosen = opt if use_opt else base
     # The cost counts the heat left at the end against the fixed plan's.

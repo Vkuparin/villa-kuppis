@@ -93,6 +93,21 @@ class RecordedDayTests(unittest.TestCase):
         self.assertLessEqual(plan.under_min_c_h, plan.fixed_under_min_c_h + 1e-9)
         self.check_limits(plan, LIMITS)
 
+    def test_visit_arrives_warm_for_less_than_the_fixed_lead(self):
+        # Card F5.3: 20 °C at arrival (period 60) from a 5 °C room; the
+        # fixed-lead plan holds 20 °C from now on.
+        start = 1_800_000_000
+        prices = [(start + i * 900, 2.0 if i < 20 or i >= 52 else 30.0) for i in range(72)]
+        arrival = start + 60 * 900
+        plan = optimize_heating(STEADY, 5.0, prices, Outdoor([]), LIMITS, [20.0] * 72,
+                                visit=(arrival, 20.0))
+        self.assertTrue(plan.optimized)
+        self.assertGreaterEqual(plan.steps[59].room_c, 20.0 - 0.05)
+        self.assertTrue(all(s.target_c == 20.0 for s in plan.steps[60:]))
+        self.assertEqual(plan.under_min_c_h, 0.0)
+        self.assertLess(plan.cost_c, plan.fixed_cost_c)
+        self.assertLess(plan.steps[30].room_c, 20.0)   # no hot room held for hours
+
     def test_not_learned_yet_falls_back(self):
         prices = recorded("2026-10-20")
         fixed = fixed_targets(prices)

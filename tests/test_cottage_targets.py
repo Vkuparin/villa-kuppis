@@ -255,3 +255,15 @@ class OptimizedTargetTests(unittest.TestCase):
         self.overrides = {}
         self.temps = {}
         self.assertEqual(self.sender.targets()["large"].reason, "threshold")
+
+    def test_visit_heat_up_of_a_learned_room_is_planned_to_the_arrival(self):
+        from villa_kuppis.visit import VisitStore
+        visits = VisitStore(Path(self.tmp.name) / "visits.db")
+        self.addCleanup(visits.close)
+        self.sender._visits = visits
+        arrival = self.now + timedelta(hours=20)
+        visits.start(arrival, 20.0, ["large", "small"], "Ville", self.now)
+        targets = self.sender.targets()
+        self.assertEqual(targets["large"].reason, "visit")      # the optimizer's plan
+        self.assertLess(targets["large"].target_c, 20.0)        # not yet the visit target
+        self.assertNotEqual(targets["small"].reason, "visit")   # 12-hour rule: later

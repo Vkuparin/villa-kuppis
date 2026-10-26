@@ -143,16 +143,19 @@ class CottageTargetSender:
         if visit is None:
             self.visit_plan = None
             return out
+        periods += self._periods(today + timedelta(days=1), factor)
         if visit.heat_start is not None:
             plan = VisitPlan(visit.heat_start, "started", None)
         else:
-            periods += self._periods(today + timedelta(days=1), factor)
             plan = plan_start(visit.arrival, periods, now)
             if now >= plan.start:
                 self._visits.mark_started(visit.visit_id, now)
                 plan = VisitPlan(now, "started", None)
         self.visit_plan = plan
+        learned = self._optimize_visit(out, visit, plan, overrides, periods, now)
         for room, target in out.items():
+            if room in learned:
+                continue
             value = visit_target(visit, room, now, plan)
             if value is not None:
                 out[room] = RoomTarget(room, target.period_ts, value, target.price_c_kwh, "visit")
@@ -190,6 +193,48 @@ class CottageTargetSender:
                 step = plan.steps[0]
                 out[room] = RoomTarget(room, out[room].period_ts, step.target_c,
                                        out[room].price_c_kwh, "optimized")
+
+    def _optimize_visit(self, out: dict[str, RoomTarget], visit, plan: VisitPlan,
+                        overrides: Mapping, periods: Sequence[Period], now: datetime) -> set:
+        """Heat-ups of learned rooms planned to reach the target at arrival
+        (card F5.3); returns the rooms it set. The baseline is the fixed-lead
+        visit plan, so the result never costs more than it."""
+        arrival = int(visit.arrival.timestamp())
+        now_ts = int(now.timestamp())
+        if self._models is None or visit.ended_at is not None or now_ts >= arrival:
+            return set()
+        rooms = [r for r in visit.rooms if r in out and out[r].reason != "noprice"]
+        ahead = [p for p in periods if p.ts_utc >= now_ts - now_ts % INTERVAL_SECONDS]
+        if not rooms or not ahead or ahead[-1].ts_utc < arrival:
+            return set()   # the arrival is past the known prices
+        fixed = plan_day(ahead, app_settings.plan_settings(overrides, SITE, rooms))
+        start_ts = int(plan.start.timestamp())
+        models = outdoor = temps = None
+        done = set()
+        for room in rooms:
+            values = app_settings.resolve(overrides, SITE, room)
+            base = [visit.target_c if p.ts_utc >= start_ts else float(r.temperature_c)
+                    for p, r in zip(ahead, fixed[room])]
+            key = ("visit", ahead[0].ts_utc, len(ahead), arrival, visit.target_c,
+                   values["smart_min_c"]["value"], values["smart_max_c"]["value"], tuple(base))
+            cached = self._optimized.get(("visit", room))
+            if cached is None or cached[0] != key:
+                if models is None:
+                    models, outdoor = self._models()
+                    temps = self._room_temps() if self._room_temps is not None else {}
+                model = models.get(room)
+                result = None if model is None else optimize_heating(
+                    model, temps.get(room), [(p.ts_utc, float(p.price_c_kwh)) for p in ahead],
+                    outdoor, HeatLimits(float(values["smart_min_c"]["value"]),
+                                        float(values["smart_max_c"]["value"])),
+                    base, visit=(arrival, visit.target_c))
+                cached = self._optimized[("visit", room)] = (key, result)
+            result = cached[1]
+            if result is not None:
+                out[room] = RoomTarget(room, out[room].period_ts, result.steps[0].target_c,
+                                       out[room].price_c_kwh, "visit")
+                done.add(room)
+        return done
 
     def preview(self) -> dict[str, RoomTarget]:
         """Refresh ``last`` and ``visit_plan`` without sending anything."""
