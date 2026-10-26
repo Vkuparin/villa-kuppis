@@ -393,6 +393,22 @@ class PumpStore:
             ).fetchall()
         return [self._row_to_state(r) for r in rows]
 
+    def unit_states_with_last_mode(self) -> list[dict]:
+        """``unit_states`` where an off unit's missing mode is its last
+        recorded one (Home Assistant hides the mode of an off unit)."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT unit_id, mode FROM pump_history WHERE id IN ("
+                "SELECT MAX(id) FROM pump_history WHERE mode IS NOT NULL "
+                "GROUP BY unit_id)").fetchall()
+        last = {unit_id: mode for unit_id, mode in rows}
+        out = []
+        for state in self.unit_states():
+            if not state.get("mode") and last.get(state["id"]):
+                state = {**state, "mode": last[state["id"]]}
+            out.append(state)
+        return out
+
     @staticmethod
     def _row_to_state(row) -> dict:
         # SQLite stores booleans as 0/1; coerce them back on the way out.
@@ -1631,7 +1647,7 @@ def make_live_service(data_dir, *, credentials=None, weather_sites=None,
         from .alerts import HomeAssistantNotifier
         from .ha_pumps import SessionReloader
         service = PumpService(data_dir, client=None, client_factory=ha_client_factory(
-            gateway, lambda: service.store.unit_states()),
+            gateway, lambda: service.store.unit_states_with_last_mode()),
             notifier=HomeAssistantNotifier(gateway), reloader=SessionReloader(gateway), **common)
         return service
 

@@ -12,8 +12,11 @@ from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.util import dt as dt_util
 
 from . import DOMAIN, SIGNAL_UPDATE, CottageController, Room
+
+REPORTED_STEP = 300   # seconds
 
 
 async def async_setup_platform(hass: HomeAssistant, config, async_add_entities,
@@ -68,4 +71,24 @@ class RoomTargetSensor(SensorEntity):
             # Villa Kuppis binds the room's devices from this: rebinding a
             # room is an edit of the package, nothing in Villa Kuppis.
             "devices": room.devices,
+            "reported": self._reported(),
         }
+
+    def _reported(self) -> dict:
+        """When each device last reported, to 5 minutes.
+
+        An unchanged reading only moves ``last_reported``, which Home
+        Assistant neither sends to WebSocket clients nor refreshes in
+        ``get_states``; Villa Kuppis reads it from here instead. Rounding
+        keeps this attribute from changing more than every 5 minutes.
+        """
+        devices = self._room.devices
+        out = {}
+        for entity_id in [*devices.get("heaters", []),
+                          *(v for k, v in devices.items() if k != "heaters")]:
+            state = self.hass.states.get(entity_id)
+            if state is None or state.state in ("unavailable", "unknown"):
+                continue
+            ts = int(state.last_reported_timestamp) // REPORTED_STEP * REPORTED_STEP
+            out[entity_id] = dt_util.utc_from_timestamp(ts).isoformat()
+        return out

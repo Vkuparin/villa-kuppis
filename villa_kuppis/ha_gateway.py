@@ -615,12 +615,37 @@ class HomeAssistantGateway:
             if new_ts is not None and old_ts is not None and new_ts < old_ts:
                 return None   # an older report arriving late
         self._raw[entity_id] = raw
+        self._apply_reported_locked(raw)
         binding = self._by_entity.get(entity_id)
         if binding is None:
             return None
         self._states[binding.device_id] = reading(binding, raw)
         self._missing.discard(binding.device_id)
         return binding.device_id
+
+    def _apply_reported_locked(self, raw: dict) -> None:
+        """Freshen entities listed in a ``reported`` attribute (entity -> time).
+
+        Home Assistant does not send ``last_reported`` for an unchanged
+        reading, so a sensor that holds its value looks stale; the cottage
+        integration's status sensors publish those times instead.
+        """
+        reported = (raw.get("attributes") or {}).get("reported")
+        if not isinstance(reported, dict):
+            return
+        for entity_id, value in reported.items():
+            held = self._raw.get(entity_id) if isinstance(entity_id, str) else None
+            seen = _parse_ts(value)
+            if held is None or seen is None:
+                continue
+            old = _seen_at(held)
+            if old is not None and seen <= old:
+                continue
+            held = {**held, "last_reported": seen.isoformat()}
+            self._raw[entity_id] = held
+            binding = self._by_entity.get(entity_id)
+            if binding is not None:
+                self._states[binding.device_id] = reading(binding, held)
 
     def _status_locked(self, device_id: str, now: datetime) -> str:
         if device_id in self._missing:

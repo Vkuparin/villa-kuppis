@@ -316,6 +316,28 @@ class SnapshotTests(GatewayTestCase):
         self.assertEqual(gw.health()["missing"], ["small-temp"])
 
 
+    async def test_reported_times_freshen_unchanged_readings(self):
+        # Home Assistant does not send last_reported for an unchanged value;
+        # the cottage status sensor publishes it in a "reported" attribute.
+        gw = await self.start_gateway(entity_stale_after=600, site_stale_after=10_000)
+        self.clock.advance(601)
+        self.assertEqual(gw.snapshot()["large-temp"]["status"], "stale")
+        self.ha.set_state("sensor.villa_kuppis_large_target", "5.0", {
+            "mode": "fallback",
+            "reported": {"sensor.iso_huone_temperature": self.clock().isoformat(),
+                         "sensor.unknown": self.clock().isoformat()}})
+        await eventually(lambda: gw.snapshot()["large-temp"]["status"] == "ok")
+        self.assertEqual(gw.snapshot()["large-temp"]["value"], 5.4)
+        # An older reported time never moves a reading back.
+        self.ha.set_state("sensor.villa_kuppis_large_target", "5.0", {
+            "mode": "fallback",
+            "reported": {"sensor.iso_huone_temperature":
+                         (self.clock() - timedelta(hours=1)).isoformat()}})
+        self.ha.set_state("input_number.iso_huone_target", "6.0")
+        await eventually(lambda: gw.snapshot()["large-target"]["value"] == 6.0)
+        self.assertEqual(gw.snapshot()["large-temp"]["status"], "ok")
+
+
 class ConnectionTests(GatewayTestCase):
     async def test_wrong_token_is_reported_and_retried_slowly(self):
         self.ha.token = "rotated"

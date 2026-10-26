@@ -1249,3 +1249,23 @@ class HistoryPerfTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LastModeTests(unittest.TestCase):
+    """Home Assistant hides an off unit's mode; the last recorded one stands in."""
+
+    def test_off_unit_gets_its_last_recorded_mode(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        store = PumpStore(Path(tmp) / "pumps.db")
+        self.addCleanup(store.close)
+
+        def state(mode, power, at):
+            return {"id": "u1", "name": "Olohuone", "power": power, "mode": mode,
+                    "setpoint": 22.0, "fan": "One", "room_temp": 24.0, "in_error": False,
+                    "caps": None, "updated_at": at}
+        store.record_history([state("Heat", True, "2026-10-25T10:00:00+00:00")])
+        store.record_history([state(None, False, "2026-10-25T11:00:00+00:00")])
+        store.upsert_units([state(None, False, "2026-10-25T11:00:00+00:00")])
+        self.assertEqual(store.unit_states()[0]["mode"], None)
+        self.assertEqual(store.unit_states_with_last_mode()[0]["mode"], "Heat")
