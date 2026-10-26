@@ -172,6 +172,21 @@ class WatchdogTests(unittest.TestCase):
         self.assertGreater(min(late), SETTINGS.safe_setpoint - Room.BIAS - 1.0)
         self.assertLess(max(late), 12.0)
 
+    def test_schedule_keeps_the_plan_through_an_outage_then_falls_back(self):
+        # Card H3.3: the last write carried the plan; nothing arrives after it.
+        sim = Sim(large_room(temp=8.0), target=8.0, valid_hours=0.75)
+        sim.target = replace(sim.target, valid_until=START + timedelta(hours=6), schedule=(
+            (START + timedelta(hours=1), 16.0), (START + timedelta(hours=5, minutes=45), 10.0)))
+        sim.run(5 * 60)
+        self.assertEqual(sim.decisions[59][1].effective_target, 8.0)
+        self.assertEqual(sim.decisions[60][1].effective_target, 16.0)
+        self.assertEqual(sim.modes_since(START + timedelta(hours=1)), {"follow"})
+        self.assertGreater(sim.room.temp, 12.0)   # heating towards 16 °C all along
+        sim.run(90)
+        self.assertEqual(sim.decisions[5 * 60 + 45][1].effective_target, 10.0)
+        self.assertEqual(sim.decisions[-1][1].mode, "fallback")
+        self.assertEqual(sim.decisions[-1][1].reason, "the target expired")
+
     def test_no_target_since_start_is_fallback(self):
         sim = Sim(large_room(), target=None)
         for h in sim.room.heaters:

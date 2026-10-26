@@ -11,8 +11,8 @@ Modes, in precedence order:
   Home Assistant's UI). The controller leaves the room alone until the
   hold ends or Villa Kuppis clears it.
 - ``fallback``: no valid target (Villa Kuppis, Tailscale or the internet
-  is down, or the target expired). The heaters' own thermostats hold the
-  safe setpoint.
+  is down, and the target and its schedule expired). The heaters' own
+  thermostats hold the safe setpoint.
 - ``thermostat``: the target is valid but the room sensor is missing,
   stale or implausible. The heaters' own thermostats hold the target.
 - ``follow``: the room sensor is valid. Heaters are driven high
@@ -60,9 +60,24 @@ class Settings:
 
 @dataclass(frozen=True)
 class Target:
+    """The requested target; ``schedule`` holds later (start, target) steps.
+
+    With a schedule the room keeps following Villa Kuppis's plan while
+    Villa Kuppis is unreachable, until ``valid_until`` (card H3.3).
+    """
+
     value: float
     revision: int
     valid_until: datetime
+    schedule: tuple = ()             # ((start, target), ...), oldest first
+
+    def value_at(self, now: datetime) -> float:
+        value = self.value
+        for start, target in self.schedule:
+            if start > now:
+                break
+            value = target
+        return value
 
 
 @dataclass(frozen=True)
@@ -218,7 +233,7 @@ def decide(now: datetime, target: Target | None, sensor: Sensor | None,
         cmds = _commands(heaters, settings.safe_setpoint, memory, settings, now)
         return Decision("fallback", reason, settings.safe_setpoint, None, tuple(cmds))
 
-    value = min(max(target.value, settings.safe_setpoint), settings.max_target)
+    value = min(max(target.value_at(now), settings.safe_setpoint), settings.max_target)
     ok, why = sensor_valid(sensor, now, settings)
     if not ok:
         memory.drive = memory.drive_since = None

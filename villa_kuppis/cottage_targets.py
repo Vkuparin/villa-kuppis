@@ -10,8 +10,16 @@ period is a new revision, which is also the heartbeat: if Villa Kuppis,
 Tailscale or the link stops, the cottage target expires and the cottage
 falls back to its safe setpoint on its own.
 
+Each write also carries the rest of the room's plan over the known prices
+as a schedule (only the periods where the target changes), so an outage of
+Villa Kuppis, the home internet or Tailscale does not stop the plan or a
+visit heat-up: the cottage keeps to it on its own until it runs out and
+only then falls back (card H3.3). The schedule is sent only to an
+integration that reports ``schedule_steps`` on its status sensor; an older
+one gets the single target as before.
+
 After a disconnect nothing is replayed: the next tick sends only the target
-valid now. With ``Automaatio`` off nothing is sent, so economic control
+valid now and the plan from it on. With ``Automaatio`` off nothing is sent, so economic control
 stops and the cottage's local fallback takes over when the last target
 expires.
 
@@ -24,7 +32,7 @@ fixed thresholds stay its fallback and its baseline.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
@@ -77,6 +85,24 @@ def current_targets(overrides: Mapping, periods: Sequence[Period], rooms: Sequen
     return out
 
 
+def schedule(steps: Sequence[RoomTarget]) -> list[dict]:
+    """The plan after the current period for ``set_target``: the periods
+    where the target changes, and the last period, which ends the plan."""
+    out, value = [], steps[0].target_c if steps else None
+    for i, step in enumerate(steps[1:], 1):
+        if step.target_c != value or i == len(steps) - 1:
+            start = datetime.fromtimestamp(step.period_ts, timezone.utc)
+            out.append({"start": start.isoformat(), "target": step.target_c})
+            value = step.target_c
+    return out
+
+
+def takes_schedule(state: dict | None) -> bool:
+    """True when the room's status sensor is from an integration that
+    keeps a schedule (version 0.3.0 on)."""
+    return "schedule_steps" in ((state or {}).get("attributes") or {})
+
+
 def acknowledged(target: float, revision: int) -> Callable[[dict], bool]:
     """Read-back check on the room status sensor's attributes."""
     def check(state: dict) -> bool:
@@ -120,6 +146,7 @@ class CottageTargetSender:
         # room -> (target, revision, request_id, sent_at)
         self._sent: dict[str, tuple] = {}
         self.last: dict[str, RoomTarget] = {}
+        self.schedules: dict[str, list[RoomTarget]] = {}
 
     def _periods(self, day: date, factor: Decimal) -> list[Period]:
         if not self._prices_db.exists():
@@ -129,21 +156,37 @@ class CottageTargetSender:
         return [Period(r.ts_utc, r.price_c_kwh * factor) for r in rows]
 
     def targets(self) -> dict[str, RoomTarget]:
-        """The economic plan per room, replaced by an active visit's target
-        from its heat-up start on (card F4.3)."""
+        """The target of each room now; ``schedules`` gets the plans."""
+        self.schedules = self.plans()
+        return {room: steps[0] for room, steps in self.schedules.items()}
+
+    def plans(self) -> dict[str, list[RoomTarget]]:
+        """Each room's targets from the current period to the end of the
+        known prices: the economic plan, replaced by an active visit's
+        target from its heat-up start on (card F4.3)."""
         now = self._now()
         overrides = self._overrides()
         factor = Decimal(str(app_settings.vat_factor(overrides, SITE)))
         today = now.astimezone(HELSINKI).date()
-        periods = self._periods(today, factor)
-        out = current_targets(overrides, periods, list(self._rooms), int(now.timestamp()))
-        if self._models is not None:
-            self._optimize(out, overrides, periods + self._periods(today + timedelta(days=1), factor))
+        periods = self._periods(today, factor) + self._periods(today + timedelta(days=1), factor)
+        now_ts = int(now.timestamp())
+        rooms = list(self._rooms)
+        period_ts = now_ts - now_ts % INTERVAL_SECONDS
+        ahead = [p for p in periods if p.ts_utc >= period_ts]
+        if not ahead or ahead[0].ts_utc != period_ts:
+            out = {room: [target] for room, target
+                   in current_targets(overrides, [], rooms, now_ts).items()}
+        else:
+            fixed = plan_day(ahead, app_settings.plan_settings(overrides, SITE, rooms))
+            out = {room: [RoomTarget(room, row.ts_utc, float(row.temperature_c),
+                                     row.price_c_kwh, row.reason) for row in fixed[room]]
+                   for room in rooms}
+            if self._models is not None:
+                self._optimize(out, overrides, ahead)
         visit = self._visits.active() if self._visits is not None else None
         if visit is None:
             self.visit_plan = None
             return out
-        periods += self._periods(today + timedelta(days=1), factor)
         if visit.heat_start is not None:
             plan = VisitPlan(visit.heat_start, "started", None)
         else:
@@ -153,29 +196,31 @@ class CottageTargetSender:
                 plan = VisitPlan(now, "started", None)
         self.visit_plan = plan
         learned = self._optimize_visit(out, visit, plan, overrides, periods, now)
-        for room, target in out.items():
+        for room, steps in out.items():
             if room in learned:
                 continue
-            value = visit_target(visit, room, now, plan)
-            if value is not None:
-                out[room] = RoomTarget(room, target.period_ts, value, target.price_c_kwh, "visit")
+            for i, target in enumerate(steps):
+                # A later period heats when the heat-up starts during it.
+                at = now if i == 0 else datetime.fromtimestamp(
+                    target.period_ts + INTERVAL_SECONDS - 1, now.tzinfo)
+                value = visit_target(visit, room, at, plan)
+                if value is not None:
+                    steps[i] = RoomTarget(room, target.period_ts, value, target.price_c_kwh, "visit")
         return out
 
-    def _optimize(self, out: dict[str, RoomTarget], overrides: Mapping,
-                  periods: Sequence[Period]) -> None:
-        """Replace the economic targets of optimized rooms (card F5.2)."""
-        rooms = [room for room, target in out.items() if target.reason != "noprice"
-                 and app_settings.resolve(overrides, SITE, room)["heat_price_control"]["value"]
+    def _optimize(self, out: dict[str, list[RoomTarget]], overrides: Mapping,
+                  ahead: Sequence[Period]) -> None:
+        """Replace the economic plans of optimized rooms (card F5.2);
+        ``ahead`` are the known periods from the current one on."""
+        rooms = [room for room in out
+                 if app_settings.resolve(overrides, SITE, room)["heat_price_control"]["value"]
                  == "optimized"]
-        if not rooms:
-            return
-        ahead = [p for p in periods if p.ts_utc >= out[rooms[0]].period_ts]
-        fixed = plan_day(ahead, app_settings.plan_settings(overrides, SITE, rooms))
         models = outdoor = temps = None
         for room in rooms:
             values = app_settings.resolve(overrides, SITE, room)
+            fixed = [target.target_c for target in out[room]]
             key = (ahead[0].ts_utc, len(ahead), values["smart_min_c"]["value"],
-                   values["smart_max_c"]["value"], tuple(float(r.temperature_c) for r in fixed[room]))
+                   values["smart_max_c"]["value"], tuple(fixed))
             cached = self._optimized.get(room)
             if cached is None or cached[0] != key:
                 if models is None:
@@ -186,15 +231,14 @@ class CottageTargetSender:
                     model, temps.get(room), [(p.ts_utc, float(p.price_c_kwh)) for p in ahead],
                     outdoor, HeatLimits(float(values["smart_min_c"]["value"]),
                                         float(values["smart_max_c"]["value"])),
-                    [float(r.temperature_c) for r in fixed[room]])
+                    fixed)
                 cached = self._optimized[room] = (key, plan)
             plan = cached[1]
             if plan is not None and plan.optimized:
-                step = plan.steps[0]
-                out[room] = RoomTarget(room, out[room].period_ts, step.target_c,
-                                       out[room].price_c_kwh, "optimized")
+                out[room] = [RoomTarget(room, t.period_ts, step.target_c, t.price_c_kwh, "optimized")
+                             for t, step in zip(out[room], plan.steps)]
 
-    def _optimize_visit(self, out: dict[str, RoomTarget], visit, plan: VisitPlan,
+    def _optimize_visit(self, out: dict[str, list[RoomTarget]], visit, plan: VisitPlan,
                         overrides: Mapping, periods: Sequence[Period], now: datetime) -> set:
         """Heat-ups of learned rooms planned to reach the target at arrival
         (card F5.3); returns the rooms it set. The baseline is the fixed-lead
@@ -203,7 +247,7 @@ class CottageTargetSender:
         now_ts = int(now.timestamp())
         if self._models is None or visit.ended_at is not None or now_ts >= arrival:
             return set()
-        rooms = [r for r in visit.rooms if r in out and out[r].reason != "noprice"]
+        rooms = [r for r in visit.rooms if r in out and out[r][0].reason != "noprice"]
         ahead = [p for p in periods if p.ts_utc >= now_ts - now_ts % INTERVAL_SECONDS]
         if not rooms or not ahead or ahead[-1].ts_utc < arrival:
             return set()   # the arrival is past the known prices
@@ -231,8 +275,8 @@ class CottageTargetSender:
                 cached = self._optimized[("visit", room)] = (key, result)
             result = cached[1]
             if result is not None:
-                out[room] = RoomTarget(room, out[room].period_ts, result.steps[0].target_c,
-                                       out[room].price_c_kwh, "visit")
+                out[room] = [RoomTarget(room, t.period_ts, step.target_c, t.price_c_kwh, "visit")
+                             for t, step in zip(out[room], result.steps)]
                 done.add(room)
         return done
 
@@ -250,6 +294,7 @@ class CottageTargetSender:
             return []   # retried on the first tick after the reconnect
         now = self._now()
         out = []
+        snapshot = self._gateway.snapshot()
         for room, target in self.targets().items():
             self.last[room] = target
             device_id = self._rooms[room]
@@ -261,10 +306,12 @@ class CottageTargetSender:
                     continue
                 if now - previous[3] < self._retry:
                     continue
+            data = {"room": room, "target": target.target_c, "revision": revision,
+                    "valid_minutes": self._valid_minutes}
+            if takes_schedule(snapshot.get(device_id)):
+                data["schedule"] = schedule(self.schedules.get(room) or [])
             cmd = self._gateway.submit_service(
-                device_id, DOMAIN, "set_target",
-                {"room": room, "target": target.target_c, "revision": revision,
-                 "valid_minutes": self._valid_minutes},
+                device_id, DOMAIN, "set_target", data,
                 ACTOR, acknowledged(target.target_c, revision))
             self._sent[room] = (target.target_c, revision, cmd["request_id"], now)
             out.append(cmd)

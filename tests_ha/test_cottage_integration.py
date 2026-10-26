@@ -135,6 +135,36 @@ async def test_stale_sensor_uses_the_heater_thermostats(hass, calls, freezer):
     assert sent(calls) == [("climate.mill_1", 16.0), ("climate.mill_2", 16.0)]
 
 
+async def test_schedule_runs_through_an_outage_and_is_stored(
+        hass, calls, freezer: FrozenDateTimeFactory, hass_storage):
+    await setup(hass)
+    now = dt_util.utcnow()
+    await hass.services.async_call(DOMAIN, "set_target", {
+        "room": "large", "target": 8, "revision": 5, "valid_minutes": 45,
+        "schedule": [{"start": (now + timedelta(minutes=60)).isoformat(), "target": 16},
+                     {"start": (now + timedelta(minutes=120)).isoformat(), "target": 10}],
+    }, blocking=True)
+    await hass.async_block_till_done()
+    state = status(hass)
+    assert state.attributes["schedule_steps"] == 2
+    assert state.attributes["valid_until"] == (now + timedelta(minutes=135)).isoformat()
+    assert state.state == "8.0"
+    saved = hass_storage[DOMAIN]["data"]["targets"]["large"]["schedule"]
+    assert [value for _start, value in saved] == [16, 10]
+    for minutes, expected in ((61, "16.0"), (121, "10.0")):
+        freezer.move_to(now + timedelta(minutes=minutes))
+        hass.states.async_set("sensor.alpstuga_large", str(minutes / 10),
+                              {"unit_of_measurement": "°C"})
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+        assert status(hass).state == expected
+        assert status(hass).attributes["mode"] == "follow"
+    freezer.move_to(now + timedelta(minutes=136))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert status(hass).attributes["mode"] == "fallback"
+
+
 async def test_target_survives_a_restart(hass, calls, hass_storage):
     valid_until = (dt_util.utcnow() + timedelta(minutes=20)).isoformat()
     hass_storage[DOMAIN] = {"version": 1, "minor_version": 1, "key": DOMAIN, "data": {

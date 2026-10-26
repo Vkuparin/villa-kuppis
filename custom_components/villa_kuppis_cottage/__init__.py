@@ -2,9 +2,10 @@
 
 Configured in YAML (see deploy/cottage/packages/villa_kuppis.yaml). Villa
 Kuppis writes each room's target with ``villa_kuppis_cottage.set_target``
-(target, increasing revision and a validity window); this integration
-follows the room sensor locally and falls back to the safe setpoint when
-the target expires. The decision logic is in ``control.py``; this file only
+(target, increasing revision and a validity window), optionally with the
+rest of its plan as a schedule; this integration follows the room sensor
+locally, keeps to the schedule while Villa Kuppis is unreachable and falls
+back to the safe setpoint when the target and its schedule expire. The decision logic is in ``control.py``; this file only
 reads states, calls the climate services and keeps the targets across
 restarts.
 """
@@ -39,6 +40,8 @@ SIGNAL_UPDATE = f"{DOMAIN}_update"
 TICK = timedelta(seconds=60)
 STORAGE_VERSION = 1
 UNAVAILABLE = ("unavailable", "unknown")
+SCHEDULE_STEP = timedelta(minutes=15)   # the last step's length
+SCHEDULE_MAX = timedelta(hours=48)
 
 _DEFAULTS = control.Settings()
 
@@ -74,6 +77,10 @@ SET_TARGET_SCHEMA = vol.Schema({
     vol.Required("target"): vol.All(vol.Coerce(float), vol.Range(min=0, max=30)),
     vol.Required("revision"): vol.All(vol.Coerce(int), vol.Range(min=0)),
     vol.Optional("valid_minutes", default=45): vol.All(vol.Coerce(float), vol.Range(min=1, max=1440)),
+    vol.Optional("schedule", default=list): vol.All(cv.ensure_list, vol.Length(max=400), [vol.Schema({
+        vol.Required("start"): cv.datetime,
+        vol.Required("target"): vol.All(vol.Coerce(float), vol.Range(min=0, max=30)),
+    })]),
 })
 CLEAR_MANUAL_SCHEMA = vol.Schema({vol.Required("room"): cv.slug})
 
@@ -148,12 +155,16 @@ class CottageController:
             room = self.rooms.get(room_id)
             until = dt_util.parse_datetime(saved.get("valid_until") or "")
             if room is not None and until is not None:
-                room.target = control.Target(float(saved["value"]), int(saved["revision"]), until)
+                schedule = tuple((dt_util.parse_datetime(start), float(value))
+                                 for start, value in saved.get("schedule") or ())
+                room.target = control.Target(float(saved["value"]), int(saved["revision"]),
+                                             until, schedule)
 
     async def _async_save(self) -> None:
         await self.store.async_save({"targets": {
             rid: {"value": r.target.value, "revision": r.target.revision,
-                  "valid_until": r.target.valid_until.isoformat()}
+                  "valid_until": r.target.valid_until.isoformat(),
+                  "schedule": [[start.isoformat(), value] for start, value in r.target.schedule]}
             for rid, r in self.rooms.items() if r.target is not None
         }})
 
@@ -169,8 +180,14 @@ class CottageController:
         if room.target is not None and revision < room.target.revision:
             raise ServiceValidationError(
                 f"Revision {revision} is older than the stored revision {room.target.revision}")
-        valid_until = dt_util.utcnow() + timedelta(minutes=call.data["valid_minutes"])
-        room.target = control.Target(call.data["target"], revision, valid_until)
+        now = dt_util.utcnow()
+        valid_until = now + timedelta(minutes=call.data["valid_minutes"])
+        schedule = tuple(sorted((dt_util.as_utc(step["start"]), step["target"])
+                                for step in call.data["schedule"]))
+        schedule = tuple(step for step in schedule if step[0] < now + SCHEDULE_MAX)
+        if schedule:
+            valid_until = max(valid_until, schedule[-1][0] + SCHEDULE_STEP)
+        room.target = control.Target(call.data["target"], revision, valid_until, schedule)
         await self._async_save()
         await self.async_evaluate(room)
 

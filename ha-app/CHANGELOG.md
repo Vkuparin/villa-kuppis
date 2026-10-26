@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.21
+
+- Mökin huoneet saavat tavoitteen mukana koko tunnetun suunnitelman (myös mökkikäynnin lämmityksen). Jos yhteys kotiin katkeaa, mökki noudattaa suunnitelmaa loppuun asti ja vasta sitten siirtyy 5 °C:n varalämpöön. Vaatii mökin integraation version 0.3.0.
+
 ## 0.4.20
 
 - Mökkikäynnin lämmitys suunnitellaan opituille huoneille niin, että huone on lämmin juuri saapuessa ja halvemmalla kuin 12 tunnin säännöllä. Muut huoneet käyttävät edelleen 12 tunnin sääntöä.

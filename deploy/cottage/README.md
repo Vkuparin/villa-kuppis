@@ -35,7 +35,7 @@ To rehearse failures: `villa_kuppis_simulator.set_available` takes entities off 
 
 ## Services
 
-- `villa_kuppis_cottage.set_target`: `room`, `target` (°C), `revision` (must not decrease; Villa Kuppis uses the planning time in epoch seconds), `valid_minutes` (default 45). Sending the same revision again is a heartbeat.
+- `villa_kuppis_cottage.set_target`: `room`, `target` (°C), `revision` (must not decrease; Villa Kuppis uses the planning time in epoch seconds), `valid_minutes` (default 45). Sending the same revision again is a heartbeat. Optional `schedule`: the rest of the plan as `[{start, target}, ...]` (ISO times; from version 0.3.0). The room keeps to it while Villa Kuppis is unreachable; the target expires 15 minutes after the last step's start, or after `valid_minutes`, whichever is later. The status sensor's `schedule_steps` attribute tells Villa Kuppis that the integration takes a schedule.
 - `villa_kuppis_cottage.clear_manual`: `room`. Ends a manual pause at once.
 
 ## Tests

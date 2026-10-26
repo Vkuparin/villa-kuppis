@@ -38,6 +38,7 @@ class FakeCottageHA(FakeHA):
         super().__init__(clock)
         self.targets: list[dict] = []
         self.revisions: dict[str, int] = {}
+        self.schedules = False   # True: integration 0.3.0, which keeps a schedule
 
     async def _call(self, ws, data) -> None:
         if (data["domain"], data["service"]) != ("villa_kuppis_cottage", "set_target"):
@@ -58,9 +59,12 @@ class FakeCottageHA(FakeHA):
         await ws.send_json({"id": data["id"], "type": "result", "success": True,
                             "result": None})
         until = self.clock() + timedelta(minutes=values["valid_minutes"])
-        self.set_state(f"sensor.villa_kuppis_{room}_target", str(max(values["target"], 7.0)), {
-            "mode": "follow", "requested_target": values["target"],
-            "revision": values["revision"], "valid_until": until.isoformat()})
+        attrs = {"mode": "follow", "requested_target": values["target"],
+                 "revision": values["revision"], "valid_until": until.isoformat()}
+        if self.schedules:
+            attrs["schedule_steps"] = len(values.get("schedule") or ())
+        self.set_state(f"sensor.villa_kuppis_{room}_target", str(max(values["target"], 7.0)),
+                       attrs)
 
 
 class TargetTests(IsolatedAsyncioTestCase):
@@ -186,6 +190,53 @@ class TargetTests(IsolatedAsyncioTestCase):
         self.clock.advance(INTERVAL_SECONDS)
         await self.settle(self.sender.tick())
         self.assertNotEqual(self.sender.last["large"].reason, "visit")
+
+    async def test_plan_goes_with_the_target_to_an_integration_that_keeps_it(self):
+        self.ha.schedules = True
+        for room in ("large", "small"):
+            self.ha.set_state(f"sensor.villa_kuppis_{room}_target", "7.0",
+                              {"mode": "fallback", "revision": None, "schedule_steps": 0})
+        await eventually(lambda: "schedule_steps" in (
+            self.gateway.snapshot()["large-status"].get("attributes") or {}))
+        self.clock.advance(INTERVAL_SECONDS * 4 * 20)   # 20:01 local: 15 periods left
+        await self.settle(self.sender.tick())
+        sent = self.ha.targets[-2]
+        self.assertEqual(sent["room"], "large")
+        steps = sent["schedule"]
+        # Only the changes, and the last period, which ends the plan.
+        first = self.day_start + 81 * INTERVAL_SECONDS
+        expected = [(first + k * INTERVAL_SECONDS, EXPECTED[PATTERN[(81 + k) % 4]])
+                    for k in range(len(self.prices) - 81)]
+        expected = [e for i, e in enumerate(expected)
+                    if i == len(expected) - 1 or e[1] != (expected[i - 1][1] if i else sent["target"])]
+        self.assertEqual([(int(datetime.fromisoformat(s["start"]).timestamp()), s["target"])
+                          for s in steps], expected)
+
+    async def test_older_integration_gets_the_target_alone(self):
+        await self.settle(self.sender.tick())
+        self.assertNotIn("schedule", self.ha.targets[-1])
+
+    async def test_schedule_holds_a_visit_heat_up(self):
+        from villa_kuppis.visit import VisitStore
+        visits = VisitStore(Path(self.tmp.name) / "visits.db")
+        self.addCleanup(visits.close)
+        self.sender._visits = visits
+        self.ha.schedules = True
+        self.ha.set_state("sensor.villa_kuppis_large_target", "7.0",
+                          {"mode": "fallback", "revision": None, "schedule_steps": 0})
+        await eventually(lambda: "schedule_steps" in (
+            self.gateway.snapshot()["large-status"].get("attributes") or {}))
+        visits.start(self.clock() + timedelta(hours=16), 21.0, ["large"], "Ville", self.clock())
+        await self.settle(self.sender.tick())
+        sent = [t for t in self.ha.targets if t["room"] == "large"][-1]
+        start = self.sender.visit_plan.start
+        self.assertGreater(start, self.clock())
+        steps = [(datetime.fromisoformat(s["start"]), s["target"]) for s in sent["schedule"]]
+        heat = [at for at, value in steps if value == 21.0]
+        self.assertTrue(heat)
+        self.assertLessEqual(heat[0], start)
+        self.assertGreater(heat[0], start - timedelta(seconds=INTERVAL_SECONDS))
+        self.assertTrue(all(value == 21.0 for at, value in steps if at >= heat[0]))
 
     async def test_missing_prices_fall_back_to_the_base_level(self):
         self.clock.now = datetime(2026, 11, 22, 10, 0, tzinfo=timezone.utc)

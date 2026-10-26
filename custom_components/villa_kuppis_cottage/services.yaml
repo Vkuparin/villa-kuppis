@@ -27,6 +27,11 @@ set_target:
           min: 1
           max: 1440
           unit_of_measurement: min
+    schedule:
+      required: false
+      example: '[{"start": "2026-11-20T10:15:00+00:00", "target": 8}]'
+      selector:
+        object:
 clear_manual:
   fields:
     room:
