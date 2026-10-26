@@ -233,6 +233,9 @@ class CottageLearningTests(unittest.TestCase):
         self.assertTrue(models["large"].ready)
         # The home units are learned apart from the cottage rooms.
         self.assertEqual(self.service.learned_models("home")[0], {})
+        # Only a room whose held-out day passed reaches the heating optimizer.
+        trusted, _future = self.service.cottage_heating_models()
+        self.assertEqual(set(trusted), {"large"})
 
 
 def _state(unit_id, name, room, updated):

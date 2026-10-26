@@ -201,3 +201,57 @@ class PureTests(unittest.TestCase):
         self.assertEqual(targets["large"].target_c, 8.0)
         self.assertEqual(targets["large"].period_ts, 900)
         self.assertEqual(targets["large"].reason, "threshold")
+
+
+class OptimizedTargetTests(unittest.TestCase):
+    """Card F5.2: a learned room takes the heating optimizer's target."""
+
+    def setUp(self):
+        from villa_kuppis.learning import Outdoor, RoomModel
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        data = Path(self.tmp.name)
+        start, end = helsinki_day_bounds(DAY)
+        count = (end - start) // INTERVAL_SECONDS
+        intervals = validate_day(elering_payload(DAY, [PATTERN[i % 4] for i in range(count)]), DAY)
+        with PriceStore(data / "prices.db") as store:
+            store.replace_day(DAY.isoformat(), intervals, datetime.now(timezone.utc))
+        self.now = datetime.fromtimestamp(start, timezone.utc) + timedelta(minutes=1)
+        self.overrides = {}
+        self.temps = {"large": 6.0, "small": 6.0}
+        self.calls = 0
+        model = RoomModel(True, drift_c_per_h=-0.5, heat_c_per_h=2.0)
+
+        def models():
+            self.calls += 1
+            return {"large": model}, Outdoor([])
+        self.sender = CottageTargetSender(
+            None, {"large": "large-status", "small": "small-status"},
+            prices_db=data / "prices.db", overrides=lambda: self.overrides,
+            automation_on=lambda: True, now=lambda: self.now,
+            models=models, room_temps=lambda: self.temps)
+
+    def test_learned_room_follows_the_optimizer_within_its_band(self):
+        reasons = set()
+        for _ in range(8):
+            targets = self.sender.targets()
+            self.assertIn(targets["small"].reason, ("base", "threshold"))   # not learned
+            large = targets["large"]
+            reasons.add(large.reason)
+            if large.reason == "optimized":
+                self.assertGreaterEqual(large.target_c, 5.0)
+                self.assertLessEqual(large.target_c, 12.0)
+            self.now += timedelta(seconds=INTERVAL_SECONDS)
+        self.assertEqual(reasons, {"optimized"})
+        # Planned once per period, not on every call.
+        calls = self.calls
+        self.sender.targets()
+        self.sender.targets()
+        self.assertEqual(self.calls, calls + 1)
+
+    def test_fixed_setting_or_unknown_temperature_keep_the_thresholds(self):
+        self.overrides = {"site:cottage": {"heat_price_control": "fixed"}}
+        self.assertEqual(self.sender.targets()["large"].reason, "threshold")
+        self.overrides = {}
+        self.temps = {}
+        self.assertEqual(self.sender.targets()["large"].reason, "threshold")

@@ -67,7 +67,7 @@ DEFAULT_SAMPLE_INTERVAL = 15.0
 DEFAULT_TARGET_INTERVAL = 60.0     # price targets are sent at most this often
 VISITS_DB = "visits.db"
 PLAN_REASONS = {"base": "Perustaso", "threshold": "Hintaraja", "noprice": "Ei hintaa",
-                "visit": "Vierailu"}
+                "optimized": "Optimoitu", "visit": "Vierailu"}
 VISIT_ERRORS = (
     ("arrival time needs", "Saapumisajalla on oltava aikavyöhyke."),
     ("arrival time must be in the future", "Saapumisajan on oltava tulevaisuudessa."),
@@ -415,10 +415,16 @@ class CottageSite:
     # -- price targets and visits (cards H2.4, F4.3) --
 
     def configure_targets(self, *, prices_db, overrides: Callable[[], dict],
-                          automation_on: Callable[[], bool]) -> None:
-        """Enable the price target sender; call before ``start``."""
+                          automation_on: Callable[[], bool],
+                          models: Callable[[], tuple] | None = None) -> None:
+        """Enable the price target sender; call before ``start``.
+
+        ``models`` returns the validated room models and the outdoor
+        forecast for the heating optimizer (card F5.2).
+        """
         self._targets_cfg = {"prices_db": Path(prices_db), "overrides": overrides,
-                             "automation_on": automation_on}
+                             "automation_on": automation_on, "models": models,
+                             "room_temps": self.room_temperatures}
 
     def _target_loop(self) -> None:
         while not self._stop.wait(self._target_interval):
@@ -545,6 +551,20 @@ class CottageSite:
                 "reason_text": PLAN_REASONS.get(target.reason, target.reason),
                 "price": float(target.price_c_kwh) if target.price_c_kwh is not None else None,
                 "acked_at": self._acked.get(room_id)}
+
+    def room_temperatures(self) -> dict[str, float]:
+        """Each room's current temperature sensor value, when it is ok."""
+        snapshot = self._gateway.snapshot()
+        out = {}
+        for binding in sorted(self._bindings(), key=lambda b: b.device_id):
+            state = snapshot.get(binding.device_id) or {}
+            if (binding.room in ROOMS and binding.room not in out
+                    and self._role(binding, state) == "temperature"
+                    and reading_status("temperature", state, self._now()) == "ok"):
+                value = _num(state.get("value"))
+                if value is not None:
+                    out[binding.room] = value
+        return out
 
     def learning_readings(self, room_id: str, start, end) -> list:
         """The room's history for learning its rates (card F5.2)."""

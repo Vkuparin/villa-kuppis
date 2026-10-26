@@ -1,5 +1,10 @@
 # Muutokset
 
+## 0.4.19
+
+- Mökin lämmitykselle uusi asetus Hintaohjaus: Kiinteät rajat tai Optimoitu (oletus). Optimoitu varaa lämpöä halvoilla tunneilla vähimmäislämpötilan ja suurimman varaavan lämpötilan välissä.
+- Optimointi alkaa huonekohtaisesti, kun huoneen nopeudet on opittu ja testipäivä on hyväksytty; siihen asti käytetään kiinteitä rajoja.
+
 ## 0.4.18
 
 - Mökin huoneet oppivat lämpenemis- ja jäähtymisnopeutensa lukemista; ne näkyvät kodin pumppujen kanssa kohdassa Huoneiden opitut nopeudet. Tämä on ensimmäinen vaihe mökin älykkäästä ylläpitolämmityksestä.

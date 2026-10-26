@@ -118,13 +118,13 @@ class StoreTests(unittest.TestCase):
                          [Decimal("12.0"), Decimal("8.0"), Decimal("5.0")])
 
     def test_cottage_heating_texts_match_what_is_built(self):
-        # The thresholds drive the cottage; smart heating is hidden until built.
+        # The thresholds drive the cottage; the storage band only the optimizer.
         for key in ("heat_base_c", "heat_rule1_price_c_kwh", "heat_rule1_c",
-                    "heat_rule2_price_c_kwh", "heat_rule2_c"):
+                    "heat_rule2_price_c_kwh", "heat_rule2_c", "smart_min_c", "smart_max_c"):
             self.assertNotIn("ei vielä", S.BY_KEY[key].help.lower())
             self.assertEqual(S.BY_KEY[key].kinds, ("heat",))
-        for key in ("smart_enabled", "smart_min_c", "smart_max_c"):
-            self.assertEqual(S.BY_KEY[key].kinds, ())
+        self.assertEqual(S.BY_KEY["smart_max_c"].shown_if, ("heat_price_control", ("optimized",)))
+        self.assertNotIn("smart_enabled", S.BY_KEY)
 
 
 class MigrationTests(unittest.TestCase):

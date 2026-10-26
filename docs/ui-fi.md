@@ -10,7 +10,7 @@ Käyttöliittymän kieli on suomi. Sovellusta käytetään selaimella tietokonee
 - **Kuvaajat:** lämpötilat, ilmanlaatu (ALPSTUGA), tavoitelämpötilat ja hinnat samalla aika-akselilla, huoneittain ja kohteittain. Painikkeet `←`, `Nyt` ja `→` siirtävät ikkunaa jakson puolikkaan verran, ja ikkuna voi ulottua 48 tuntia eteenpäin: tulevat hinnat ja FMI:n sääennuste (`Sääennuste`) näkyvät varjostetulla alueella, ja `nyt`-viiva erottaa ne. Hiiren vienti tai kosketus näyttää tooltipissä kyseisen hetken arvot ja hinnan.
 - **Yläpalkki:** kytkin `Automaatio` kytkee koko hinta- ja lämpötilaohjatun automaation päälle tai pois. Pois päältä ei lähetetä pumpuille komentoja, mutta pumput jäävät siihen tilaan, jossa ne ovat.
 - **Pörssisähkö:** päivän ja huomisen hinnat 15 minuutin jaksoissa (haetaan päivittäin klo 14.25 ja painikkeella `Hae hinnat`) sekä suunnitelma: mikä tavoitelämpötila on voimassa kussakin jaksossa ja miksi.
-- **Hintasäännöt:** kiinteät hintarajat, esimerkiksi `Kun pörssihinta on alle 5 c/kWh → 12 °C`, tai kytkin `Älykäs ylläpitolämmitys` (vähimmäislämpötila, suurin varaava lämpötila, halpa ja kallis hinta). Asetukset koko kohteelle tai huoneittain. Hinta on pörssihinta ilman marginaaleja; ALV lisätään asetuksella `Lisää ALV sähkönhintaan` (25,5 %), ja silloin hintarajat annetaan ALV:llisina. Kotona säännöt koskevat kesällä jäähdytystä.
+- **Hintasäännöt:** kiinteät hintarajat, esimerkiksi `Kun pörssihinta on alle 5 c/kWh → 12 °C`, tai `Hintaohjaus: Optimoitu` (vähimmäislämpötila ja suurin varaava lämpötila). Asetukset koko kohteelle tai huoneittain. Hinta on pörssihinta ilman marginaaleja; ALV lisätään asetuksella `Lisää ALV sähkönhintaan` (25,5 %), ja silloin hintarajat annetaan ALV:llisina. Kotona säännöt koskevat kesällä jäähdytystä.
 - **Mökki:** `Vierailu` kysyy saapumisajan ja tavoitelämpötilan, ja sovellus lämmittää halvimmilla jaksoilla ajoissa. `Lopeta vierailu` palauttaa ylläpitolämmityksen.
 - **Koti:** painike `Poissa kotoa` vaihtaa kodin poissaoloasetukseen (oletuksena jäähdytys vasta yli 28 °C:ssa). `Yötila`: valituissa huoneissa hiljaisin puhallus yöaikaan.
 - **Tapahtumat:** kuka tai mikä muutti asetusta, milloin ja onnistuiko muutos. Kapealla näytöllä jokainen tapahtuma on oma korttinsa.
@@ -42,7 +42,7 @@ Käyttöliittymän kieli on suomi. Sovellusta käytetään selaimella tietokonee
 | Away / visit | Poissa / Vierailu |
 | Start / end visit | Vierailu / Lopeta vierailu |
 | Arrival time | Saapumisaika |
-| Smart maintenance heating | Älykäs ylläpitolämmitys |
+| Optimized heating | Hintaohjaus: Optimoitu |
 | Minimum / maximum storage temperature | Vähimmäislämpötila / Suurin varaava lämpötila |
 | Low / high price | Halpa hinta / Kallis hinta |
 | Site connected / link down, local fallback | Yhteydessä / Yhteys poikki — paikallinen ylläpitolämmitys käytössä |

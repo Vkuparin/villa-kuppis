@@ -14,6 +14,11 @@ After a disconnect nothing is replayed: the next tick sends only the target
 valid now. With ``Automaatio`` off nothing is sent, so economic control
 stops and the cottage's local fallback takes over when the last target
 expires.
+
+With ``Hintaohjaus`` set to ``Optimoitu`` a room whose learned model passed
+its held-out day gets the heating optimizer's target instead (card F5.2,
+``heat_optimizer``), planned once per period over all known prices; the
+fixed thresholds stay its fallback and its baseline.
 """
 
 from __future__ import annotations
@@ -26,6 +31,7 @@ from typing import Callable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 from . import settings as app_settings
+from .heat_optimizer import HeatLimits, optimize_heating
 from .planning import Period, plan_day
 from .prices import INTERVAL_SECONDS
 from .storage import PriceStore
@@ -45,7 +51,7 @@ class RoomTarget:
     period_ts: int
     target_c: float
     price_c_kwh: Decimal | None
-    reason: str                 # "base" | "threshold" | "noprice" | "visit"
+    reason: str                 # "base" | "threshold" | "noprice" | "optimized" | "visit"
 
 
 def current_targets(overrides: Mapping, periods: Sequence[Period], rooms: Sequence[str],
@@ -92,6 +98,8 @@ class CottageTargetSender:
     def __init__(self, gateway, rooms: Mapping[str, str], *, prices_db: Path,
                  overrides: Callable[[], Mapping], automation_on: Callable[[], bool],
                  now: Callable[[], datetime], visits: VisitStore | None = None,
+                 models: Callable[[], tuple] | None = None,
+                 room_temps: Callable[[], Mapping[str, float]] | None = None,
                  valid_minutes: float = VALID_MINUTES,
                  retry_seconds: float = RETRY_SECONDS):
         self._gateway = gateway
@@ -102,6 +110,11 @@ class CottageTargetSender:
         self._now = now
         self._visits = visits
         self.visit_plan: VisitPlan | None = None
+        # models() -> ({room: validated RoomModel}, outdoor forecast);
+        # room_temps() -> {room: °C now}.
+        self._models = models
+        self._room_temps = room_temps
+        self._optimized: dict[str, tuple] = {}   # room -> (key, HeatPlan or None)
         self._valid_minutes = valid_minutes
         self._retry = timedelta(seconds=retry_seconds)
         # room -> (target, revision, request_id, sent_at)
@@ -124,6 +137,8 @@ class CottageTargetSender:
         today = now.astimezone(HELSINKI).date()
         periods = self._periods(today, factor)
         out = current_targets(overrides, periods, list(self._rooms), int(now.timestamp()))
+        if self._models is not None:
+            self._optimize(out, overrides, periods + self._periods(today + timedelta(days=1), factor))
         visit = self._visits.active() if self._visits is not None else None
         if visit is None:
             self.visit_plan = None
@@ -142,6 +157,39 @@ class CottageTargetSender:
             if value is not None:
                 out[room] = RoomTarget(room, target.period_ts, value, target.price_c_kwh, "visit")
         return out
+
+    def _optimize(self, out: dict[str, RoomTarget], overrides: Mapping,
+                  periods: Sequence[Period]) -> None:
+        """Replace the economic targets of optimized rooms (card F5.2)."""
+        rooms = [room for room, target in out.items() if target.reason != "noprice"
+                 and app_settings.resolve(overrides, SITE, room)["heat_price_control"]["value"]
+                 == "optimized"]
+        if not rooms:
+            return
+        ahead = [p for p in periods if p.ts_utc >= out[rooms[0]].period_ts]
+        fixed = plan_day(ahead, app_settings.plan_settings(overrides, SITE, rooms))
+        models = outdoor = temps = None
+        for room in rooms:
+            values = app_settings.resolve(overrides, SITE, room)
+            key = (ahead[0].ts_utc, len(ahead), values["smart_min_c"]["value"],
+                   values["smart_max_c"]["value"], tuple(float(r.temperature_c) for r in fixed[room]))
+            cached = self._optimized.get(room)
+            if cached is None or cached[0] != key:
+                if models is None:
+                    models, outdoor = self._models()
+                    temps = self._room_temps() if self._room_temps is not None else {}
+                model = models.get(room)
+                plan = None if model is None else optimize_heating(
+                    model, temps.get(room), [(p.ts_utc, float(p.price_c_kwh)) for p in ahead],
+                    outdoor, HeatLimits(float(values["smart_min_c"]["value"]),
+                                        float(values["smart_max_c"]["value"])),
+                    [float(r.temperature_c) for r in fixed[room]])
+                cached = self._optimized[room] = (key, plan)
+            plan = cached[1]
+            if plan is not None and plan.optimized:
+                step = plan.steps[0]
+                out[room] = RoomTarget(room, out[room].period_ts, step.target_c,
+                                       out[room].price_c_kwh, "optimized")
 
     def preview(self) -> dict[str, RoomTarget]:
         """Refresh ``last`` and ``visit_plan`` without sending anything."""

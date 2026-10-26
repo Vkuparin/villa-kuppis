@@ -1105,6 +1105,7 @@ class PumpService:
         self._room_rates_cache: tuple[datetime, dict] | None = None
         self._room_rates_lock = threading.Lock()
         self._models_cache: dict[str, tuple[datetime, tuple]] = {}
+        self._checked_cache: tuple[datetime, dict] | None = None
         self._models_lock = threading.Lock()
         self._prices_db = (Path(prices_db) if prices_db is not None
                            else self._data_dir / PRICE_DB_FILENAME)
@@ -1124,7 +1125,8 @@ class PumpService:
             settings_store = SettingsStore(self.store.path)
             self.cottage.configure_targets(
                 prices_db=self._prices_db, overrides=settings_store.overrides,
-                automation_on=self.automation.automation_on)
+                automation_on=self.automation.automation_on,
+                models=self.cottage_heating_models)
         # Phone alerts (alerts.py) when a notifier is given.
         self.alerts = None
         if notifier is not None:
@@ -1442,6 +1444,28 @@ class PumpService:
             result = (models, (outdoor, future), ahead)
             self._models_cache[site] = (now, result)
             return result
+
+    def cottage_heating_models(self) -> tuple[dict, learning.Outdoor]:
+        """The cottage room models that passed their held-out day, and the
+        outdoor forecast, for the heating optimizer (card F5.2); the check
+        is cached like the rates."""
+        models, (observed, future), _ahead = self.learned_models("cottage")
+        now = self._now()
+        with self._models_lock:
+            cached = self._checked_cache
+            if cached is not None and 0 <= (now - cached[0]).total_seconds() \
+                    < ROOM_RATES_CACHE_SECONDS:
+                passed = cached[1]
+            else:
+                start = now - timedelta(days=learning.LEARN_DAYS)
+                passed = {}
+                for room in models:
+                    _trained, check = learning.validate(
+                        self._learning_readings("cottage", room, start, now), observed, now)
+                    passed[room] = check is not None and check.passed
+                self._checked_cache = (now, passed)
+        return ({room: model for room, model in models.items() if passed.get(room)},
+                future)
 
     def _compute_room_rates(self, site: str, now: datetime) -> dict:
         start = now - timedelta(days=learning.LEARN_DAYS)

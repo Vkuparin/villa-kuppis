@@ -30,16 +30,14 @@ Example for the cottage:
 | Spot price below 8 c/kWh | 8 °C |
 | Spot price below 5 c/kWh | 12 °C |
 
-## Mode 2: smart maintenance heating (Älykäs ylläpitolämmitys)
+## Mode 2: optimized heating (Hintaohjaus: Optimoitu)
 
-A switch per site or room. The owner sets:
+`Hintaohjaus` for the cottage chooses between the fixed thresholds above and the optimizer (card F5.2, the default). The owner sets, per site or room:
 
-- **Minimum temperature:** never go below this, whatever the price.
-- **Maximum storage temperature:** never heat above this to store cheap energy.
-- **Low price:** below this, storing heat is worth it.
-- **High price:** above this, avoid heating and let the room cool towards the minimum.
+- **Minimum temperature** (`Vähimmäislämpötila`, 5 °C): never go below this, whatever the price.
+- **Maximum storage temperature** (`Suurin varaava lämpötila`, 12 °C): never heat above this to store cheap energy.
 
-The optimizer chooses a target for each 15-minute period, that minimizes the cost of the known price window while staying between the minimum and the maximum. It uses each room's learned heat-up and cool-down rates and the outdoor forecast. Until enough history exists (a few weeks of readings), it falls back to the fixed thresholds implied by the low and high prices.
+The optimizer (`heat_optimizer.py`) chooses a target for each 15-minute period that minimizes the cost of the known price window while staying between the minimum and the maximum: it stores heat in cheap periods and coasts through expensive ones. It uses each room's learned heat-up and cool-down rates (from the ALPSTUGA temperature and the target in force) and the FMI forecast, values the heat left at the end of the known prices at their median price, and keeps the fixed thresholds' plan whenever its own does not score at least as well. A room uses it only once its model is learned and its held-out day passed; until then, and whenever its temperature is unknown or no price is known, the fixed thresholds apply. A visit still replaces the plan from its heat-up start.
 
 ## Summer cooling (home pumps)
 
