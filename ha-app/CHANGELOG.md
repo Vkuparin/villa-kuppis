@@ -1,5 +1,13 @@
 # Muutokset
 
+## 0.4.24
+
+- Uusi ulkoasu: sivupalkki (puhelimessa alapalkki), tervehdys ja yleiskatsaus, jossa sähkön hinta nyt ja pylväinä tänään ja huomenna, ulko- ja sisälämpötila sekä pumput.
+- Pumppujen ja mökin huoneiden lämpötila näkyy mittarina, jossa piste on tavoite.
+- Historiassa sähkön hinta on pylväinä, ajanjakso valitaan painikkeista ja käyriä voi piilottaa selitteestä.
+- Päivän suunnitelma näkyy aikajanana, opitut nopeudet tiivistettyinä lukuina.
+- Asetukset ja Tapahtumat voi pienentää; valinta muistetaan selaimessa.
+
 ## 0.4.23
 
 - Sovellus toimii myös osoitteessa /villa-kuppis (uusi asetus public_path), myös ilman loppukauttaviivaa.

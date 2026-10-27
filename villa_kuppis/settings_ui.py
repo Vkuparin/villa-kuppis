@@ -6,13 +6,15 @@ JS in raw strings: no Python escape can corrupt it.
 """
 
 SECTION_HTML = r"""
-  <section class="settings" aria-label="Asetukset">
-    <h2>Asetukset</h2>
-    <div class="hist-controls">
-      <label>Kohde
-        <select id="set-scope" aria-label="Asetusten kohde"></select>
-      </label>
-      <span id="set-status" role="status"></span>
+  <section class="settings panel" id="settings-section" aria-label="Asetukset"
+           data-fold="settings" data-fold-default="1">
+    <div class="panel-head">
+      <h2><span data-icon="gear"></span>Asetukset</h2>
+      <div class="tools">
+        <span id="set-status" role="status"></span>
+        <select id="set-scope" aria-label="Asetusten kohde"
+                title="Kohde tai huone, jonka asetuksia muokataan."></select>
+      </div>
     </div>
     <p class="detail">Huoneen asetus ohittaa kohteen asetuksen, ja kohteen
       asetus ohittaa oletuksen. Muutos tulee voimaan seuraavassa
@@ -39,27 +41,25 @@ SECTION_HTML = r"""
 """
 
 STYLE = r"""
-section.settings { background: var(--surface); border: 1px solid var(--line);
-                   border-radius: .75rem; padding: 1rem 1.1rem;
-                   margin-bottom: 1rem; }
-section.settings h2 { margin: 0 0 .6rem; font-size: 1.15rem; }
-section.settings h3 { margin: 1rem 0 .3rem; font-size: 1rem; color: var(--text2); }
+section.settings h3 { margin: 1.3rem 0 .2rem; font-size: .72rem; font-weight: 600; letter-spacing: .07em;
+                      text-transform: uppercase; color: var(--text3); }
+#set-body { max-width: 46rem; }
 .set-row { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .8rem;
-           padding: .35rem 0; border-bottom: 1px solid var(--line2); }
-.set-row { max-width: 40rem; }
+           padding: .5rem 0; border-bottom: 1px solid var(--line2); max-width: 46rem; }
 .set-label { flex: 1 1 14rem; cursor: help; }
 .set-help { flex: 1 1 100%; margin: 0 0 .2rem; }
 .set-help[hidden] { display: none; }
 .set-src:empty { display: none; }
-.set-reset { min-width: 44px; padding: 0; font-size: 1.2rem; }
+.set-reset { min-width: 40px; min-height: 40px; padding: 0; font-size: 1.1rem; color: var(--text3); }
 .set-row input[type=number], .set-row input[type=time] {
-  min-height: 44px; width: 7.5rem; font-size: 1rem; padding: 0 .5rem;
-  border: 1px solid var(--ctl); border-radius: .5rem;
-  background: var(--surface); color: var(--text); }
+  min-height: 44px; width: 7.5rem; font-size: .95rem; padding: 0 .7rem;
+  border: 1px solid var(--line3); border-radius: 10px;
+  background: var(--surface); color: var(--text); font-variant-numeric: tabular-nums; }
 .set-row input[type=time] { width: 9.5rem; }
 .set-row input[type=checkbox] { width: 1.6rem; height: 1.6rem; }
-.set-src { font-size: .85rem; color: var(--text3); flex: 0 0 auto; }
-#set-status { font-size: .85rem; color: var(--text3); }
+.set-src { font-size: .78rem; color: var(--text3); flex: 0 0 auto; padding: .1rem .5rem;
+           border-radius: 999px; background: var(--surface2); }
+#set-status { font-size: .82rem; color: var(--text3); }
 #set-status.err { color: var(--err); }
 """
 

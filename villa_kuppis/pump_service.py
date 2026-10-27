@@ -1394,6 +1394,32 @@ class PumpService:
             payload.update(cottage)
         return payload
 
+    def overview(self, site: str = "home") -> dict:
+        """Header figures of a page: today's and tomorrow's prices, the latest
+        outdoor reading and the next day's forecast."""
+        if site not in ("home", "cottage"):
+            raise ValueError("site must be home or cottage")
+        now = self._now()
+        day = now.astimezone(HELSINKI).date()
+        start = datetime(day.year, day.month, day.day, tzinfo=HELSINKI)
+        end = start + timedelta(days=2)   # wall clock: right across DST
+        factor = vat_factor(SettingsStore(self.store.path).overrides(), site)
+        # One point per 15-minute interval: 2 days fit well under the limit.
+        price = self.store.price_series(self._prices_db, start, end, 400, factor)
+        outdoor = self.store.outdoor_series(site, now - timedelta(hours=3), now, 36)
+        forecast = self.store.forecast_rows(site, now, now + timedelta(hours=24))
+        return {
+            "now": _iso(_to_epoch(now)),
+            "site": site,
+            "vat_percent": round((factor - 1) * 100, 2) if factor != 1 else None,
+            "day_start": _iso(_to_epoch(start)),
+            "day_end": _iso(_to_epoch(end)),
+            "prices": None if price is None
+                      else [[_iso(ts), v] for ts, v in price],
+            "outdoor": [_iso(outdoor[-1][0]), outdoor[-1][1]] if outdoor else None,
+            "forecast": [[_iso(ts), v] for ts, v in forecast],
+        }
+
     # -- outdoor temperature (card F3.3) ---------------------------------------
 
     def _weather_loop(self) -> None:

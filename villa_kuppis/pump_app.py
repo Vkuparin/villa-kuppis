@@ -62,6 +62,7 @@ from urllib.parse import parse_qs, urlsplit
 from .pump_probe import FakeClient, _unit_payload
 from . import settings as app_settings
 from . import cottage as cottage_ui
+from . import overview_ui
 from .cottage import CottageSite, FakeSiteGateway
 from .visit import VisitError
 from .pump_service import MAX_ACTOR_LENGTH, PumpService, make_live_service
@@ -239,6 +240,58 @@ _PAGE = """<!doctype html>
   document.documentElement.setAttribute("data-theme", t);
   if (a) document.documentElement.setAttribute("data-accent", a);
 })();
+// Line icons, drawn inline: a fragment link to a symbol would break under the
+// base address the Tailscale path adds.
+var VK_ICONS = {
+  logo: '<path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v10h13V10"/><path d="M10 20v-4.5a2 2 0 0 1 4 0V20"/>',
+  home: '<path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v10h13V10"/><path d="M10 20v-5h4v5"/>',
+  cabin: '<path d="M2.5 12 12 3.5l9.5 8.5"/><path d="M5 10v10h14V10"/><path d="M9.5 20v-5.5h5V20"/><path d="M16.5 6.5V3.5h2v4.8"/>',
+  grid: '<rect x="3.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.8"/>',
+  chart: '<path d="M3.5 3.5v17h17"/><path d="m7.5 15 4-4.5 3 3 5-6"/>',
+  calendar: '<rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M16 3v4M8 3v4M3.5 10h17"/>',
+  spark: '<path d="M12 3.5 13.8 9l5.7 1.5-5.7 1.6L12 17.5l-1.8-5.4-5.7-1.6L10.2 9z"/><path d="M19 16v4M17 18h4"/>',
+  gear: '<path d="M4 6.5h9M17 6.5h3M4 12h3M11 12h9M4 17.5h11M19 17.5h1"/><circle cx="15" cy="6.5" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="17.5" r="2"/>',
+  list: '<path d="M9 6.5h11.5M9 12h11.5M9 17.5h11.5"/><circle cx="4.5" cy="6.5" r=".9"/><circle cx="4.5" cy="12" r=".9"/><circle cx="4.5" cy="17.5" r=".9"/>',
+  snow: '<path d="M12 2.5v19M3.8 7.2l16.4 9.6M3.8 16.8l16.4-9.6"/><path d="m9 4.2 3 2 3-2M9 19.8l3-2 3 2"/>',
+  flame: '<path d="M12 3c1.2 3.2 5.5 5.3 5.5 10.2a5.5 5.5 0 0 1-11 0c0-2.3 1.1-4 2.3-5 .2 2 1.1 3.1 2.2 3.1C11 8 10.6 5.6 12 3z"/>',
+  drop: '<path d="M12 3.5s6 6.4 6 10.8a6 6 0 0 1-12 0C6 9.9 12 3.5 12 3.5z"/>',
+  fan: '<circle cx="12" cy="12" r="1.6"/><path d="M12 10.4c-.3-4.1 1-6.9 3.6-6.9 2.9 0 3.3 4-2 7.6M13.6 12c4.1-.3 6.9 1 6.9 3.6 0 2.9-4 3.3-7.6-2M12 13.6c.3 4.1-1 6.9-3.6 6.9-2.9 0-3.3-4 2-7.6M10.4 12c-4.1.3-6.9-1-6.9-3.6 0-2.9 4-3.3 7.6 2"/>',
+  auto: '<path d="M5 20 12 4l7 16M8 14h8"/>',
+  bolt: '<path d="M13.5 2.5 4.5 14h7l-1 7.5 9-11.5h-7z"/>',
+  thermo: '<path d="M14 14.6V5a2 2 0 0 0-4 0v9.6a4 4 0 1 0 4 0z"/><path d="M12 11v6"/>',
+  cloud: '<path d="M7 18.5a4.5 4.5 0 0 1-.4-9 5.5 5.5 0 0 1 10.6 1.4A3.8 3.8 0 0 1 17 18.5z"/>',
+  link: '<path d="M4.5 12.5a11 11 0 0 1 15 0M8 16a6 6 0 0 1 8 0"/><circle cx="12" cy="19.5" r=".9"/>',
+  clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+  chev: '<path d="m6 9 6 6 6-6"/>'
+};
+function vkIcon(name) {
+  return '<span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+    'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    (VK_ICONS[name] || "") + "</svg></span>";
+}
+// Round gauge: a 270 degree track (default 14 to 32 °C), the reading as an arc
+// in the given colour and the target as a dot on the track.
+function vkGauge(value, target, color, lo, hi) {
+  var MIN = lo === undefined ? 14 : lo, MAX = hi === undefined ? 32 : hi;
+  var A0 = 135, SWEEP = 270, R = 50, C = 60;
+  function ang(v) { return A0 + SWEEP * Math.max(0, Math.min(1, (v - MIN) / (MAX - MIN))); }
+  function pt(a) { var r = a * Math.PI / 180; return [C + R * Math.cos(r), C + R * Math.sin(r)]; }
+  function arc(a0, a1) {
+    var p0 = pt(a0), p1 = pt(a1);
+    return "M" + p0[0].toFixed(2) + " " + p0[1].toFixed(2) + " A" + R + " " + R + " 0 " +
+      (a1 - a0 > 180 ? 1 : 0) + " 1 " + p1[0].toFixed(2) + " " + p1[1].toFixed(2);
+  }
+  var s = '<svg viewBox="0 0 120 120" aria-hidden="true"><path class="g-track" d="' +
+    arc(A0, A0 + SWEEP) + '"/>';
+  if (value !== null && value !== undefined)
+    s += '<path class="g-val" style="stroke:' + color + '" d="' +
+      arc(A0, Math.max(A0 + 1, ang(value))) + '"/>';
+  if (target !== null && target !== undefined) {
+    var p = pt(ang(target));
+    s += '<circle class="g-tgt" cx="' + p[0].toFixed(2) + '" cy="' + p[1].toFixed(2) + '" r="5.5"/>';
+  }
+  return s + "</svg>";
+}
 // Periodic refreshes run only while the page is visible; when it is shown
 // again (another tab, the phone app reopened) each one runs at once.
 var vkEvery = (function () {
@@ -266,211 +319,370 @@ var vkEvery = (function () {
    accent comes from data-accent. Both are set before first paint. */
 :root {
   color-scheme: light;
-  --bg: #f2f4f6; --surface: #fff; --surface2: #eef1f4;
-  --text: #1a1d21; --text2: #44505c; --text3: #55606b;
-  --line: #d9dee3; --line2: #e3e8ec; --line3: #c7cfd6; --ctl: #9aa4ae;
-  --ok: #0b6b2a; --ok-bg: #e8f6ec;
-  --warn: #8a5b00; --warn-bg: #fdf3dd; --warn-line: #d9b96a;
-  --warn-card: #fffdf6; --warn-text: #6b4d00;
-  --err: #a11d1d; --err-bg: #fdecec; --err-text: #7a1414;
-  --info: #0b3f9e; --info-bg: #eef4ff; --purple: #6a2c91;
-  --accent: #0b5fff;
+  --bg: #f3f4f6; --surface: #fff; --surface2: #f1f3f5; --surface3: #e4e7eb;
+  --text: #15171a; --text2: #4b525c; --text3: #6b737d;
+  --line: #e3e6ea; --line2: #eceef1; --line3: #cdd2d8; --ctl: #b3bac3;
+  --ok: #12813c; --ok-bg: #e5f5eb;
+  --warn: #9a5c00; --warn-bg: #fff3dc; --warn-line: #e6c27a;
+  --warn-card: #fffbf2; --warn-text: #6b4300;
+  --err: #c42b2b; --err-bg: #fdecec; --err-text: #7a1414;
+  --info: #1f5fcf; --info-bg: #eaf1ff; --purple: #7c3aed;
+  --cool: #0b8fd8; --heat: #ea6a12; --price: #d39a00;
+  --accent: #2563eb;
+  --shadow: 0 1px 2px rgba(16,24,40,.05), 0 2px 6px rgba(16,24,40,.04);
+  --radius: 16px;
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #12151a; --surface: #1c2128; --surface2: #262d36;
-  --text: #e6e9ed; --text2: #b4bec9; --text3: #99a4b0;
-  --line: #333b46; --line2: #2b323b; --line3: #46505c; --ctl: #6b7683;
-  --ok: #5fd28a; --ok-bg: #14301f;
-  --warn: #f0c060; --warn-bg: #33280e; --warn-line: #7a6330;
-  --warn-card: #2a2616; --warn-text: #f0d58a;
-  --err: #ff8a8a; --err-bg: #3a1717; --err-text: #ffc2c2;
-  --info: #7fb0ff; --info-bg: #17283f; --purple: #c79bf0;
-  --accent: #4d8dff;
+  --bg: #0d0e10; --surface: #16181b; --surface2: #1d2024; --surface3: #2a2e34;
+  --text: #ecedef; --text2: #aab0b8; --text3: #80878f;
+  --line: #24272c; --line2: #1f2226; --line3: #363b42; --ctl: #4b515a;
+  --ok: #4ade80; --ok-bg: rgba(74,222,128,.12);
+  --warn: #fbbf24; --warn-bg: rgba(251,191,36,.12); --warn-line: #6b5520;
+  --warn-card: #1b1912; --warn-text: #f5d58a;
+  --err: #f87171; --err-bg: rgba(248,113,113,.13); --err-text: #fecaca;
+  --info: #7cb1ff; --info-bg: rgba(96,165,250,.13); --purple: #c4a1ff;
+  --cool: #38bdf8; --heat: #fb923c; --price: #facc15;
+  --accent: #5b9cff;
+  --shadow: none;
 }
-:root[data-accent="green"] { --accent: #0b8a3a; }
-:root[data-accent="purple"] { --accent: #7a3fc0; }
+:root[data-accent="green"] { --accent: #0f8a3e; }
+:root[data-accent="purple"] { --accent: #7c3aed; }
 :root[data-accent="pink"] { --accent: #d6336c; }
 :root[data-accent="orange"] { --accent: #d9640b; }
-:root[data-theme="dark"][data-accent="green"] { --accent: #3fc46e; }
-:root[data-theme="dark"][data-accent="purple"] { --accent: #b389f0; }
-:root[data-theme="dark"][data-accent="pink"] { --accent: #f2709f; }
-:root[data-theme="dark"][data-accent="orange"] { --accent: #f09040; }
-header.top { border-bottom: 3px solid var(--accent) !important; }
-header.top .auto-switch { margin-left: auto; align-self: center; }
+:root[data-theme="dark"][data-accent="green"] { --accent: #4ade80; }
+:root[data-theme="dark"][data-accent="purple"] { --accent: #b794f6; }
+:root[data-theme="dark"][data-accent="pink"] { --accent: #f472b6; }
+:root[data-theme="dark"][data-accent="orange"] { --accent: #fb923c; }
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-padding-top: 1rem; }
+body { margin: 0; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+       background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
+.ico { width: 18px; height: 18px; flex: none; display: inline-block; vertical-align: -3px; }
+.ico svg { width: 100%; height: 100%; display: block; }
+
+/* --- frame: sidebar on wide screens, top bar and bottom tabs on phones --- */
+.shell { display: grid; grid-template-columns: 232px minmax(0, 1fr); min-height: 100vh; }
+.side { position: sticky; top: 0; height: 100vh; overflow-y: auto; display: flex;
+        flex-direction: column; gap: 1.4rem; padding: 1.1rem .75rem;
+        background: var(--surface); border-right: 1px solid var(--line); }
+.brand { display: flex; align-items: center; gap: .65rem; padding: .15rem .55rem; }
+.brand-mark { width: 34px; height: 34px; border-radius: 10px; background: var(--accent);
+              color: #fff; display: grid; place-items: center; flex: none; }
+.brand-mark .ico { width: 20px; height: 20px; }
+.brand h1 { font-size: 1.05rem; margin: 0; letter-spacing: -.01em; color: var(--text); }
+.app-version { display: block; font-size: .72rem; color: var(--text3); }
+.app-version:empty { display: none; }
+.side-label { font-size: .7rem; font-weight: 600; letter-spacing: .07em; text-transform: uppercase;
+              color: var(--text3); margin: 0 0 .35rem; padding: 0 .7rem; }
+.side nav, .side .jumps { display: flex; flex-direction: column; gap: .15rem; }
+.side nav a, .side .jumps button { display: flex; align-items: center; gap: .7rem; width: 100%;
+  min-height: 40px; padding: .5rem .7rem; border: 0; border-radius: 10px; background: none;
+  color: var(--text2); font: inherit; font-weight: 500; text-decoration: none; cursor: pointer;
+  text-align: left; }
+.side nav a:hover, .side .jumps button:hover { background: var(--surface2); color: var(--text); }
+.side nav a[aria-current="page"] { background: var(--surface2); color: var(--text); }
+.side nav a[aria-current="page"] .ico { color: var(--accent); }
+.side-foot { margin-top: auto; display: flex; flex-direction: column; gap: .5rem; padding: 0 .55rem; }
+#identity { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            font-size: .82rem; color: var(--text2); }
+#identity:empty { display: none; }
+body[data-page="mokki"] [data-jump="plan"], body[data-page="koti"] [data-jump="visit"] { display: none; }
+.content { min-width: 0; }
+header.top { display: flex; flex-wrap: wrap; align-items: flex-end; gap: .8rem 1.25rem;
+             max-width: 1240px; margin: 0 auto; padding: 1.8rem 2rem .4rem; }
+.greet h2 { margin: 0; font-size: 1.65rem; line-height: 1.2; letter-spacing: -.02em; }
+.greet p { margin: .25rem 0 0; color: var(--text3); font-size: .9rem; }
+#last-updated:empty { display: none; }
+#last-updated::before { content: " · "; }
+.top-tools { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
+button.auto-switch { padding: 0 .9rem 0 .45rem; min-height: 44px; border: 1px solid var(--line);
+                     border-radius: 999px; background: var(--surface); font-weight: 600; }
 button.auto-switch[hidden] { display: none; }
-/* Koti and Mökki are separate pages (#koti, #mokki) of one document. */
-nav.pages { display: flex; gap: .4rem; padding: .6rem 1.25rem 0; }
-nav.pages a { padding: .45rem 1.1rem; border: 1px solid var(--line);
-              border-radius: .6rem .6rem 0 0; border-bottom: 0; color: var(--text2);
-              text-decoration: none; background: var(--surface2); min-height: 44px;
-              display: inline-flex; align-items: center; }
-nav.pages a[aria-current="page"] { background: var(--surface); color: var(--accent);
-                                   font-weight: 600; }
+nav.tabbar { display: none; }
+main { max-width: 1240px; margin: 0 auto; padding: 1rem 2rem 3rem;
+       display: flex; flex-direction: column; gap: 1.25rem; }
 body[data-page="mokki"] #cards, body[data-page="mokki"] section.plan { display: none; }
 body[data-page="koti"] section.cottage { display: none; }
-h1 { color: var(--accent); }
-* { box-sizing: border-box; }
-body { margin: 0; font: 16px/1.45 system-ui, "Segoe UI", sans-serif;
-       background: var(--bg); color: var(--text); }
-header.top { display: flex; flex-wrap: wrap; gap: .5rem 1.25rem;
-             align-items: baseline; padding: .9rem 1.25rem; background: var(--surface);
-             border-bottom: 1px solid var(--line); }
-h1 { font-size: 1.35rem; margin: 0; }
-.badge { display: inline-block; padding: .18rem .6rem; border-radius: .5rem;
-         border: 1px solid var(--ctl); font-size: .85rem; }
-.badge.ok   { color: var(--ok); border-color: var(--ok); background: var(--ok-bg); }
-.badge.warn { color: var(--warn); border-color: var(--warn); background: var(--warn-bg); }
-.badge.err  { color: var(--err); border-color: var(--err); background: var(--err-bg); }
-.badge.info { color: var(--info); border-color: var(--info); background: var(--info-bg); }
-.app-version { font-size: .75rem; color: var(--text3); }
-.app-version:empty { display: none; }
-#identity { max-width: 240px; overflow: hidden; text-overflow: ellipsis;
-           white-space: nowrap; font-size: .85rem; color: var(--text2);
-           background: var(--surface2); border: 1px solid var(--line);
-           border-radius: .5rem; padding: .18rem .6rem; }
-#last-updated { font-size: .85rem; color: var(--text3); }
+
+/* --- chips, banners --- */
+.badge { display: inline-flex; align-items: center; gap: .35rem; padding: .2rem .65rem;
+         border-radius: 999px; border: 1px solid transparent; font-size: .8rem; font-weight: 600;
+         background: var(--surface2); color: var(--text2); white-space: nowrap; }
+.badge.ok   { color: var(--ok); background: var(--ok-bg); }
+.badge.warn { color: var(--warn); background: var(--warn-bg); }
+.badge.err  { color: var(--err); background: var(--err-bg); }
+.badge.info { color: var(--info); background: var(--info-bg); }
+.badge.mute { color: var(--text3); background: var(--surface2); }
+.badge.ok::before, .badge.warn::before, .badge.err::before, .badge.info::before,
+.badge.mute::before { content: ""; width: 7px; height: 7px; border-radius: 50%;
+                      background: currentColor; }
 .health { display: inline-flex; flex-wrap: wrap; gap: .4rem; }
-.health button.badge { min-height: 36px; min-width: 0; cursor: pointer; font: inherit;
-                       font-size: .85rem; }
+.health button.badge { min-height: 34px; min-width: 0; cursor: pointer; font: inherit;
+                       font-size: .8rem; font-weight: 600; padding: 0 .75rem; }
 .health button.badge[hidden] { display: none; }
-.badge.mute { color: var(--text3); border-color: var(--ctl); background: var(--surface2); }
-.health-detail, .offline-banner { padding: .55rem 1.25rem; font-size: .92rem;
-                                  border-bottom: 1px solid var(--line); }
-.health-detail { background: var(--surface2); color: var(--text2); }
-.offline-banner { background: var(--warn-bg); border-color: var(--warn-line);
-                  color: var(--warn-text); }
+.health-detail, .offline-banner, #demo-banner { max-width: 1176px; margin: .6rem auto 0;
+  padding: .65rem .9rem; border-radius: 12px; font-size: .9rem; }
+.health-detail { background: var(--surface); border: 1px solid var(--line); color: var(--text2); }
+.offline-banner, #demo-banner { background: var(--warn-bg); color: var(--warn-text);
+                                border: 1px solid var(--warn-line); }
 .health-detail[hidden], .offline-banner[hidden] { display: none; }
-body[data-conn="down"] #cards, body[data-conn="down"] .cottage-rooms { opacity: .55; }
-#demo-banner { display: none; padding: .6rem 1.25rem; background: var(--warn-bg);
-               border-bottom: 1px solid var(--warn-line); color: var(--warn-text); }
+#demo-banner { display: none; }
 body[data-demo="1"] #demo-banner { display: block; }
-main { padding: 1.25rem; max-width: 1100px; margin: 0 auto; }
-#cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
-         gap: 1rem; margin-bottom: 2rem; }
-.card { background: var(--surface); border: 1px solid var(--line); border-radius: .75rem;
-        padding: 1rem 1.1rem; }
+body[data-conn="down"] #cards, body[data-conn="down"] .cottage-rooms { opacity: .55; }
+
+/* --- panels and cards --- */
+.panel, .card { background: var(--surface); border: 1px solid var(--line);
+                border-radius: var(--radius); box-shadow: var(--shadow); }
+.panel { padding: 1.1rem 1.25rem 1.25rem; }
+.panel-head { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem;
+              margin-bottom: .9rem; }
+.panel-head h2 { display: flex; align-items: center; gap: .55rem; margin: 0;
+                 font-size: 1.05rem; letter-spacing: -.01em; }
+.panel-head h2 .ico { color: var(--text3); }
+.panel-head .tools { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+button.fold { min-width: 36px; min-height: 36px; padding: 0; border: 0; background: none;
+              color: var(--text3); border-radius: 8px; }
+button.fold .ico { transition: transform .15s; }
+.panel[data-collapsed="1"] button.fold .ico { transform: rotate(-90deg); }
+.panel[data-collapsed="1"] > :not(.panel-head) { display: none !important; }
+.panel[data-collapsed="1"] .panel-head { margin-bottom: 0; }
+.panel h3 { font-size: .95rem; margin: 1rem 0 .4rem; }
+#cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem; }
+.card { padding: 1rem 1.1rem 1.1rem; }
 .card.stale { border-color: var(--warn-line); background: var(--warn-card); }
-.card-head { display: flex; justify-content: space-between; align-items: baseline;
-             gap: .75rem; flex-wrap: wrap; margin-bottom: .5rem; }
-.card-head h3 { margin: 0; font-size: 1.1rem; }
+.card-head { display: flex; justify-content: space-between; align-items: flex-start;
+             gap: .75rem; flex-wrap: wrap; margin-bottom: .6rem; }
+.card-head h3 { margin: 0; font-size: 1.05rem; letter-spacing: -.01em; }
+.card-head .sub { display: flex; align-items: center; gap: .35rem; margin-top: .1rem;
+                  font-size: .82rem; color: var(--text3); }
 .row { display: flex; justify-content: space-between; align-items: center;
        gap: .6rem; padding: .3rem 0; flex-wrap: wrap; }
 .row .label { color: var(--text2); }
 .value { font-variant-numeric: tabular-nums; }
-.value.big { font-size: 1.3rem; font-weight: 600; }
-button, select { min-height: 44px; min-width: 44px; font-size: 1rem;
-                 border: 1px solid var(--ctl); border-radius: .5rem;
-                 background: var(--surface); color: var(--text); padding: 0 .7rem;
+.value.big { font-size: 1.3rem; font-weight: 650; }
+.detail { display: block; font-size: .84rem; color: var(--text3); }
+p.detail { margin: .35rem 0; }
+
+/* --- controls --- */
+button, select, input { font: inherit; }
+button, select { min-height: 44px; min-width: 44px; font-size: .95rem;
+                 border: 1px solid var(--line3); border-radius: 10px;
+                 background: var(--surface); color: var(--text); padding: 0 .8rem;
                  cursor: pointer; }
-select { cursor: pointer; min-width: 110px; }
-button:disabled, select:disabled { opacity: .55; cursor: not-allowed; }
-button:focus-visible, select:focus-visible, a:focus-visible {
-  outline: 3px solid var(--accent); outline-offset: 2px; }
+button:hover:not(:disabled), select:hover:not(:disabled) { border-color: var(--ctl); }
+select { min-width: 110px; padding-right: 2rem; appearance: none; -webkit-appearance: none;
+         background-image: linear-gradient(45deg, transparent 50%, var(--text3) 50%),
+                           linear-gradient(135deg, var(--text3) 50%, transparent 50%);
+         background-position: calc(100% - 15px) 52%, calc(100% - 10px) 52%;
+         background-size: 5px 5px; background-repeat: no-repeat; }
+button:disabled, select:disabled { opacity: .5; cursor: not-allowed; }
+button:focus-visible, select:focus-visible, a:focus-visible, input:focus-visible,
+[tabindex]:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
 button.switch { display: inline-flex; align-items: center; gap: .6rem;
                 border: 0; background: none; padding: 0; min-width: 0; }
-button.switch .track { position: relative; width: 52px; height: 30px;
-                       border-radius: 15px; background: var(--ctl);
+button.switch .track { position: relative; width: 46px; height: 28px;
+                       border-radius: 14px; background: var(--surface3);
                        transition: background .15s; flex: none; }
 button.switch .track::after { content: ""; position: absolute; top: 3px; left: 3px;
-                              width: 24px; height: 24px; border-radius: 50%;
+                              width: 22px; height: 22px; border-radius: 50%;
                               background: #fff; transition: transform .15s;
-                              box-shadow: 0 1px 3px rgba(0,0,0,.35); }
+                              box-shadow: 0 1px 3px rgba(0,0,0,.3); }
 button.switch[aria-checked="true"] .track { background: var(--accent); }
-button.switch[aria-checked="true"] .track::after { transform: translateX(22px); }
-.pending { margin-top: .8rem; padding: .55rem .75rem; border: 1px dashed var(--accent);
-           border-radius: .5rem; background: var(--info-bg); color: var(--info); }
+button.switch[aria-checked="true"] .track::after { transform: translateX(18px); }
+.seg { display: inline-flex; padding: 3px; gap: 2px; border-radius: 12px;
+       background: var(--surface2); border: 1px solid var(--line); }
+.seg button { min-height: 36px; min-width: 0; border: 0; background: none; border-radius: 9px;
+              padding: 0 .8rem; font-size: .88rem; color: var(--text2); }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--text);
+                                   font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.15); }
+:root[data-theme="dark"] .seg button[aria-pressed="true"] { background: var(--surface3); }
+
+/* --- pump cards --- */
+.pump { --mode: var(--ctl); }
+.pump.mode-Cool, .pump.mode-Dry { --mode: var(--cool); }
+.pump.mode-Heat { --mode: var(--heat); }
+.pump.mode-Automatic { --mode: var(--accent); }
+.pump.mode-Fan { --mode: var(--text3); }
+.pump.is-off { --mode: var(--ctl); }
+.card-head .sub .ico { color: var(--mode); width: 15px; height: 15px; }
+.pump-main { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: .9rem; align-items: center; }
+.gauge { position: relative; width: 132px; height: 132px; }
+.gauge svg { width: 100%; height: 100%; display: block; }
+.gauge .g-track { fill: none; stroke: var(--surface3); stroke-width: 9; stroke-linecap: round; }
+.gauge .g-val { fill: none; stroke-width: 9; stroke-linecap: round; }
+.gauge .g-tgt { fill: var(--surface); stroke: var(--text); stroke-width: 2.5; }
+.gauge-num { position: absolute; inset: 0; display: flex; flex-direction: column;
+             align-items: center; justify-content: center; padding-top: 4px; }
+.gauge-num b { font-size: 1.75rem; font-weight: 700; letter-spacing: -.03em;
+               font-variant-numeric: tabular-nums; line-height: 1; }
+.gauge-num b small { font-size: .9rem; font-weight: 600; color: var(--text3); margin-left: 1px; }
+.gauge-num span { font-size: .72rem; color: var(--text3); margin-top: .3rem; }
+.pump-side { display: flex; flex-direction: column; gap: .55rem; min-width: 0; }
+.fld { display: flex; flex-direction: column; gap: .2rem; min-width: 0; }
+.fld-l { font-size: .75rem; color: var(--text3); cursor: help; }
+.fld select { width: 100%; min-width: 0; }
+.fld select.big { font-size: 1.15rem; font-weight: 650; min-height: 48px; }
+.pump-ctl { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; margin-top: .85rem;
+            padding-top: .85rem; border-top: 1px solid var(--line2); }
+.pump-power { display: flex; align-items: center; justify-content: space-between; gap: .5rem;
+              font-size: .9rem; color: var(--text2); }
+.pending { margin-top: .8rem; padding: .55rem .75rem; border-radius: 10px;
+           background: var(--info-bg); color: var(--info); font-size: .88rem; }
 .hold { margin-top: .8rem; display: flex; flex-wrap: wrap; align-items: center;
-        justify-content: space-between; gap: .4rem .8rem; }
-section.events { background: var(--surface); border: 1px solid var(--line);
-                 border-radius: .75rem; padding: 1rem 1.1rem; }
-section.events h2 { margin: 0 0 .6rem; font-size: 1.15rem; }
-section.history { background: var(--surface); border: 1px solid var(--line);
-                  border-radius: .75rem; padding: 1rem 1.1rem;
-                  margin-bottom: 1rem; }
-section.history h2 { margin: 0 0 .6rem; font-size: 1.15rem; }
-.hist-controls { display: flex; flex-wrap: wrap; gap: .6rem 1.25rem;
-                 align-items: end; margin-bottom: .75rem; }
-.hist-controls label { display: flex; flex-direction: column; gap: .2rem;
-                       font-size: .85rem; color: var(--text2); }
+        justify-content: space-between; gap: .4rem .8rem; padding: .55rem .75rem;
+        border-radius: 10px; background: var(--surface2); font-size: .9rem; }
+
+/* --- history --- */
+.hist-controls { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin-bottom: .75rem; }
+.hist-controls label { display: flex; align-items: center; gap: .45rem; font-size: .85rem; color: var(--text3); }
+.hist-nav { display: inline-flex; gap: .3rem; }
+.hist-nav button { min-width: 40px; padding: 0 .6rem; }
 #hist-status { font-size: .85rem; color: var(--text3); }
 .hist-chart { width: 100%; position: relative; }
-.hist-chart svg { touch-action: pan-y; }
+.hist-chart svg { display: block; width: 100%; height: auto; touch-action: pan-y; }
 .hist-tip { position: absolute; top: 8px; pointer-events: none; z-index: 5;
             background: var(--surface); color: var(--text); border: 1px solid var(--line3);
-            border-radius: .5rem; padding: .35rem .6rem; font-size: .85rem;
-            box-shadow: 0 2px 8px rgba(0,0,0,.25); white-space: nowrap; }
-.hist-tip b { display: block; margin-bottom: .15rem; font-weight: 600; }
-.hist-tip i { display: inline-block; width: .9rem; height: .25rem; margin-right: .4rem;
-              vertical-align: middle; }
-.hist-chart svg { display: block; width: 100%; height: auto; }
-.hist-legend { list-style: none; display: flex; flex-wrap: wrap;
-               gap: .4rem 1.1rem; padding: .4rem 0 0; margin: 0;
-               font-size: .85rem; color: var(--text2); }
-.hist-legend .swatch { display: inline-block; width: 1.4rem; height: .28rem;
-                       margin-right: .35rem; vertical-align: middle; }
-.hist-energy { margin-top: .75rem; font-size: .9rem; }
-.hist-energy table { max-width: 32rem; }
-.hist-energy th, .hist-energy td { text-align: right; padding: .15rem .5rem; }
+            border-radius: 10px; padding: .45rem .7rem; font-size: .82rem;
+            box-shadow: 0 6px 20px rgba(0,0,0,.18); white-space: nowrap; }
+.hist-tip b { display: block; margin-bottom: .2rem; font-weight: 600; }
+.hist-tip i { display: inline-block; width: .55rem; height: .55rem; border-radius: 50%;
+              margin-right: .45rem; vertical-align: 0; }
+.hist-legend { list-style: none; display: flex; flex-wrap: wrap; gap: .4rem; padding: .6rem 0 0; margin: 0; }
+.hist-legend button { min-height: 32px; min-width: 0; padding: 0 .7rem; border-radius: 999px;
+                      border: 1px solid var(--line); background: var(--surface2);
+                      font-size: .8rem; color: var(--text2); display: inline-flex; align-items: center; gap: .45rem; }
+.hist-legend button[aria-pressed="false"] { opacity: .45; text-decoration: line-through; }
+.hist-legend .swatch { display: inline-block; width: .65rem; height: .65rem; border-radius: 50%; }
+.hist-energy { margin-top: 1rem; font-size: .88rem; }
+.hist-energy table { max-width: 34rem; }
+.hist-energy th, .hist-energy td { text-align: right; padding: .3rem .5rem; }
 .hist-energy th:first-child, .hist-energy td:first-child { text-align: left; }
-.hist-empty { color: var(--text3); padding: 1rem 0; }
+.hist-energy td.bar { width: 40%; }
+.ebar { display: block; height: 8px; border-radius: 4px; background: var(--accent); opacity: .7; }
+.hist-empty { color: var(--text3); padding: 2.5rem 0; text-align: center; }
 table { width: 100%; border-collapse: collapse; }
-th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--line2);
-         vertical-align: top; }
-th { color: var(--text2); font-weight: 600; }
+th, td { text-align: left; padding: .55rem .6rem; border-bottom: 1px solid var(--line2);
+         vertical-align: top; font-size: .9rem; }
+th { color: var(--text3); font-weight: 600; font-size: .72rem; letter-spacing: .05em;
+     text-transform: uppercase; }
+tbody tr:hover td { background: var(--surface2); }
 td.result-confirmed { color: var(--ok); }
 td.result-failed { color: var(--err); }
 td.result-pending { color: var(--info); }
-.detail { display: block; font-size: .85rem; color: var(--text3); }
+td.result-observed { color: var(--text2); }
 #no-events { color: var(--text3); }
-#alerts { position: fixed; left: 1rem; right: 1rem; bottom: 1rem;
-          display: flex; flex-direction: column; gap: .5rem; z-index: 10; }
+#alerts { position: fixed; left: 1rem; right: 1rem; bottom: 1rem; max-width: 560px; margin: 0 auto;
+          display: flex; flex-direction: column; gap: .5rem; z-index: 30; }
 .alert { background: var(--err-bg); border: 1px solid var(--err); color: var(--err-text);
-         padding: .6rem .9rem; border-radius: .5rem; }
+         padding: .7rem 1rem; border-radius: 12px; backdrop-filter: blur(8px);
+         box-shadow: 0 8px 24px rgba(0,0,0,.2); }
 .alert.info { background: var(--info-bg); border-color: var(--info); color: var(--info); }
+/*OVERVIEW_STYLE*/
 /*SETTINGS_STYLE*/
 /*PLAN_STYLE*/
 /*ROOMS_STYLE*/
 /*COTTAGE_STYLE*/
-td.result-observed { color: var(--text2); }
+/* Control text sits on the right, next to the switches. */
+.set-row input, .set-row select { text-align: right; text-align-last: right; }
+
+@media (max-width: 1000px) {
+  .shell { display: block; }
+  .side { position: sticky; z-index: 20; height: auto; flex-direction: row; align-items: center;
+          gap: .75rem; padding: .55rem 1rem; border-right: 0; border-bottom: 1px solid var(--line);
+          backdrop-filter: blur(10px); background: color-mix(in srgb, var(--surface) 88%, transparent); }
+  .side > div:not(.brand), .side-foot { display: none; }
+  .brand { padding: 0; }
+  .brand-mark { width: 30px; height: 30px; border-radius: 9px; }
+  .brand > div { display: flex; align-items: baseline; gap: .5rem; }
+  header.top { padding: 1.1rem 1rem .2rem; }
+  .greet h2 { font-size: 1.35rem; }
+  main { padding: .8rem 1rem calc(88px + env(safe-area-inset-bottom)); gap: 1rem; }
+  .health-detail, .offline-banner, #demo-banner { margin: .6rem 1rem 0; }
+  nav.tabbar { display: flex; position: fixed; z-index: 25; left: 0; right: 0; bottom: 0;
+               padding: .35rem .5rem calc(.35rem + env(safe-area-inset-bottom));
+               background: color-mix(in srgb, var(--surface) 92%, transparent);
+               backdrop-filter: blur(12px); border-top: 1px solid var(--line); }
+  nav.tabbar a, nav.tabbar button { flex: 1; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: .15rem; min-height: 52px; border: 0; background: none;
+    border-radius: 12px; color: var(--text3); font-size: .7rem; font-weight: 600;
+    text-decoration: none; padding: 0; }
+  nav.tabbar .ico { width: 22px; height: 22px; }
+  nav.tabbar a[aria-current="page"] { color: var(--accent); }
+  #alerts { bottom: calc(80px + env(safe-area-inset-bottom)); }
+}
 @media (max-width: 560px) {
+  .top-tools { margin-left: 0; width: 100%; }
+  .panel { padding: .95rem 1rem 1.05rem; }
+  #cards { grid-template-columns: 1fr; }
+  .pump-main { grid-template-columns: 116px minmax(0, 1fr); }
+  .gauge { width: 116px; height: 116px; }
   .row { flex-direction: column; align-items: stretch; gap: .35rem; }
   .row .label { order: 1; }
   .row > *:not(.label) { order: 2; }
-  th, td { padding: .4rem .45rem; font-size: .92rem; }
+  th, td { padding: .4rem .45rem; font-size: .88rem; }
   /* Event log: one card per event instead of a five-column table. */
   table.ev, table.ev tbody, table.ev tr, table.ev td { display: block; width: 100%; }
   table.ev thead { display: none; }
-  table.ev tr { border: 1px solid var(--line); border-radius: .6rem;
-                padding: .35rem .7rem; margin-bottom: .6rem; }
+  table.ev tr { border: 1px solid var(--line); border-radius: 12px;
+                padding: .4rem .75rem; margin-bottom: .6rem; }
   table.ev td { display: flex; justify-content: space-between; gap: 1rem;
                 border: 0; padding: .15rem 0; text-align: right; }
   table.ev td::before { content: attr(data-label); color: var(--text3);
                         text-align: left; flex: none; }
   table.ev td#no-events { justify-content: flex-start; }
   table.ev td#no-events::before { content: none; }
+  tbody tr:hover td { background: none; }
 }
-/* Control text sits on the right, next to the switches. */
-.set-row input, .set-row select, .card select { text-align: right; text-align-last: right; }
 </style>
 </head>
 <body data-demo="0">
+<div class="shell">
+<aside class="side">
+  <div class="brand">
+    <span class="brand-mark" data-icon="logo"></span>
+    <div><h1>Villa Kuppis</h1>
+      <span id="app-version" class="app-version" title="Sovelluksen versio"></span></div>
+  </div>
+  <div>
+    <p class="side-label">Kohteet</p>
+    <nav class="pages" aria-label="Sivut">
+      <a href="#koti" data-page="koti" aria-current="page"><span data-icon="home"></span>Koti</a>
+      <a href="#mokki" data-page="mokki"><span data-icon="cabin"></span>Mökki</a>
+    </nav>
+  </div>
+  <div>
+    <p class="side-label">Tällä sivulla</p>
+    <div class="jumps">
+      <button type="button" data-jump="overview"><span data-icon="grid"></span>Yleiskatsaus</button>
+      <button type="button" data-jump="history"><span data-icon="chart"></span>Historia</button>
+      <button type="button" data-jump="plan"><span data-icon="calendar"></span>Suunnitelma</button>
+      <button type="button" data-jump="visit"><span data-icon="calendar"></span>Vierailu</button>
+      <button type="button" data-jump="rooms"><span data-icon="spark"></span>Oppiminen</button>
+      <button type="button" data-jump="settings"><span data-icon="gear"></span>Asetukset</button>
+      <button type="button" data-jump="events"><span data-icon="list"></span>Tapahtumat</button>
+    </div>
+  </div>
+  <div class="side-foot">
+    <span id="identity" class="identity" title="Kirjautunut käyttäjä"></span>
+  </div>
+</aside>
+<div class="content">
 <header class="top">
-  <h1>Villa Kuppis</h1>
-  <span id="app-version" class="app-version" title="Sovelluksen versio"></span>
-  <span id="identity" class="identity" title="Kirjautunut käyttäjä"></span>
-  <span id="health" class="health" role="status" aria-label="Kohteiden tila">
-    <button type="button" class="badge info" id="health-home" data-site="home">Koti: yhdistetään…</button>
-    <button type="button" class="badge info" id="health-cottage" data-site="cottage" hidden>Mökki: yhdistetään…</button>
-  </span>
-  <span id="last-updated"></span>
-  <button type="button" class="switch auto-switch" role="switch" aria-checked="false"
-          id="auto-btn" title="Hinta- ja lämpötilaohjattu automaatio. Pois päältä se ei lähetä pumpuille komentoja; pumput jäävät siihen tilaan, jossa ne ovat."><span class="track"></span><span>Automaatio</span></button>
+  <div class="greet">
+    <h2 id="greeting">Villa Kuppis</h2>
+    <p><span id="page-name">Koti</span><span id="last-updated"></span></p>
+  </div>
+  <div class="top-tools">
+    <span id="health" class="health" role="status" aria-label="Kohteiden tila">
+      <button type="button" class="badge info" id="health-home" data-site="home">Koti: yhdistetään…</button>
+      <button type="button" class="badge info" id="health-cottage" data-site="cottage" hidden>Mökki: yhdistetään…</button>
+    </span>
+    <button type="button" class="switch auto-switch" role="switch" aria-checked="false"
+            id="auto-btn" title="Hinta- ja lämpötilaohjattu automaatio. Pois päältä se ei lähetä pumpuille komentoja; pumput jäävät siihen tilaan, jossa ne ovat."><span class="track"></span><span>Automaatio</span></button>
+  </div>
 </header>
-<nav class="pages" aria-label="Sivut">
-  <a href="#koti" data-page="koti" aria-current="page">Koti</a>
-  <a href="#mokki" data-page="mokki">Mökki</a>
-</nav>
 <script>
 // The page (Koti or Mökki) comes from the address, so it survives a reload.
 function vkPage() { return location.hash === "#mokki" ? "mokki" : "koti"; }
@@ -482,23 +694,32 @@ document.body.dataset.page = vkPage();
 <div id="demo-banner">Esittelytila: näytetyt arvot ovat keksittyjä ja toiminnot
 ohjaavat vain esittelyyksiköitä.</div>
 <main>
+<!--OVERVIEW_SECTION-->
   <section id="cards" aria-label="Pumppulaitteet"></section>
 <!--COTTAGE_SECTION-->
-  <section class="history" aria-label="Historia ja kaaviot">
-    <h2>Historia</h2>
+  <section class="history panel" id="history" aria-label="Historia ja kaaviot">
+    <div class="panel-head">
+      <h2><span data-icon="chart"></span>Historia</h2>
+      <div class="tools">
+        <span class="seg" id="hist-range-seg" role="group" aria-label="Ajanjakso">
+          <button type="button" data-range="day" aria-pressed="true">Päivä</button>
+          <button type="button" data-range="week" aria-pressed="false">Viikko</button>
+          <button type="button" data-range="month" aria-pressed="false">Kuukausi</button>
+          <button type="button" data-range="year" aria-pressed="false">Vuosi</button>
+        </span>
+      </div>
+    </div>
     <div class="hist-controls">
-      <label>Huone
+      <label title="Huone, jonka historia näytetään.">Huone
         <select id="hist-unit" aria-label="Huone"></select>
       </label>
-      <label>Ajanjakso
-        <select id="hist-range" aria-label="Ajanjakson kesto">
-          <option value="day" selected>Päivä</option>
-          <option value="week">Viikko</option>
-          <option value="month">Kuukausi</option>
-          <option value="year">Vuosi</option>
-        </select>
-      </label>
-      <label>Ulkolämpötila
+      <select id="hist-range" aria-label="Ajanjakson kesto" hidden>
+        <option value="day" selected>Päivä</option>
+        <option value="week">Viikko</option>
+        <option value="month">Kuukausi</option>
+        <option value="year">Vuosi</option>
+      </select>
+      <label title="Minkä kohteen ulkolämpötila näytetään.">Ulkona
         <select id="hist-site" aria-label="Ulkolämpötilan lähde">
           <option value="home" selected>Koti</option>
           <option value="cottage">Mökki</option>
@@ -522,8 +743,11 @@ ohjaavat vain esittelyyksiköitä.</div>
 <!--PLAN_SECTION-->
 <!--ROOMS_SECTION-->
 <!--SETTINGS_SECTION-->
-  <section class="events" aria-label="Tapahtumat">
-    <h2>Tapahtumat</h2>
+  <section class="events panel" id="events" aria-label="Tapahtumat" data-fold="events"
+           data-fold-default="1">
+    <div class="panel-head">
+      <h2><span data-icon="list"></span>Tapahtumat</h2>
+    </div>
     <table class="ev">
       <thead>
         <tr><th>Milloin</th><th>Yksikkö</th><th>Kuka</th><th>Muutos</th><th>Tulos</th></tr>
@@ -532,6 +756,14 @@ ohjaavat vain esittelyyksiköitä.</div>
     </table>
   </section>
 </main>
+</div>
+</div>
+<nav class="tabbar pages" aria-label="Sivut">
+  <a href="#koti" data-page="koti" aria-current="page"><span data-icon="home"></span>Koti</a>
+  <a href="#mokki" data-page="mokki"><span data-icon="cabin"></span>Mökki</a>
+  <button type="button" data-jump="history"><span data-icon="chart"></span>Historia</button>
+  <button type="button" data-jump="settings"><span data-icon="gear"></span>Asetukset</button>
+</nav>
 <div id="alerts" role="alert" aria-live="assertive"></div>
 <script>/*HEALTH_SCRIPT*/</script>
 <script>
@@ -690,6 +922,7 @@ function fanOptions(unit) {
 function unitUnavailable(unit) {
   return unit.power === null && unit.mode === null;
 }
+const MODE_ICONS = { Cool: "snow", Heat: "flame", Dry: "drop", Fan: "fan", Automatic: "auto" };
 function cardHtml(unit) {
   const pending = unit.pending;
   const unavailable = unitUnavailable(unit);
@@ -698,44 +931,44 @@ function cardHtml(unit) {
   const canStep = setpointAllowed(unit) && !pending;
   const modes = modeOptions(unit);
   const fans = fanOptions(unit);
+  const on = unit.power === true;
   const powerLabel = unit.power === true ? "Päällä"
     : unit.power === false ? "Pois päältä" : "Ei tiedossa";
-  const rows = [];
-  rows.push(
-    '<div class="row"><span class="label">Käynti</span>' +
-    '<button class="switch" role="switch" aria-checked="' + (unit.power === true) +
+  const sub = unavailable ? "Tila ei tiedossa"
+    : modeName(unit.mode) + (unit.fan ? " · puhallus " + fanName(unit.fan).toLowerCase() : "");
+  const target = setpointAllowed(unit) ? unit.setpoint : null;
+  const gaugeColor = on ? "var(--mode)" : "var(--ctl)";
+  const tempText = unit.room_temp === null || unit.room_temp === undefined ? "–"
+    : tempFmt.format(unit.room_temp) + "<small>°C</small>";
+  const power =
+    '<div class="pump-power"><span class="fld-l" title="Pumpun virta. Kytkin lähettää ' +
+    'komennon heti.">Käynti</span>' +
+    '<button class="switch" role="switch" aria-checked="' + on +
     '" data-action="power" data-unit="' + esc(unit.id) + '" data-value="' +
-    (unit.power === true ? "false" : "true") + '"' + dis + ">" +
-    '<span class="track"></span><span>' + esc(powerLabel) + "</span></button></div>"
-  );
-  rows.push(
-    '<div class="row"><span class="label">Mitattu lämpötila</span>' +
-    '<span class="value big">' + fmtTemp(unit.room_temp) + "</span></div>"
-  );
-  rows.push(
-    '<div class="row"><span class="label">Tavoitelämpötila</span>' +
-    '<select data-action="setpoint-select" data-unit="' + esc(unit.id) +
+    (on ? "false" : "true") + '"' + dis + ">" +
+    '<span class="track"></span><span>' + esc(powerLabel) + "</span></button></div>";
+  const setpoint =
+    '<div class="fld"><span class="fld-l" title="Lämpötila, johon pumppu pyrkii.">' +
+    "Tavoitelämpötila</span>" +
+    '<select class="big" data-action="setpoint-select" data-unit="' + esc(unit.id) +
     '" aria-label="Valitse tavoitelämpötila"' + (canStep ? "" : " disabled") + ">" +
-    setpointOptions(unit, step) + "</select></div>"
-  );
-  rows.push(
-    '<div class="row"><span class="label">Toimintatila</span>' +
-    '<select data-action="mode" data-unit="' + esc(unit.id) + '"' + dis + ">" +
+    setpointOptions(unit, step) + "</select></div>";
+  const mode =
+    '<div class="fld"><span class="fld-l" title="Pumpun toimintatila.">Toimintatila</span>' +
+    '<select data-action="mode" data-unit="' + esc(unit.id) + '" aria-label="Toimintatila"' + dis + ">" +
     (modes.includes(unit.mode) ? "" : UNKNOWN_OPTION) +
     modes.map((m) =>
       '<option value="' + m + '"' + (m === unit.mode ? " selected" : "") + ">" +
       esc(MODE_NAMES[m]) + "</option>").join("") +
-    "</select></div>"
-  );
-  rows.push(
-    '<div class="row"><span class="label">Puhallus</span>' +
-    '<select data-action="fan" data-unit="' + esc(unit.id) + '"' + dis + ">" +
+    "</select></div>";
+  const fan =
+    '<div class="fld"><span class="fld-l" title="Puhaltimen nopeus.">Puhallus</span>' +
+    '<select data-action="fan" data-unit="' + esc(unit.id) + '" aria-label="Puhallus"' + dis + ">" +
     (fans.includes(unit.fan) ? "" : UNKNOWN_OPTION) +
     fans.map((f) =>
       '<option value="' + f + '"' + (f === unit.fan ? " selected" : "") + ">" +
       esc(FAN_NAMES[f]) + "</option>").join("") +
-    "</select></div>"
-  );
+    "</select></div>";
   const pendingHtml = pending
     ? '<div class="pending"><b>Odottaa vahvistusta:</b> ' +
       esc(changeText(pending.action, pending.requested)) +
@@ -761,10 +994,17 @@ function cardHtml(unit) {
       'MELCloud Home -sovellus.">Laitevirhe</span>'
     : "";
   return (
-    '<article class="card' + (unit.fresh && !unavailable ? "" : " stale") + '">' +
-    '<header class="card-head"><h3>' + esc(unit.name) + "</h3>" + badge +
-    "</header>" +
-    rows.join("") + holdHtml + pendingHtml + "</article>"
+    '<article class="card pump mode-' + esc(unit.mode || "none") + (on ? " is-on" : " is-off") +
+    (unit.fresh && !unavailable ? "" : " stale") + '">' +
+    '<header class="card-head"><div><h3>' + esc(unit.name) + "</h3>" +
+    '<span class="sub">' + (unit.mode ? vkIcon(MODE_ICONS[unit.mode] || "fan") : "") +
+    esc(sub) + "</span></div>" + badge + "</header>" +
+    '<div class="pump-main"><div class="gauge" title="Mitattu lämpötila; piste on tavoite.">' +
+    vkGauge(unit.room_temp, target, gaugeColor) +
+    '<div class="gauge-num"><b>' + tempText + "</b><span>mitattu</span></div></div>" +
+    '<div class="pump-side">' + power + setpoint + "</div></div>" +
+    '<div class="pump-ctl">' + mode + fan + "</div>" +
+    holdHtml + pendingHtml + "</article>"
   );
 }
 
@@ -813,21 +1053,24 @@ function renderEvents(all) {
 // --- history graphs (card F3.3): time series, gaps kept as gaps ---
 const RANGE_MAX_POINTS = { day: 288, week: 700, month: 900, year: 1000 };
 const HIST_SERIES = [
-  { key: "room_temp", label: "Huonelämpötila", color: "var(--ok)",
-    scale: "temp", dash: "" },
+  { key: "room_temp", label: "Huonelämpötila", color: "var(--accent)",
+    scale: "temp", dash: "", area: true },
   { key: "setpoint", label: "Tavoitelämpötila", color: "var(--err)",
-    scale: "temp", dash: "7 5" },
-  { key: "outdoor", label: "Ulkolämpötila", color: "var(--info)",
-    scale: "temp", dash: "2 4" },
+    scale: "temp", dash: "6 4" },
+  { key: "outdoor", label: "Ulkolämpötila", color: "var(--ok)",
+    scale: "temp", dash: "" },
   { key: "plan", label: "Suunnitelman tavoite", color: "var(--purple)",
     scale: "temp", dash: "10 3 2 3" },
-  { key: "forecast", label: "Sääennuste", color: "var(--info)",
-    scale: "temp", dash: "8 3" },
+  { key: "forecast", label: "Sääennuste", color: "var(--ok)",
+    scale: "temp", dash: "5 4" },
 ];
 // Cottage heaters and similar: the server sends them as data.extra.
-const EXTRA_COLORS = ["var(--accent)", "var(--purple)", "var(--warn)"];
+const EXTRA_COLORS = ["var(--heat)", "var(--purple)", "var(--ok)"];
 const PRICE_SERIES = { key: "price", label: "Sähkön hinta (snt/kWh)", vat: null,
-                       color: "var(--warn)", scale: "price", dash: "1 4" };
+                       color: "var(--price)", scale: "price", dash: "" };
+// Legend chips hide and show series; the choice lasts while the page is open.
+const histHidden = new Set();
+let histLast = null;
 
 function svgEl(tag, attrs, text) {
   const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
@@ -846,7 +1089,8 @@ function medianDelta(points) {
 
 // Build an SVG path, breaking into new subpaths wherever the time jump
 // exceeds gapMs so real data gaps stay visible instead of being bridged.
-function seriesPath(points, gapMs, X, Y) {
+// With base, each stretch is closed down to y = base for an area fill.
+function seriesPath(points, gapMs, X, Y, base) {
   const segs = [];
   let cur = [], prevT = null;
   const flush = () => { if (cur.length) { segs.push(cur); cur = []; } };
@@ -860,9 +1104,12 @@ function seriesPath(points, gapMs, X, Y) {
   flush();
   let d = "";
   for (const seg of segs) {
-    d += "M" + seg[0][0].toFixed(1) + " " + seg[0][1].toFixed(1);
+    const closed = base !== undefined;
+    d += (closed ? "M" + seg[0][0].toFixed(1) + " " + base + "L" : "M") +
+      seg[0][0].toFixed(1) + " " + seg[0][1].toFixed(1);
     for (let i = 1; i < seg.length; i++)
       d += "L" + seg[i][0].toFixed(1) + " " + seg[i][1].toFixed(1);
+    if (closed) d += "L" + seg[seg.length - 1][0].toFixed(1) + " " + base + "Z";
   }
   return d;
 }
@@ -896,9 +1143,10 @@ function fmtTimeTick(ms, range) {
 }
 
 function drawHistory(data) {
+  histLast = data;
   $histChart.textContent = "";
   const labels = data.labels || {};
-  const series = HIST_SERIES
+  const allSeries = HIST_SERIES
     .map((s) => Object.assign({}, s, {
       label: labels[s.key] || s.label,
       pts: (data[s.key] || []).map(([iso, v]) => [new Date(iso).getTime(), v])
@@ -909,18 +1157,20 @@ function drawHistory(data) {
       pts: e.points.map(([iso, v]) => [new Date(iso).getTime(), v])
     })))
     .filter((s) => s.pts.length > 0);
-  const pricePts = (data.price || [])
+  const series = allSeries.filter((s) => !histHidden.has(s.key));
+  const allPrice = (data.price || [])
     .map(([iso, v]) => [new Date(iso).getTime(), v]);
+  const pricePts = histHidden.has("price") ? [] : allPrice;
   const allTemp = series.flatMap((s) => s.pts);
-  if (!allTemp.length && !pricePts.length) {
+  if (!allSeries.length && !allPrice.length) {
     $histChart.innerHTML = '<p class="hist-empty">Ei historiaa tälle valinnalle.</p>';
     $histLegend.textContent = "";
     $histEnergy.textContent = "";
     return;
   }
   const W = Math.max(320, $histChart.clientWidth || 900);
-  const H = 300;
-  const m = { top: 14, right: 52, bottom: 34, left: 46 };
+  const H = W < 560 ? 250 : 320;
+  const m = { top: 16, right: 46, bottom: 30, left: 40 };
   const t0 = new Date(data.start).getTime();
   const t1 = new Date(data.end).getTime();
   const maxPts = RANGE_MAX_POINTS[data.range] || 288;
@@ -929,12 +1179,13 @@ function drawHistory(data) {
   for (const p of allTemp)
     if (p[1] != null) { tMin = Math.min(tMin, p[1]); tMax = Math.max(tMax, p[1]); }
   if (!isFinite(tMin)) { tMin = 0; tMax = 1; }
-  const tPad = (tMax - tMin) * 0.08 || 0.5;
+  const tPad = (tMax - tMin) * 0.1 || 0.5;
   tMin -= tPad; tMax += tPad;
   const hasPrice = pricePts.length > 0;
-  let pMin = Infinity, pMax = -Infinity;
+  let pMin = 0, pMax = -Infinity;
   if (hasPrice) for (const p of pricePts) { pMin = Math.min(pMin, p[1]); pMax = Math.max(pMax, p[1]); }
-  if (hasPrice) { const pp = (pMax - pMin) * 0.12 || 0.25; pMin -= pp; pMax += pp; }
+  // Price bars fill the lower part of the plot, under the temperature lines.
+  if (hasPrice) pMax = pMin + (Math.max(pMax, pMin + 1) - pMin) / 0.55;
 
   const X = (t) => m.left + ((t1 === t0) ? 0.5 : (t - t0) / (t1 - t0))
     * (W - m.left - m.right);
@@ -942,50 +1193,61 @@ function drawHistory(data) {
     * (H - m.top - m.bottom);
   const YP = (v) => m.top + (1 - (v - pMin) / (pMax - pMin))
     * (H - m.top - m.bottom);
+  const bottom = H - m.bottom;
 
   const svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H,
     "xmlns": "http://www.w3.org/2000/svg", role: "img",
     "aria-label": "Lämpötilojen ja sähkönhinnan kaavio" });
 
-  const tTicks = niceTicks(tMin, tMax, 5);
-  for (const v of tTicks) {
-    const y = YT(v);
-    svg.appendChild(svgEl("line", { x1: m.left, x2: W - m.right, y1: y, y2: y,
-      stroke: "var(--line2)", "stroke-width": 1 }));
-    svg.appendChild(svgEl("text", { x: m.left - 6, y: y + 4, "text-anchor": "end",
-      "font-size": 11, fill: "var(--text2)" }, tempFmt.format(v) + "\u00b0"));
-  }
+  const tNow = data.now ? new Date(data.now).getTime() : null;
+  if (tNow !== null && tNow > t0 && tNow < t1)
+    svg.appendChild(svgEl("rect", { x: X(tNow), y: m.top,
+      width: W - m.right - X(tNow), height: bottom - m.top,
+      fill: "var(--surface2)", opacity: 0.7 }));
+
   if (hasPrice) {
-    for (const v of niceTicks(pMin, pMax, 5)) {
+    // One bar per price interval, as wide as the gap to the next one.
+    const step = pricePts.length > 1 ? medianDelta(pricePts) : 900000;
+    const g = svgEl("g", { fill: PRICE_SERIES.color, opacity: 0.2 });
+    pricePts.forEach((p, i) => {
+      const next = i + 1 < pricePts.length ? Math.min(pricePts[i + 1][0], p[0] + step) : p[0] + step;
+      const x0 = Math.max(m.left, X(p[0])), x1 = Math.min(W - m.right, X(next));
+      if (x1 <= x0) return;
+      const y = YP(Math.max(p[1], 0)), y0 = YP(Math.min(p[1], 0));
+      g.appendChild(svgEl("rect", { x: x0.toFixed(1), y: y.toFixed(1),
+        width: Math.max(0.6, x1 - x0 - 0.6).toFixed(1), height: Math.max(0.5, y0 - y).toFixed(1) }));
+    });
+    svg.appendChild(g);
+    for (const v of niceTicks(pMin, pMin + (pMax - pMin) * 0.55, 3)) {
       const y = YP(v);
       svg.appendChild(svgEl("text", { x: W - m.right + 6, y: y + 4,
-        "text-anchor": "start", "font-size": 11, fill: "var(--warn)" },
-        tempFmt.format(v) + "s"));
+        "text-anchor": "start", "font-size": 10.5, fill: "var(--price)" },
+        tempFmt.format(v) + " s"));
     }
+  }
+
+  for (const v of niceTicks(tMin, tMax, 5)) {
+    const y = YT(v);
+    svg.appendChild(svgEl("line", { x1: m.left, x2: W - m.right, y1: y, y2: y,
+      stroke: "var(--line)", "stroke-width": 1, "stroke-dasharray": "3 4" }));
+    svg.appendChild(svgEl("text", { x: m.left - 6, y: y + 4, "text-anchor": "end",
+      "font-size": 10.5, fill: "var(--text3)" }, tempFmt.format(v) + "°"));
   }
   const nTime = Math.max(2, Math.min(8, Math.floor((W - m.left - m.right) / 90)));
   for (let i = 0; i <= nTime; i++) {
     const t = t0 + (i / nTime) * (t1 - t0);
-    const x = X(t);
-    svg.appendChild(svgEl("line", { x1: x, x2: x, y1: m.top, y2: H - m.bottom,
-      stroke: "var(--surface2)", "stroke-width": 1 }));
-    svg.appendChild(svgEl("text", { x: x, y: H - m.bottom + 16,
-      "text-anchor": "middle", "font-size": 11, fill: "var(--text2)" },
-      fmtTimeTick(t, data.range)));
+    svg.appendChild(svgEl("text", { x: X(t), y: bottom + 18,
+      "text-anchor": i === 0 ? "start" : i === nTime ? "end" : "middle",
+      "font-size": 10.5, fill: "var(--text3)" }, fmtTimeTick(t, data.range)));
   }
-  svg.appendChild(svgEl("rect", { x: m.left, y: m.top,
-    width: W - m.left - m.right, height: H - m.top - m.bottom,
-    fill: "none", stroke: "var(--line3)" }));
+  svg.appendChild(svgEl("line", { x1: m.left, x2: W - m.right, y1: bottom, y2: bottom,
+    stroke: "var(--line3)", "stroke-width": 1 }));
 
-  const tNow = data.now ? new Date(data.now).getTime() : null;
   if (tNow !== null && tNow > t0 && tNow < t1) {
-    svg.insertBefore(svgEl("rect", { x: X(tNow), y: m.top,
-      width: W - m.right - X(tNow), height: H - m.top - m.bottom,
-      fill: "var(--surface2)", opacity: 0.55 }), svg.children[0]);
     svg.appendChild(svgEl("line", { x1: X(tNow), x2: X(tNow), y1: m.top,
-      y2: H - m.bottom, stroke: "var(--text3)", "stroke-width": 1 }));
-    svg.appendChild(svgEl("text", { x: X(tNow) + 4, y: m.top + 11,
-      "font-size": 11, fill: "var(--text3)" }, "nyt"));
+      y2: bottom, stroke: "var(--text3)", "stroke-width": 1, "stroke-dasharray": "2 3" }));
+    svg.appendChild(svgEl("text", { x: X(tNow) + 5, y: m.top + 10,
+      "font-size": 10.5, fill: "var(--text3)" }, "nyt"));
   }
 
   const expected = (t1 - t0) / maxPts;
@@ -994,16 +1256,15 @@ function drawHistory(data) {
   for (const s of series) {
     const d = seriesPath(s.pts, gapFor(s.key === "outdoor" || s.key === "forecast" ? 3600000 : 300000), X, YT);
     if (!d) continue;
-    const attrs = { d: d, fill: "none", stroke: s.color, "stroke-width": 2,
+    if (s.area) {
+      // Each stretch of readings closed down to the axis: a soft fill under the line.
+      const area = seriesPath(s.pts, gapFor(300000), X, YT, bottom);
+      svg.appendChild(svgEl("path", { d: area, fill: s.color, opacity: 0.1, stroke: "none" }));
+    }
+    const attrs = { d: d, fill: "none", stroke: s.color, "stroke-width": s.area ? 2.4 : 1.8,
       "stroke-linejoin": "round", "stroke-linecap": "round" };
     if (s.dash) attrs["stroke-dasharray"] = s.dash;
     svg.appendChild(svgEl("path", attrs));
-  }
-  if (hasPrice) {
-    const d = seriesPath(pricePts, gapFor(900000), X, YP);
-    if (d) svg.appendChild(svgEl("path", {
-      d: d, fill: "none", stroke: PRICE_SERIES.color, "stroke-width": 1.5,
-      "stroke-dasharray": PRICE_SERIES.dash, "stroke-linejoin": "round" }));
   }
 
   // Confirmed or failed commands: a tick along the bottom edge with a tooltip.
@@ -1013,8 +1274,8 @@ function drawHistory(data) {
     if (!(t >= t0 && t <= t1)) continue;
     const x = X(t);
     const color = c.result === "failed" ? "var(--err)" : "var(--text2)";
-    const tick = svgEl("line", { x1: x, x2: x, y1: H - m.bottom - 12,
-      y2: H - m.bottom, stroke: color, "stroke-width": 2 });
+    const tick = svgEl("line", { x1: x, x2: x, y1: bottom - 10,
+      y2: bottom, stroke: color, "stroke-width": 2, "stroke-linecap": "round" });
     tick.appendChild(svgEl("title", {}, fmtTimeTick(t, "week") + " " +
       c.actor + ": " + changeText(c.action, c.requested) + " (" +
       (RESULT_TEXT[c.result] || c.result) + ")"));
@@ -1025,8 +1286,8 @@ function drawHistory(data) {
 
   // Hover or touch: the values nearest to the pointer's time.
   const priceFmt = new Intl.NumberFormat("fi-FI", { maximumFractionDigits: 2 });
-  const guide = svgEl("line", { y1: m.top, y2: H - m.bottom, stroke: "var(--text3)",
-    "stroke-width": 1, "stroke-dasharray": "3 3", visibility: "hidden" });
+  const guide = svgEl("line", { y1: m.top, y2: bottom, stroke: "var(--text3)",
+    "stroke-width": 1, visibility: "hidden" });
   svg.appendChild(guide);
   const tip = document.createElement("div");
   tip.className = "hist-tip";
@@ -1051,7 +1312,7 @@ function drawHistory(data) {
       const sample = s.key === "outdoor" || s.key === "forecast" ? 3600000 : 300000;
       const hit = nearest(s.pts, t, Math.max(sample, expected) * 1.5);
       if (hit) rows.push('<div><i style="background:' + s.color + '"></i>' +
-        esc(s.label) + ": " + esc(tempFmt.format(hit[1])) + " \u00b0C</div>");
+        esc(s.label) + ": " + esc(tempFmt.format(hit[1])) + " °C</div>");
     }
     if (hasPrice) {
       const hit = nearest(pricePts, t, Math.max(900000, expected) * 1.5);
@@ -1076,18 +1337,24 @@ function drawHistory(data) {
   svg.addEventListener("pointerdown", showTip);
   svg.addEventListener("pointerleave", hideTip);
 
-  const items = series.map((s) =>
-    '<li><span class="swatch" style="background:' + s.color + '"></span>' +
-    esc(s.label) + "</li>");
-  if (hasPrice) items.push(
-    '<li><span class="swatch" style="background:' + PRICE_SERIES.color +
-    '"></span>' + esc(PRICE_SERIES.label) + "</li>");
+  const chip = (key, color, label) =>
+    '<li><button type="button" data-series="' + esc(key) + '" aria-pressed="' +
+    !histHidden.has(key) + '" title="Näytä tai piilota käyrä"><span class="swatch" style="background:' +
+    color + '"></span>' + esc(label) + "</button></li>";
+  const items = allSeries.map((s) => chip(s.key, s.color, s.label));
+  if (allPrice.length) items.push(chip("price", PRICE_SERIES.color, PRICE_SERIES.label));
   if (marks.length) items.push(
-    '<li><span class="swatch" style="background:var(--text2);height:.7rem;width:.2rem">' +
-    "</span>Komennot</li>");
+    '<li><span class="badge mute" title="Lähetetyt komennot näkyvät kaavion alareunassa.">Komennot</span></li>');
   $histLegend.innerHTML = items.join("");
   drawEnergy(data.energy || []);
 }
+$histLegend.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-series]");
+  if (!b) return;
+  const key = b.dataset.series;
+  if (histHidden.has(key)) histHidden.delete(key); else histHidden.add(key);
+  if (histLast) drawHistory(histLast);
+});
 
 const eurFmt = new Intl.NumberFormat("fi-FI",
   { style: "currency", currency: "EUR" });
@@ -1099,11 +1366,14 @@ function drawEnergy(days) {
     return;
   }
   const shown = days.slice(-31);
+  const top = Math.max(0.001, ...shown.map((d) => d.kwh));
   $histEnergy.innerHTML = (days.length > shown.length
     ? '<p class="detail">Viimeiset 31 päivää.</p>' : "") +
-    "<table><thead><tr><th>Päivä</th><th>kWh</th>" +
+    "<table><thead><tr><th>Päivä</th><th>kWh</th><th></th>" +
     "<th>Kustannus</th></tr></thead><tbody>" + shown.map((d) =>
-    "<tr><td>" + esc(d.date) + "</td><td>" + kwhFmt.format(d.kwh) + "</td><td>" +
+    "<tr><td>" + esc(d.date) + "</td><td>" + kwhFmt.format(d.kwh) + "</td>" +
+    '<td class="bar"><span class="ebar" style="width:' + (100 * d.kwh / top).toFixed(1) +
+    '%"></span></td><td>' +
     (d.cost_eur === null ? "ei tiedossa"
       : eurFmt.format(d.cost_eur) + (d.cost_complete ? "" : " (osa tunneista)")) +
     "</td></tr>").join("") + "</tbody></table>";
@@ -1195,6 +1465,11 @@ async function loadIdentity() {
       ? id.display_name : id.actor;
     el.textContent = label || "";
     el.title = id.actor || "";
+    // Greet by first name when the login is a person (Tailscale or Home Assistant).
+    const first = id.source !== "local" && id.display_name && id.display_name.indexOf("@") < 0
+      ? id.display_name.trim().split(/ +/)[0] : "";
+    vkGreetName = first;
+    showGreeting();
   } catch (err) {
     /* The identity chip stays empty if the request fails. */
   }
@@ -1335,18 +1610,23 @@ $auto.addEventListener("click", async () => {
 });
 loadAutomation();
 vkEvery(loadAutomation, 15000);
-function showPage() {
-  document.body.dataset.page = vkPage();
+function markNav() {
   document.querySelectorAll("nav.pages a").forEach((a) => {
     if (a.dataset.page === vkPage()) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
   });
+}
+markNav();
+function showPage() {
+  document.body.dataset.page = vkPage();
+  markNav();
   if (autoState) showAutomation(autoState);
   populateUnits(lastView ? lastView.units || [] : []);
   $histSite.value = vkSite();
   histEnd = null;
   loadHistory();
   renderEvents(lastEvents);
+  showGreeting();
   document.dispatchEvent(new Event("vk-page"));
 }
 window.addEventListener("hashchange", showPage);
@@ -1356,6 +1636,20 @@ $histUnit.addEventListener("change", () => {
   loadHistory();
 });
 $histRange.addEventListener("change", () => { histEnd = null; loadHistory(); });
+// Period buttons drive the (hidden) period list the history request reads.
+const $rangeSeg = document.getElementById("hist-range-seg");
+function showRange() {
+  $rangeSeg.querySelectorAll("button").forEach((b) =>
+    b.setAttribute("aria-pressed", b.dataset.range === $histRange.value ? "true" : "false"));
+}
+$rangeSeg.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-range]");
+  if (!b || b.dataset.range === $histRange.value) return;
+  $histRange.value = b.dataset.range;
+  showRange();
+  histEnd = null;
+  loadHistory();
+});
 function shiftHistory(dir) {
   const span = RANGE_MS[$histRange.value] || RANGE_MS.day;
   const cur = histEnd === null ? histNowMs : histEnd;
@@ -1373,6 +1667,55 @@ window.addEventListener("resize", () => {
   histResizeTimer = setTimeout(loadHistory, 200);
 });
 $histSite.value = vkSite();
+document.querySelectorAll("[data-icon]").forEach((el) => {
+  el.innerHTML = vkIcon(el.dataset.icon);
+});
+// Shortcuts in the side bar and the phone tab bar scroll to a section and open it.
+const JUMPS = { overview: "overview", history: "history", plan: "plan-section",
+                visit: "cottage-visit", rooms: "rooms-section", settings: "settings-section",
+                events: "events" };
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-jump]");
+  if (!b) return;
+  const target = document.getElementById(JUMPS[b.dataset.jump]);
+  if (!target) return;
+  if (target.dataset.collapsed === "1") setFolded(target, false);
+  target.scrollIntoView({ behavior: "smooth", block: "start" });
+});
+// Long sections fold away; the choice is remembered in this browser.
+let folded = {};
+try { folded = JSON.parse(localStorage.getItem("vk-folded") || "{}") || {}; } catch (err) {}
+function setFolded(section, on) {
+  section.dataset.collapsed = on ? "1" : "0";
+  const b = section.querySelector("button.fold");
+  if (b) b.setAttribute("aria-expanded", on ? "false" : "true");
+  folded[section.dataset.fold] = on;
+  try { localStorage.setItem("vk-folded", JSON.stringify(folded)); } catch (err) {}
+}
+document.querySelectorAll("section[data-fold]").forEach((section) => {
+  const head = section.querySelector(".panel-head");
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "fold";
+  b.title = "Näytä tai piilota osio";
+  b.setAttribute("aria-label", "Näytä tai piilota osio");
+  b.innerHTML = vkIcon("chev");
+  b.addEventListener("click", () => setFolded(section, section.dataset.collapsed !== "1"));
+  head.appendChild(b);
+  const key = section.dataset.fold;
+  setFolded(section, key in folded ? !!folded[key] : section.dataset.foldDefault === "1");
+});
+let vkGreetName = "";
+function showGreeting() {
+  const h = Number(new Intl.DateTimeFormat("fi-FI", { timeZone: "Europe/Helsinki",
+    hour: "numeric", hourCycle: "h23" }).format(new Date()));
+  const word = h >= 5 && h < 10 ? "Hyvää huomenta" : h >= 10 && h < 17 ? "Hyvää päivää"
+    : h >= 17 && h < 22 ? "Hyvää iltaa" : "Hyvää yötä";
+  document.getElementById("greeting").textContent = word + (vkGreetName ? ", " + vkGreetName : "");
+  document.getElementById("page-name").textContent = vkPage() === "mokki" ? "Mökki" : "Koti";
+}
+showGreeting();
+vkEvery(showGreeting, 600000);
 refresh();
 loadIdentity();
 vkEvery(refresh, POLL_MS);
@@ -1389,6 +1732,7 @@ if ("serviceWorker" in navigator) {
 <script>/*PLAN_SCRIPT*/</script>
 <script>/*ROOMS_SCRIPT*/</script>
 <script>/*COTTAGE_SCRIPT*/</script>
+<script>/*OVERVIEW_SCRIPT*/</script>
 </body>
 </html>
 """
@@ -1534,6 +1878,9 @@ var vkHealth = (function () {
 
 def render_page(demo: bool) -> str:
     page = (_PAGE.replace("/*SETTINGS_STYLE*/", _SETTINGS_STYLE)
+            .replace("/*OVERVIEW_STYLE*/", overview_ui.STYLE)
+            .replace("<!--OVERVIEW_SECTION-->", overview_ui.SECTION_HTML)
+            .replace("/*OVERVIEW_SCRIPT*/", overview_ui.SCRIPT)
             .replace("/*PLAN_STYLE*/", _PLAN_STYLE)
             .replace("<!--PLAN_SECTION-->", _PLAN_HTML)
             .replace("/*PLAN_SCRIPT*/", _PLAN_SCRIPT)
@@ -1790,6 +2137,12 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             self._json(200, self.app.settings_payload())
         elif parts.path == "/api/plan":
             self._json(200, self.app.service.plan_view())
+        elif parts.path == "/api/overview":
+            site = parse_qs(parts.query).get("site", ["home"])[0]
+            try:
+                self._json(200, self.app.service.overview(site))
+            except ValueError as err:
+                self._json(400, {"error": "bad_query", "detail": str(err)})
         elif parts.path == "/api/away":
             self._json(200, {"away": self.app.service.automation.away()})
         elif parts.path == "/api/automation":
@@ -1869,7 +2222,7 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
                 self._json(200, cottage.end_visit())
         elif parts.path in ("/", "/api/view", "/api/events", "/api/history",
                             "/api/identity", "/api/plan", "/api/rooms",
-                            "/api/cottage", "/api/sites"):
+                            "/api/cottage", "/api/sites", "/api/overview"):
             # Known paths with the wrong method: 405, mirroring how
             # do_GET answers /api/command.
             self._json(405, {"error": "method_not_allowed",

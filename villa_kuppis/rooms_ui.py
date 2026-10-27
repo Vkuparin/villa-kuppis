@@ -5,21 +5,33 @@ JS in raw strings, spliced into the page by
 """
 
 SECTION_HTML = r"""
-  <section class="rooms" aria-label="Huoneiden opitut nopeudet">
-    <h2>Huoneiden opitut nopeudet</h2>
+  <section class="rooms panel" id="rooms-section" aria-label="Huoneiden opitut nopeudet">
+    <div class="panel-head">
+      <h2><span data-icon="spark"></span>Huoneiden opitut nopeudet</h2>
+    </div>
     <p id="rooms-note" class="detail"></p>
     <p id="rooms-forecast" class="detail"></p>
-    <div id="rooms-body"></div>
+    <div id="rooms-body" class="rooms-grid"></div>
   </section>
 """
 
 STYLE = r"""
-section.rooms { background: var(--surface); border: 1px solid var(--line);
-                border-radius: .75rem; padding: 1rem 1.1rem;
-                margin-bottom: 1rem; }
-section.rooms h2 { margin: 0 0 .6rem; font-size: 1.15rem; }
-section.rooms h3 { margin: .8rem 0 .3rem; font-size: 1rem; color: var(--text2); }
-section.rooms ul { margin: 0; padding-left: 1.2rem; }
+.rooms-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+              gap: .8rem; margin-top: .8rem; }
+.room-card { border: 1px solid var(--line); border-radius: 12px; padding: .85rem .95rem;
+             background: var(--surface2); display: flex; flex-direction: column; gap: .55rem; }
+:root[data-theme="dark"] .room-card { background: var(--bg); }
+.room-card header { display: flex; justify-content: space-between; align-items: center; gap: .5rem;
+                    flex-wrap: wrap; }
+.room-card h3 { margin: 0; font-size: .95rem; }
+.room-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .4rem; }
+.room-stat { display: flex; flex-direction: column; min-width: 0; }
+.room-stat b { font-size: 1.15rem; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+.room-stat b.cool { color: var(--cool); }
+.room-stat b.heat { color: var(--heat); }
+.room-stat span { font-size: .72rem; color: var(--text3); }
+.room-card ul { margin: 0; padding-left: 1.1rem; font-size: .84rem; color: var(--text2); }
+.room-card ul:empty { display: none; }
 .rooms-ok { color: var(--ok); }
 .rooms-bad { color: var(--err); }
 """
@@ -44,6 +56,18 @@ SCRIPT = r"""
     if (cls) li.className = cls;
     ul.appendChild(li);
   }
+  function stat(box, value, label, cls, title) {
+    var d = document.createElement("div");
+    d.className = "room-stat";
+    if (title) d.title = title;
+    var b = document.createElement("b");
+    b.textContent = value;
+    if (cls) b.className = cls;
+    var sp = document.createElement("span");
+    sp.textContent = label;
+    d.appendChild(b); d.appendChild(sp);
+    box.appendChild(d);
+  }
   function render(data) {
     $body.textContent = "";
     $note.textContent = "Opittu viimeisten " + data.learn_days +
@@ -67,47 +91,63 @@ SCRIPT = r"""
     }).forEach(function (u) {
       // A cottage room is heated by its Mill heaters, a home room by its pump.
       var cot = u.site === "cottage";
+      var card = document.createElement("article");
+      card.className = "room-card";
+      var head = document.createElement("header");
       var h = document.createElement("h3");
       h.textContent = u.name;
+      head.appendChild(h);
+      card.appendChild(head);
+      var stats = document.createElement("div");
+      stats.className = "room-stats";
       var ul = document.createElement("ul");
       var m = u.model;
       if (!m.ready) {
+        var chip = document.createElement("span");
+        chip.className = "badge info";
+        chip.textContent = "Opitaan";
+        head.appendChild(chip);
         item(ul, "Opitaan vielä: lukemia on " + u.hours + " tunnilta, tarvitaan vähintään " +
           (cot ? "vuorokausi aikaa, jolloin patterit eivät lämmitä."
                : "vuorokausi ilman laitteen ohjausta."));
       } else {
         if (u.now) {
-          item(ul, (cot ? "Patterit eivät lämmitä: " : "Laite pois päältä: ") +
-            signed(u.now.off_c_per_h) +
-            " °C/h nyt (" + (u.now.outdoor_c === null ? "ulkolämpötila ei tiedossa"
-              : "ulkona " + num(u.now.outdoor_c, 1) + " °C") + ").");
+          stat(stats, signed(u.now.off_c_per_h) + " °C/h",
+            cot ? "patterit eivät lämmitä" : "laite pois päältä", "",
+            (u.now.outdoor_c === null ? "Ulkolämpötila ei tiedossa"
+              : "Ulkona " + num(u.now.outdoor_c, 1) + " °C") + ".");
           if (u.now.cooling_c_per_h !== null)
-            item(ul, "Jäähdyttäessä: " + signed(u.now.cooling_c_per_h) + " °C/h.");
+            stat(stats, signed(u.now.cooling_c_per_h) + " °C/h", "jäähdyttäessä", "cool");
           if (u.now.heating_c_per_h !== null)
-            item(ul, "Lämmittäessä: " + signed(u.now.heating_c_per_h) + " °C/h.");
+            stat(stats, signed(u.now.heating_c_per_h) + " °C/h", "lämmittäessä", "heat");
         }
+        if (u.predicted)
+          stat(stats, num(u.predicted.off_c, 1) + " °C", u.predicted.hours + " h päästä",
+            "", "Ennuste: jos " + (cot ? "patterit eivät lämmitä" : "laite on pois päältä") +
+            ", huone on " + u.predicted.hours + " tunnin päästä noin " +
+            num(u.predicted.off_c, 1) + " °C.");
         if (m.cool_c_per_h === null && m.heat_c_per_h === null)
           item(ul, cot ? "Patterien teho opitaan, kun ne ovat lämmittäneet vähintään kaksi tuntia."
                        : "Laitteen teho opitaan, kun se on jäähdyttänyt tai lämmittänyt vähintään kaksi tuntia.");
-        if (u.predicted)
-          item(ul, "Ennuste: jos " + (cot ? "patterit eivät lämmitä" : "laite on pois päältä") +
-            ", huone on " +
-            u.predicted.hours + " tunnin päästä noin " +
-            num(u.predicted.off_c, 1) + " °C.");
         if (!m.uses_outdoor)
           item(ul, "Ulkolämpötilaa ei ole tarpeeksi; malli käyttää vain huoneen omaa muutosta.");
       }
       if (u.validation) {
         var v = u.validation;
-        item(ul, "Testipäivä " + fiDate(v.day) + ": keskivirhe " + num(v.mae_c, 2) +
+        var ok = document.createElement("span");
+        ok.className = "badge " + (v.passed ? "ok" : "err");
+        ok.textContent = v.passed ? "Testi hyväksytty" : "Testi yli rajan";
+        ok.title = "Testipäivä " + fiDate(v.day) + ": keskivirhe " + num(v.mae_c, 2) +
           " °C, suurin " + num(v.max_error_c, 1) + " °C" +
-          (v.passed ? " (hyväksytty)." : " (yli rajan)."),
-          v.passed ? "rooms-ok" : "rooms-bad");
+          (v.passed ? " (hyväksytty)." : " (yli rajan).");
+        head.appendChild(ok);
+        item(ul, ok.title, v.passed ? "rooms-ok" : "rooms-bad");
       } else if (m.ready) {
         item(ul, "Testipäivää ei voi vielä arvioida: tarvitaan kokonainen päivä ja sitä edeltävät lukemat.");
       }
-      $body.appendChild(h);
-      $body.appendChild(ul);
+      if (stats.children.length) card.appendChild(stats);
+      card.appendChild(ul);
+      $body.appendChild(card);
     });
   }
   function load() {

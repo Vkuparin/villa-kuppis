@@ -914,7 +914,10 @@ class FakeSiteGateway:
 
 SECTION_HTML = r"""
   <section class="cottage" id="cottage-section" aria-label="Mökki" hidden>
-    <h2>Mökki <span id="cottage-conn" class="badge info"></span></h2>
+    <div class="cottage-head">
+      <h2><span data-icon="cabin"></span>Mökin huoneet</h2>
+      <span id="cottage-conn" class="badge info"></span>
+    </div>
     <p id="cottage-note" class="detail"></p>
     <div id="cottage-rooms" class="cottage-rooms"></div>
     <article class="card visit" id="cottage-visit">
@@ -930,7 +933,7 @@ SECTION_HTML = r"""
           <label><input type="checkbox" id="visit-large" checked> Iso huone</label>
           <label><input type="checkbox" id="visit-small" checked> Pieni huone</label>
         </fieldset>
-        <button type="button" id="visit-start"
+        <button type="button" id="visit-start" class="primary"
           title="Aloittaa vierailun. Uusi vierailu korvaa käynnissä olevan.">Aloita vierailu</button>
       </div>
       <p id="visit-msg" class="detail" role="status"></p>
@@ -939,27 +942,49 @@ SECTION_HTML = r"""
 """
 
 STYLE = r"""
-section.cottage { background: var(--surface); border: 1px solid var(--line);
-                  border-radius: .75rem; padding: 1rem 1.1rem; margin-bottom: 1rem; }
+section.cottage { display: flex; flex-direction: column; gap: 1rem; }
 section.cottage[hidden] { display: none; }
-section.cottage h2 { margin: 0 0 .6rem; font-size: 1.15rem; }
-.cottage-rooms { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+.cottage-head { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .8rem; }
+.cottage-head h2 { display: flex; align-items: center; gap: .55rem; margin: 0; font-size: 1.05rem; }
+.cottage-head h2 .ico { color: var(--text3); }
+#cottage-note:empty { display: none; }
+.cottage-rooms { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
                  gap: 1rem; }
 .cottage-rooms .card.offline { border-color: var(--err); }
+.cot-main { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: .9rem; align-items: center;
+            margin-bottom: .5rem; }
+.cot-side { display: flex; flex-direction: column; gap: .5rem; min-width: 0; }
+.cot-side .fld b { font-size: 1.05rem; font-variant-numeric: tabular-nums; }
+.cot-stats { display: flex; flex-wrap: wrap; gap: .4rem; margin: .2rem 0 .5rem; }
+.cot-stats span { padding: .3rem .6rem; border-radius: 999px; background: var(--surface2);
+                  font-size: .8rem; color: var(--text2); font-variant-numeric: tabular-nums; }
+.cot-stats span b { color: var(--text); font-weight: 600; margin-left: .25rem; }
+.cottage-rooms .row { border-top: 1px solid var(--line2); font-size: .9rem; }
 .cottage-rooms .heater { display: flex; justify-content: space-between; gap: .6rem;
-                         padding: .15rem 0; font-size: .92rem; color: var(--text2); }
-section.cottage .visit { margin-top: 1rem; }
-.visit-form { display: flex; flex-wrap: wrap; gap: .8rem 1.2rem; align-items: flex-end; }
-.visit-form label, .visit-form fieldset { display: flex; flex-direction: column; gap: .2rem;
-                                          font-size: .92rem; color: var(--text2); }
+                         padding: .2rem 0; font-size: .85rem; color: var(--text2); }
+.cottage-rooms .heater:first-of-type { margin-top: .3rem; }
+.visit-form { display: flex; flex-wrap: wrap; gap: .8rem 1.2rem; align-items: flex-end;
+              padding-top: .8rem; border-top: 1px solid var(--line2); }
+.visit-form label, .visit-form fieldset { display: flex; flex-direction: column; gap: .25rem;
+                                          font-size: .82rem; color: var(--text3); }
+.visit-form input[type=datetime-local], .visit-form input[type=number] {
+  min-height: 44px; padding: 0 .7rem; border: 1px solid var(--line3); border-radius: 10px;
+  background: var(--surface); color: var(--text); font-size: .95rem; }
+.visit-form input[type=number] { width: 6.5rem; }
 .visit-form fieldset { border: 0; padding: 0; margin: 0; flex-direction: row; flex-wrap: wrap;
                        gap: .2rem .8rem; }
-.visit-form fieldset legend { padding: 0; margin-bottom: .2rem; }
-.visit-form fieldset label { flex-direction: row; align-items: center; gap: .3rem; }
+.visit-form fieldset legend { padding: 0; margin-bottom: .25rem; }
+.visit-form fieldset label { flex-direction: row; align-items: center; gap: .35rem; min-height: 44px;
+                             color: var(--text); font-size: .92rem; }
+.visit-form input[type=checkbox] { width: 1.2rem; height: 1.2rem; accent-color: var(--accent); }
 #visit-state { margin-bottom: .6rem; }
 #visit-state .visit-line { margin: .15rem 0; }
 #visit-state button { margin-top: .4rem; }
 .cottage-rooms .value.old { color: var(--text3); text-decoration: line-through; }
+@media (max-width: 560px) {
+  .cottage-rooms { grid-template-columns: 1fr; }
+  .cot-main { grid-template-columns: 116px minmax(0, 1fr); }
+}
 """
 
 SCRIPT = r"""
@@ -1018,38 +1043,65 @@ SCRIPT = r"""
     r.appendChild(el("span", "value" + (ok ? "" : " old"), valueText, title));
     return r;
   }
-  function sensorRow(label, s, fmt, help) {
+  function sensorChip(label, s, fmt, help) {
     if (!s) return null;
     var ok = s.status === "ok";
-    return row(label, s.value === null ? "–" : fmt(s.value), ok,
-      "Päivitetty " + when(s.source_ts) + (ok ? "" : " (" + (STATE_TEXT[s.status] || ["", s.status])[1] + ")"),
-      help);
+    var chip = el("span", ok ? "" : "old", label, (help ? help + " " : "") + "Päivitetty " +
+      when(s.source_ts) + (ok ? "" : " (" + (STATE_TEXT[s.status] || ["", s.status])[1] + ")"));
+    chip.appendChild(el("b", "", s.value === null ? "–" : fmt(s.value)));
+    return chip;
   }
   function card(room) {
     var st = room.status;
     var offline = room.state === "missing" || room.state === "unavailable";
     var c = el("article", "card" + (room.state === "ok" ? "" : (offline ? " offline" : " stale")));
     var head = el("header", "card-head");
-    head.appendChild(el("h3", "", room.name));
+    var ttl = el("div");
+    ttl.appendChild(el("h3", "", room.name));
+    var mode = st && st.mode ? COTTAGE_MODES[st.mode] || st.mode : null;
+    if (mode) {
+      var sub = el("span", "sub", null, "Mökin ohjaimen toimintatila.");
+      sub.innerHTML = vkIcon("flame");
+      sub.appendChild(document.createTextNode(mode));
+      ttl.appendChild(sub);
+    }
+    head.appendChild(ttl);
     var badge = STATE_TEXT[room.state];
     if (badge && badge[1]) head.appendChild(el("span", "badge " + badge[0], badge[1], STATE_HELP[room.state]));
     c.appendChild(head);
-    var t = sensorRow("Huonelämpötila", room.temperature, temp,
-      "ALPSTUGA-anturin mittaama lämpötila. Se ei ole turvatermostaatti.");
-    if (t) c.appendChild(t);
-    var h = sensorRow("Ilmankosteus", room.humidity, function (v) { return num.format(v) + " %"; });
-    if (h) c.appendChild(h);
-    var co2 = sensorRow("CO₂", room.co2, function (v) { return Math.round(v) + " ppm"; });
-    if (co2) c.appendChild(co2);
-    var pm = sensorRow("Hiukkaset PM2,5", room.pm25, function (v) { return num.format(v) + " µg/m³"; });
-    if (pm) c.appendChild(pm);
+    // Reading in a gauge (the dot is the target in force), target and mode beside it.
+    var temp0 = room.temperature;
+    var main = el("div", "cot-main");
+    var g = el("div", "gauge", null, "ALPSTUGA-anturin mittaama lämpötila. Se ei ole turvatermostaatti." +
+      (temp0 ? " Päivitetty " + when(temp0.source_ts) + "." : ""));
+    var tv = temp0 && temp0.value !== null ? temp0.value : null;
+    g.innerHTML = vkGauge(tv, st && st.target !== null ? st.target : null,
+      temp0 && temp0.status === "ok" ? "var(--heat)" : "var(--ctl)", 4, 26) +
+      '<div class="gauge-num"><b>' + (tv === null ? "–" : num.format(tv) + "<small>°C</small>") +
+      "</b><span>huone</span></div>";
+    main.appendChild(g);
+    var side = el("div", "cot-side");
     if (st) {
       var ok = st.status === "ok";
-      var mode = st.mode ? COTTAGE_MODES[st.mode] || st.mode : "–";
-      c.appendChild(row("Voimassa oleva tavoite", st.target === null ? "–" : temp(st.target), ok,
-        st.reason || "", "Lämpötila, johon mökin ohjain pyrkii juuri nyt."));
-      c.appendChild(row("Tila", mode, ok, (st.reason || "") + (st.mode && MODE_HELP[st.mode] ?
-        (st.reason ? " – " : "") + MODE_HELP[st.mode] : ""), "Mökin ohjaimen toimintatila."));
+      var f1 = el("div", "fld");
+      f1.appendChild(el("span", "fld-l", "Voimassa oleva tavoite", "Lämpötila, johon mökin ohjain pyrkii juuri nyt."));
+      f1.appendChild(el("b", "value" + (ok ? "" : " old"), st.target === null ? "–" : temp(st.target), st.reason || ""));
+      side.appendChild(f1);
+      var f2 = el("div", "fld");
+      f2.appendChild(el("span", "fld-l", "Tila", "Mökin ohjaimen toimintatila."));
+      f2.appendChild(el("b", "value" + (ok ? "" : " old"), mode || "–", (st.reason || "") +
+        (st.mode && MODE_HELP[st.mode] ? (st.reason ? " – " : "") + MODE_HELP[st.mode] : "")));
+      side.appendChild(f2);
+    }
+    main.appendChild(side);
+    c.appendChild(main);
+    var stats = el("div", "cot-stats");
+    [sensorChip("Kosteus", room.humidity, function (v) { return num.format(v) + " %"; }),
+     sensorChip("CO₂", room.co2, function (v) { return Math.round(v) + " ppm"; }),
+     sensorChip("PM2,5", room.pm25, function (v) { return num.format(v) + " µg/m³"; }, "Hiukkaset PM2,5.")]
+      .forEach(function (chip) { if (chip) stats.appendChild(chip); });
+    if (stats.children.length) c.appendChild(stats);
+    if (st) {
       var plan = room.plan;
       if (plan) {
         c.appendChild(row("Suunniteltu tavoite", temp(plan.target) + " · " + plan.reason_text, true,
@@ -1084,6 +1136,7 @@ SCRIPT = r"""
     $section.hidden = false;
     AUTOMATION_ON = data.automation_on !== false;
     LATEST = data;
+    window.vkCottageData = data;
     var conn = CONNECTION[data.site.connection] || CONNECTION.offline;
     $conn.className = "badge " + conn[0];
     $conn.textContent = "Yhteys mökkiin: " + conn[1];

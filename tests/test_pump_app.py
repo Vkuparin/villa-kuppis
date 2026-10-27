@@ -303,7 +303,8 @@ assert.equal($cards.innerHTML, '<p>3</p>');
     def test_card_does_not_guess_an_unavailable_units_state(self):
         from villa_kuppis.pump_app import render_page
         page = render_page(True)
-        source = (page[page.index("const MODE_NAMES"):page.index("const POLL_MS")]
+        source = (page[page.index("var VK_ICONS"):page.index("// Periodic refreshes")]
+                  + page[page.index("const MODE_NAMES"):page.index("const POLL_MS")]
                   + page[page.index("const tempFmt"):page.index("let selectHoldUntil")])
         script = """
 import assert from 'node:assert/strict';
@@ -625,6 +626,26 @@ class HistoryApiTests(AppTestCase):
                                  {"unit": "unit-1"})
         self.assertEqual(status, 405)
         self.assertEqual(body["error"], "method_not_allowed")
+
+    def test_overview_has_todays_prices_and_latest_outdoor(self):
+        server = self._start_with_history(seed_prices=True)
+        status, body = http_json("GET", self._url(server, "/api/overview?site=home"))
+        self.assertEqual(status, 200)
+        # 15:00 in Helsinki: today and tomorrow are Helsinki calendar days.
+        self.assertEqual(body["day_start"], "2026-10-18T21:00:00+00:00")
+        self.assertEqual(body["day_end"], "2026-10-20T21:00:00+00:00")
+        # Stored prices run until noon UTC: 15 hours of today, every interval kept.
+        self.assertEqual(len(body["prices"]), 60)
+        self.assertEqual(body["prices"][0][0], body["day_start"])
+        self.assertEqual(body["outdoor"], ["2026-10-19T11:00:00+00:00", 10.5])
+        self.assertEqual(body["forecast"], [])
+
+    def test_overview_rejects_unknown_site_and_post(self):
+        server = self._start_with_history()
+        status, body = http_json("GET", self._url(server, "/api/overview?site=moon"))
+        self.assertEqual((status, body["error"]), (400, "bad_query"))
+        status, body = http_json("POST", self._url(server, "/api/overview"), {})
+        self.assertEqual((status, body["error"]), (405, "method_not_allowed"))
 
 
 class CommandApiTests(AppTestCase):
