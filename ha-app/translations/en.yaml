@@ -23,6 +23,9 @@ configuration:
   public_origin:
     name: Web app address
     description: e.g. https://home-server.corvus-stairs.ts.net (Tailscale Serve on home-server).
+  public_path:
+    name: Web app path
+    description: Path Tailscale Serve mounts the app under, e.g. /villa-kuppis. Leave empty for the root.
   tailscale_proxy:
     name: Tailscale proxy address
     description: LAN address of home-server, the only machine allowed to forward the web app.

@@ -34,6 +34,7 @@ remains a fallback.
    | `weather_home` | as on the old install, `lat,lon` |
    | `public_origin` | `https://home-server.corvus-stairs.ts.net` |
    | `tailscale_proxy` | `192.168.86.36` |
+   | `public_path` | `/villa-kuppis` (Tailscale Serve mounts the app under this path) |
    | `automation_default_on` | off (the header switch decides after the first start) |
 
    Leave the cottage options empty until the cottage is commissioned (H2.1).
@@ -52,10 +53,11 @@ Only one Villa Kuppis may run at a time: both would control the pumps.
 3. Start the app. Its log shows `Imported pumps.db, prices.db` and
    `Service started`; the import runs only while the app has no databases and
    renames the copies to `*.imported`.
-4. On home-server: check that `tailscale serve status` has nothing on 443 (Cockpit was
-   moved to `--https=9090` on 2026-10-25), then
-   `sudo tailscale serve --bg --https=443 http://192.168.86.37:8377`.
-5. Check from the phone: `https://home-server.corvus-stairs.ts.net` opens
+4. On home-server: Villa Kuppis lives under a path so Cockpit can have the root:
+   `sudo tailscale serve --bg --https=443 --set-path=/villa-kuppis http://192.168.86.37:8377`
+   (Serve strips the path before forwarding) and Cockpit on
+   `sudo tailscale serve --bg --https=443 https+insecure://localhost:9090`.
+5. Check from the phone: `https://home-server.corvus-stairs.ts.net/villa-kuppis` opens
    without a Home Assistant login, the three pumps show live readings, the
    history is there, and the log shows today's and tomorrow's prices fetched.
    The Villa Kuppis sidebar entry in Home Assistant shows the same app.

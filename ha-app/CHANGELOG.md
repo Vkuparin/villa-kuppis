@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.23
+
+- Sovellus toimii myös osoitteessa /villa-kuppis (uusi asetus public_path), myös ilman loppukauttaviivaa.
+
 ## 0.4.22
 
 - Kodilla ja Mökillä on omat sivunsa ja kummallakin oma Automaatio-kytkin. Mökin kytkin seuraa aluksi kodin kytkintä.

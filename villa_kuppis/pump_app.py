@@ -1743,8 +1743,10 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             return
         parts = urlsplit(self.path)
         if parts.path == "/":
-            self._send(200, self.app.page_html.encode("utf-8"),
-                       "text/html; charset=utf-8")
+            html = (self.app.proxy_page_html
+                    if self.client_address[0] in self.app.trusted_proxies
+                    else self.app.page_html)
+            self._send(200, html.encode("utf-8"), "text/html; charset=utf-8")
         elif parts.path in _STATIC_FILES:
             name, ctype, cache = _STATIC_FILES[parts.path]
             self._send(200, (_STATIC_DIR / name).read_bytes(), ctype, cache)
@@ -1975,7 +1977,8 @@ class PumpAppServer(ThreadingHTTPServer):
                  port: int = 0, demo: bool = False,
                  public_origin: str | None = None,
                  local_actor: str = DEFAULT_LOCAL_ACTOR,
-                 ingress: bool = False, trusted_proxies: tuple = ()):
+                 ingress: bool = False, trusted_proxies: tuple = (),
+                 public_path: str | None = None):
         # All interfaces only inside the Home Assistant app container, where
         # every non-loopback client is refused unless it is the ingress proxy
         # or a configured Tailscale Serve proxy.
@@ -2001,6 +2004,11 @@ class PumpAppServer(ThreadingHTTPServer):
         self.ingress_proxy = INGRESS_PROXY
         self.trusted_proxies = tuple(trusted_proxies)
         self.page_html = render_page(demo)
+        # Behind Tailscale Serve under a path the page needs an absolute base:
+        # /villa-kuppis without the trailing slash would break relative URLs.
+        self.proxy_page_html = (
+            self.page_html.replace("<head>", f'<head>\n<base href="{public_path}/">', 1)
+            if public_path else self.page_html)
         self.settings = app_settings.SettingsStore(service.store.path)
         super().__init__((host, port), _PumpAppHandler)
 

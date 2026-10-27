@@ -42,3 +42,4 @@ schema:
   cottage_token: password?
   public_origin: url?
   tailscale_proxy: str?
+  public_path: str?

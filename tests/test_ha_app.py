@@ -38,7 +38,8 @@ class AppModeServerTests(unittest.TestCase):
         self.service.start()
         self.server = PumpAppServer(self.service, host="0.0.0.0", port=0,
                                     public_origin=ORIGIN, ingress=True,
-                                    trusted_proxies=(PROXY,))
+                                    trusted_proxies=(PROXY,),
+                                    public_path="/villa-kuppis")
         self.server.ingress_proxy = INGRESS
         threading.Thread(target=self.server.serve_forever,
                          kwargs={"poll_interval": 0.05}, daemon=True).start()
@@ -92,6 +93,14 @@ class AppModeServerTests(unittest.TestCase):
         port = self.server.server_port
         self.assertEqual(self.request(PROXY, headers={"Host": f"127.0.0.1:{port}"})[0], 403)
 
+    def test_page_gets_an_absolute_base_only_behind_the_tailscale_path(self):
+        proxy = {"Host": AUTHORITY, "Tailscale-User-Login": "ville@example.com"}
+        _, page = self.request(PROXY, "/", headers=proxy)
+        self.assertIn(b'<base href="/villa-kuppis/">', page)
+        _, page = self.request(INGRESS, "/", headers={
+            "Host": "home-haos.example.ts.net", "X-Remote-User-Id": "abc"})
+        self.assertNotIn(b"<base", page)
+
     def test_other_clients_are_refused_even_with_trusted_headers(self):
         for headers in ({"Host": AUTHORITY, "Tailscale-User-Login": "ville@example.com"},
                         {"Host": "x", "X-Remote-User-Id": "abc"},
@@ -123,6 +132,15 @@ class OptionsTests(unittest.TestCase):
 
     def tearDown(self):
         self._tmp.cleanup()
+
+    def test_public_path_config(self):
+        opts = {"pumps": "home_assistant", "public_origin": ORIGIN,
+                "tailscale_proxy": "192.168.86.36", "public_path": "/villa-kuppis/"}
+        loaded = Config.load_dict(ha_app.build_config(opts, self.root, "tok"))
+        self.assertEqual(loaded.public_path, "/villa-kuppis")
+        with self.assertRaises(ValueError):
+            Config.load_dict({**ha_app.build_config(opts, self.root, "tok"),
+                              "public_path": "villa kuppis"})
 
     def test_full_options_make_a_valid_config_with_private_secrets(self):
         config = ha_app.build_config({

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import ipaddress
+import re
 from dataclasses import dataclass
 import json
 import logging
@@ -41,6 +42,8 @@ class Config:
     # interfaces inside the app container.
     ingress: bool = False
     trusted_proxies: tuple = ()
+    # Path Tailscale Serve mounts the app under, e.g. "/villa-kuppis".
+    public_path: str | None = None
 
     @classmethod
     def load(cls, path):
@@ -51,7 +54,7 @@ class Config:
         if not isinstance(raw, dict) or set(raw) - {
                 "data_dir", "backup_dir", "public_origin", "port", "weather",
                 "plan", "credential_file", "sites", "pumps",
-                "ingress", "trusted_proxies"}:
+                "ingress", "trusted_proxies", "public_path"}:
             raise ValueError("Invalid service configuration fields")
         weather = raw.get("weather", {})
         if not isinstance(weather, dict) or set(weather) - {"home", "cottage"}:
@@ -74,6 +77,13 @@ class Config:
             raise ValueError("trusted_proxies must be a list of IP addresses") from None
         if proxies and not raw.get("public_origin"):
             raise ValueError("trusted_proxies need public_origin")
+        public_path = raw.get("public_path")
+        if public_path is not None and not (
+                isinstance(public_path, str)
+                and re.fullmatch(r"/[A-Za-z0-9._~-]+(/[A-Za-z0-9._~-]+)*", public_path)):
+            raise ValueError("public_path must look like /villa-kuppis")
+        if public_path and not proxies:
+            raise ValueError("public_path needs trusted_proxies")
         credential_file = raw.get("credential_file")
         if credential_file is not None and (
                 not isinstance(credential_file, str) or not Path(credential_file).is_absolute()):
@@ -84,7 +94,7 @@ class Config:
                      Path(credential_file) if credential_file else None,
                      parse_sites(raw.get("sites", {})),
                      raw.get("pumps", "melcloud"),
-                    raw.get("ingress", False), proxies)
+                    raw.get("ingress", False), proxies, public_path)
         if config.pumps not in ("melcloud", "home_assistant"):
             raise ValueError("pumps must be melcloud or home_assistant")
         if config.pumps == "home_assistant" and "home" not in dict(config.sites):
@@ -147,7 +157,8 @@ def run(config: Config, *, demo=False, stop_event=None, service_factory=None,
         extra_server = {}
         if config.ingress or config.trusted_proxies:
             extra_server = {"ingress": config.ingress,
-                            "trusted_proxies": config.trusted_proxies}
+                            "trusted_proxies": config.trusted_proxies,
+                            "public_path": config.public_path}
         host = "0.0.0.0" if extra_server else "127.0.0.1"
         server = server_factory(service, host=host, port=config.port,
                                 demo=demo, public_origin=config.public_origin,

@@ -130,6 +130,9 @@ def build_config(options: dict, data_root: Path, supervisor_token: str | None) -
         if not origin:
             raise OptionsError("tailscale_proxy needs public_origin")
         config["trusted_proxies"] = [proxy]
+        path = _text(options, "public_path")
+        if path:
+            config["public_path"] = path.rstrip("/")
     return config
 
 
