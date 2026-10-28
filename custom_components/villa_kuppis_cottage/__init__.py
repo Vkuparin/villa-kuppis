@@ -5,9 +5,11 @@ Kuppis writes each room's target with ``villa_kuppis_cottage.set_target``
 (target, increasing revision and a validity window), optionally with the
 rest of its plan as a schedule; this integration follows the room sensor
 locally, keeps to the schedule while Villa Kuppis is unreachable and falls
-back to the safe setpoint when the target and its schedule expire. The decision logic is in ``control.py``; this file only
-reads states, calls the climate services and keeps the targets across
-restarts.
+back to the safe setpoint when the target and its schedule expire.
+``villa_kuppis_cottage.set_heater_enabled`` switches one heater off or back
+on; a switched-off heater is kept off. The decision logic is in
+``control.py``; this file only reads states, calls the climate services
+and keeps the targets and switched-off heaters across restarts.
 """
 
 from __future__ import annotations
@@ -68,6 +70,8 @@ CONFIG_SCHEMA = vol.Schema({
         vol.Optional("manual_hold_minutes", default=240): vol.Coerce(float),
         vol.Optional("max_commands_per_hour",
                      default=_DEFAULTS.max_commands_per_hour): cv.positive_int,
+        vol.Optional("fallback_heats_disabled",
+                     default=_DEFAULTS.fallback_heats_disabled): cv.boolean,
         vol.Required("rooms"): vol.Schema({cv.slug: ROOM_SCHEMA}),
     }),
 }, extra=vol.ALLOW_EXTRA)
@@ -83,6 +87,10 @@ SET_TARGET_SCHEMA = vol.Schema({
     })]),
 })
 CLEAR_MANUAL_SCHEMA = vol.Schema({vol.Required("room"): cv.slug})
+SET_HEATER_ENABLED_SCHEMA = vol.Schema({
+    vol.Required("entity_id"): cv.entity_domain("climate"),
+    vol.Required("enabled"): cv.boolean,
+})
 
 
 def _settings(conf: dict) -> control.Settings:
@@ -96,6 +104,7 @@ def _settings(conf: dict) -> control.Settings:
         sensor_max_age=timedelta(minutes=conf["sensor_max_age_minutes"]),
         manual_hold=timedelta(minutes=conf["manual_hold_minutes"]),
         max_commands_per_hour=conf["max_commands_per_hour"],
+        fallback_heats_disabled=conf["fallback_heats_disabled"],
     )
 
 
@@ -116,14 +125,14 @@ def read_sensor(state: State | None) -> control.Sensor | None:
     return control.Sensor(_float(state.state), _reported(state))
 
 
-def read_heater(entity_id: str, state: State | None) -> control.Heater:
+def read_heater(entity_id: str, state: State | None, enabled: bool = True) -> control.Heater:
     if state is None or state.state in UNAVAILABLE:
-        return control.Heater(entity_id, False, None, None)
+        return control.Heater(entity_id, False, None, None, enabled=enabled)
     attrs = state.attributes
     return control.Heater(
         entity_id, True, state.state, _float(attrs.get(ATTR_TEMPERATURE)),
         _float(attrs.get("min_temp")), _float(attrs.get("max_temp")),
-        _float(attrs.get("target_temp_step")),
+        _float(attrs.get("target_temp_step")), enabled,
     )
 
 
@@ -136,6 +145,7 @@ class Room:
         self.devices = {"temperature": self.sensor, "heaters": self.heaters,
                         **{k: conf[k] for k in ("humidity", "co2", "pm25") if k in conf}}
         self.memory = control.RoomMemory()
+        self.disabled: set[str] = set()   # heaters switched off in Villa Kuppis
         self.target: control.Target | None = None
         self.decision: control.Decision | None = None
         self.room_temp: float | None = None
@@ -151,6 +161,10 @@ class CottageController:
 
     async def async_load(self) -> None:
         data = await self.store.async_load() or {}
+        for room_id, entities in (data.get("disabled") or {}).items():
+            room = self.rooms.get(room_id)
+            if room is not None:
+                room.disabled = {e for e in entities if e in room.heaters}
         for room_id, saved in (data.get("targets") or {}).items():
             room = self.rooms.get(room_id)
             until = dt_util.parse_datetime(saved.get("valid_until") or "")
@@ -166,7 +180,7 @@ class CottageController:
                   "valid_until": r.target.valid_until.isoformat(),
                   "schedule": [[start.isoformat(), value] for start, value in r.target.schedule]}
             for rid, r in self.rooms.items() if r.target is not None
-        }})
+        }, "disabled": {rid: sorted(r.disabled) for rid, r in self.rooms.items() if r.disabled}})
 
     def _room(self, room_id: str) -> Room:
         room = self.rooms.get(room_id)
@@ -191,6 +205,18 @@ class CottageController:
         await self._async_save()
         await self.async_evaluate(room)
 
+    async def async_set_heater_enabled(self, call: ServiceCall) -> None:
+        entity_id = call.data["entity_id"]
+        room = next((r for r in self.rooms.values() if entity_id in r.heaters), None)
+        if room is None:
+            raise ServiceValidationError(f"{entity_id} is not a heater of any room")
+        if call.data["enabled"]:
+            room.disabled.discard(entity_id)
+        else:
+            room.disabled.add(entity_id)
+        await self._async_save()
+        await self.async_evaluate(room)
+
     async def async_clear_manual(self, call: ServiceCall) -> None:
         room = self._room(call.data["room"])
         room.memory.manual_until = None
@@ -199,7 +225,8 @@ class CottageController:
     async def async_evaluate(self, room: Room) -> None:
         states = self.hass.states
         sensor = read_sensor(states.get(room.sensor))
-        heaters = [read_heater(eid, states.get(eid)) for eid in room.heaters]
+        heaters = [read_heater(eid, states.get(eid), eid not in room.disabled)
+                   for eid in room.heaters]
         room.room_temp = sensor.value if sensor else None
         decision = control.decide(dt_util.utcnow(), room.target, sensor, heaters,
                                   room.memory, self.settings)
@@ -232,6 +259,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                                  schema=SET_TARGET_SCHEMA)
     hass.services.async_register(DOMAIN, "clear_manual", controller.async_clear_manual,
                                  schema=CLEAR_MANUAL_SCHEMA)
+    hass.services.async_register(DOMAIN, "set_heater_enabled",
+                                 controller.async_set_heater_enabled,
+                                 schema=SET_HEATER_ENABLED_SCHEMA)
 
     for room in controller.rooms.values():
         @callback

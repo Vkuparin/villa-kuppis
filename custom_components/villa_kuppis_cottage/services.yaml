@@ -38,3 +38,14 @@ clear_manual:
       required: true
       selector:
         text:
+set_heater_enabled:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain: climate
+    enabled:
+      required: true
+      selector:
+        boolean:

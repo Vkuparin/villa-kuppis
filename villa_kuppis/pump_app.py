@@ -15,6 +15,7 @@ fully offline) plus a small JSON API on top of PumpService:
 * GET  /api/cottage   cottage rooms, readings and connection (card H2.3, read-only)
 * GET/POST /api/visit  cottage visit: state and plan; start {"arrival", "target", "rooms"} (card F4.3)
 * POST /api/visit/end  end the active visit
+* POST /api/cottage/heater  {"device_id", "enabled"}: switch one cottage heater off or on
 * GET  /api/sites     connection health of each Home Assistant site
 * POST /api/settings  {"scope", "key", "value" | "reset"} (card F3.5)
 * GET/POST /api/away  home-away button, {"away": bool} (card F6.1)
@@ -63,7 +64,7 @@ from .pump_probe import FakeClient, _unit_payload
 from . import settings as app_settings
 from . import cottage as cottage_ui
 from . import overview_ui
-from .cottage import CottageSite, FakeSiteGateway
+from .cottage import CottageSite, FakeSiteGateway, HeaterSwitchError
 from .visit import VisitError
 from .pump_service import MAX_ACTOR_LENGTH, PumpService, make_live_service
 from .plan_ui import SCRIPT as _PLAN_SCRIPT
@@ -834,6 +835,7 @@ function changeText(action, requested) {
     case "setpoint": return "Tavoitelämpötila → " + fmtTemp(requested);
     case "mode": return "Toimintatila → " + modeName(requested);
     case "target": return "Mökin tavoite → " + fmtTemp(parseFloat(requested));
+    case "heater": return requested === "on" ? "Patteri käyttöön" : "Patteri pois käytöstä";
     case "fan": return "Puhallus → " + fanName(requested);
     case "power": return requested ? "Laitteen päälle" : "Laitteen pois päältä";
     default: return action;
@@ -1815,6 +1817,9 @@ var vkHealth = (function () {
           ? "Home Assistant hylkäsi tunnuksen; tunnus pitää uusia. "
           : "Yhteys mökin Home Assistantiin on poikki. Mökin ohjain toimii omillaan ja siirtyy turvalämpöön, jos Villa Kuppiksen tavoite vanhenee. ") +
         (site.error ? site.error + " " : "") + last);
+    } else if (fb.length && S.cottage.automation_on === false) {
+      set($cot, "info", "Mökki: automaatio pois",
+        "Automaatio on pois päältä, joten patterit pitävät turvalämmön: " + fb.join(", ") + ". " + last);
     } else if (fb.length) {
       set($cot, "warn", "Mökki: turvalämpö",
         "Villa Kuppiksen tavoite puuttuu tai on vanhentunut, ja patterit ovat turvalämmöllä: " +
@@ -2162,7 +2167,8 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
                              "display_name": identity["display_name"],
                              "source": identity["source"],
                              "version": os.environ.get("VK_VERSION", "")})
-        elif parts.path in ("/api/command", "/api/prices/refresh", "/api/visit/end"):
+        elif parts.path in ("/api/command", "/api/prices/refresh", "/api/visit/end",
+                            "/api/cottage/heater"):
             self._json(405, {"error": "method_not_allowed",
                              "detail": "use POST for this path"})
         elif parts.path.startswith("/api/"):
@@ -2220,6 +2226,8 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             cottage = self._cottage_or_error()
             if cottage is not None:
                 self._json(200, cottage.end_visit())
+        elif parts.path == "/api/cottage/heater":
+            self._post_heater(identity)
         elif parts.path in ("/", "/api/view", "/api/events", "/api/history",
                             "/api/identity", "/api/plan", "/api/rooms",
                             "/api/cottage", "/api/sites", "/api/overview"):
@@ -2251,6 +2259,21 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             result = cottage.start_visit(body.get("arrival"), body.get("target"),
                                          body.get("rooms"), identity["actor"])
         except VisitError as error:
+            self._json(400, {"error": "bad_body", "detail": str(error)})
+            return
+        self._json(200, result)
+
+    def _post_heater(self, identity) -> None:
+        cottage = self._cottage_or_error()
+        if cottage is None:
+            return
+        body = self._read_json_object()
+        if body is None:
+            return
+        try:
+            result = cottage.set_heater_enabled(body.get("device_id"), body.get("enabled"),
+                                                identity["actor"])
+        except HeaterSwitchError as error:
             self._json(400, {"error": "bad_body", "detail": str(error)})
             return
         self._json(200, result)

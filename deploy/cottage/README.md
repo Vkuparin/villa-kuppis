@@ -38,6 +38,7 @@ To rehearse failures: `villa_kuppis_simulator.set_available` takes entities off 
 - `villa_kuppis_cottage.set_target`: `room`, `target` (°C), `revision` (must not decrease; Villa Kuppis uses the planning time in epoch seconds), `valid_minutes` (default 45). Sending the same revision again is a heartbeat. Optional `schedule`: the rest of the plan as `[{start, target}, ...]` (ISO times; from version 0.3.0). The room keeps to it while Villa Kuppis is unreachable; the target expires 15 minutes after the last step's start, or after `valid_minutes`, whichever is later. The status sensor's `schedule_steps` attribute tells Villa Kuppis that the integration takes a schedule.
 - The status sensor's `reported` attribute (from version 0.3.1) gives the last report time of each room device, rounded down to 5 minutes. Home Assistant does not send that time for an unchanged reading, so without it a steady room temperature would look stale to Villa Kuppis.
 - `villa_kuppis_cottage.clear_manual`: `room`. Ends a manual pause at once.
+- `villa_kuppis_cottage.set_heater_enabled`: `entity_id` (one of the rooms' heaters), `enabled` (from version 0.4.0). A switched-off heater is turned off and kept off in every mode, and switching it back on is never taken for a manual change. In `fallback` it still holds `safe_setpoint` for frost protection, unless `fallback_heats_disabled: false`. The switched-off heaters survive a restart; the status sensor lists them in `disabled_heaters`, which also tells Villa Kuppis that the integration takes this service.
 
 ## Tests
 

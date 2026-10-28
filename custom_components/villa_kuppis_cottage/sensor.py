@@ -68,6 +68,9 @@ class RoomTargetSensor(SensorEntity):
             "schedule_steps": len(target.schedule) if target else 0,
             "manual_until": memory.manual_until.isoformat() if memory.manual_until else None,
             "manual_by": memory.manual_by,
+            # Heaters switched off in Villa Kuppis; the key also tells Villa
+            # Kuppis that this version takes set_heater_enabled.
+            "disabled_heaters": sorted(room.disabled),
             # Villa Kuppis binds the room's devices from this: rebinding a
             # room is an edit of the package, nothing in Villa Kuppis.
             "devices": room.devices,

@@ -19,6 +19,11 @@ Modes, in precedence order:
   (target + boost) below the target and low above it, with hysteresis and
   a minimum dwell. Their own thermostats still bound the temperature.
 
+A heater switched off in Villa Kuppis (``enabled`` false) is kept off in
+every mode and is not a manual change. In fallback it still holds the safe
+setpoint when ``fallback_heats_disabled`` is on, so a forgotten switch
+never leaves a room without frost protection.
+
 Setpoints are clamped to each heater's range and rounded to its step.
 A heater gets at most one command per ``min_command_interval`` and at most
 ``max_commands_per_hour``; a command is not repeated within
@@ -56,6 +61,7 @@ class Settings:
     max_commands_per_hour: int = 12
     confirm_grace: timedelta = timedelta(seconds=120)
     default_step: float = 0.5
+    fallback_heats_disabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -95,6 +101,7 @@ class Heater:
     min_temp: float | None = None
     max_temp: float | None = None
     step: float | None = None
+    enabled: bool = True             # False: switched off in Villa Kuppis
 
 
 @dataclass
@@ -168,7 +175,7 @@ def _detect_manual(heaters, memory: RoomMemory, settings: Settings, now: datetim
             continue
         observed = (heater.mode, heater.setpoint)
         previous, hm.seen = hm.seen, observed
-        if previous is None or previous == observed:
+        if previous is None or previous == observed or not heater.enabled:
             continue
         tol = (heater.step or settings.default_step) / 2 + 0.01
         mode_ours = heater.mode == previous[0] or heater.mode == hm.sent_mode
@@ -186,11 +193,32 @@ def _allowed(hm: HeaterMemory, now: datetime, settings: Settings) -> bool:
     return len(hm.sends) < settings.max_commands_per_hour
 
 
+def _off_commands(heaters, memory: RoomMemory, settings: Settings,
+                  now: datetime) -> list[Command]:
+    """Turn the switched-off heaters off, once each, within the rate limits."""
+    out = []
+    for heater in heaters:
+        if heater.enabled or not heater.available or heater.mode == OFF:
+            continue
+        hm = memory.heaters.setdefault(heater.entity_id, HeaterMemory())
+        waiting = (hm.sent_at is not None and now - hm.sent_at < settings.confirm_grace
+                   and hm.sent_mode == OFF)
+        if waiting or not _allowed(hm, now, settings):
+            continue
+        out.append(Command(heater.entity_id, "set_hvac_mode", OFF))
+        hm.sent_mode = OFF
+        hm.sent_at = now
+        hm.sends.append(now)
+    return out
+
+
 def _commands(heaters, desired: float, memory: RoomMemory, settings: Settings,
-              now: datetime) -> list[Command]:
+              now: datetime, *, include_disabled: bool = False) -> list[Command]:
     out = []
     for heater in heaters:
         if not heater.available:
+            continue
+        if not heater.enabled and not include_disabled:
             continue
         hm = memory.heaters.setdefault(heater.entity_id, HeaterMemory())
         want = heater_setpoint(heater, desired, settings)
@@ -224,13 +252,18 @@ def decide(now: datetime, target: Target | None, sensor: Sensor | None,
         memory.manual_by = changed
         memory.drive = memory.drive_since = None
     if memory.manual_until is not None and now < memory.manual_until:
-        return Decision("manual", f"{memory.manual_by} changed by hand", None, None, ())
+        return Decision("manual", f"{memory.manual_by} changed by hand", None, None,
+                        tuple(_off_commands(heaters, memory, settings, now)))
     memory.manual_until = memory.manual_by = None
 
     if target is None or now >= target.valid_until:
         memory.drive = memory.drive_since = None
         reason = "no target from Villa Kuppis" if target is None else "the target expired"
-        cmds = _commands(heaters, settings.safe_setpoint, memory, settings, now)
+        heat_all = settings.fallback_heats_disabled
+        cmds = _commands(heaters, settings.safe_setpoint, memory, settings, now,
+                         include_disabled=heat_all)
+        if not heat_all:
+            cmds += _off_commands(heaters, memory, settings, now)
         return Decision("fallback", reason, settings.safe_setpoint, None, tuple(cmds))
 
     value = min(max(target.value_at(now), settings.safe_setpoint), settings.max_target)
@@ -238,6 +271,7 @@ def decide(now: datetime, target: Target | None, sensor: Sensor | None,
     if not ok:
         memory.drive = memory.drive_since = None
         cmds = _commands(heaters, value, memory, settings, now)
+        cmds += _off_commands(heaters, memory, settings, now)
         return Decision("thermostat", why, value, None, tuple(cmds))
 
     room = sensor.value
@@ -254,4 +288,5 @@ def decide(now: datetime, target: Target | None, sensor: Sensor | None,
         memory.drive, memory.drive_since = want, now
     desired = value + settings.boost if want == "high" else settings.low_setpoint
     cmds = _commands(heaters, desired, memory, settings, now)
+    cmds += _off_commands(heaters, memory, settings, now)
     return Decision("follow", f"room {room:g} °C, target {value:g} °C", value, want, tuple(cmds))

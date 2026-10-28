@@ -202,3 +202,32 @@ async def test_unavailable_heater_is_skipped(hass, calls):
     await setup(hass)
     await set_target(hass, "large", 18, revision=1)
     assert sent(calls) == [("climate.mill_1", 21.0)]
+
+
+async def test_switched_off_heater_is_kept_off(hass, calls, hass_storage, freezer):
+    modes = async_mock_service(hass, "climate", "set_hvac_mode")
+    await setup(hass)
+    await set_target(hass, "large", 18, revision=1)
+    set_heater(hass, "climate.mill_1", 21.0)
+    set_heater(hass, "climate.mill_2", 21.0)
+    freezer.tick(timedelta(minutes=2))   # past the per-heater command interval
+    await hass.services.async_call(DOMAIN, "set_heater_enabled",
+                                   {"entity_id": "climate.mill_2", "enabled": False},
+                                   blocking=True)
+    await hass.async_block_till_done()
+    assert [(c.data["entity_id"], c.data["hvac_mode"]) for c in modes] == [("climate.mill_2", "off")]
+    assert status(hass).attributes["disabled_heaters"] == ["climate.mill_2"]
+    assert status(hass, "small").attributes["disabled_heaters"] == []
+    assert status(hass).attributes["mode"] == "follow"
+    assert hass_storage[DOMAIN]["data"]["disabled"] == {"large": ["climate.mill_2"]}
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(DOMAIN, "set_heater_enabled",
+                                       {"entity_id": "climate.sauna", "enabled": False},
+                                       blocking=True)
+
+
+async def test_switched_off_heaters_are_restored_after_a_restart(hass, calls, hass_storage):
+    hass_storage[DOMAIN] = {"version": 1, "minor_version": 1, "key": DOMAIN, "data": {
+        "targets": {}, "disabled": {"large": ["climate.mill_1", "climate.gone"]}}}
+    await setup(hass)
+    assert status(hass).attributes["disabled_heaters"] == ["climate.mill_1"]

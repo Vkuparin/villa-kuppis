@@ -26,6 +26,9 @@ villa_kuppis_cottage:
   # A change made by hand (heater, Google Home, HA UI) pauses the room.
   manual_hold_minutes: 240
   max_commands_per_hour: 12
+  # A heater switched off in Villa Kuppis still holds safe_setpoint in
+  # fallback, so a forgotten switch never leaves a room unheated.
+  fallback_heats_disabled: true
   rooms:
     large:
       name: Iso huone

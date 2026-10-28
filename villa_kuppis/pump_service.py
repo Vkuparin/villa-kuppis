@@ -1321,7 +1321,8 @@ class PumpService:
         """Automaatio switch of one site (home pumps or cottage heaters)."""
         if site == "cottage":
             self.store.set_cottage_automation(on, actor, self._now().isoformat())
-            if on and self.cottage is not None:
+            # On sends the plan at once; off hands the rooms back to their fallback.
+            if self.cottage is not None:
                 try:
                     self.cottage.tick_targets()
                 except Exception as error:

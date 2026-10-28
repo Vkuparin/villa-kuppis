@@ -1,5 +1,10 @@
 # Muutokset
 
+## 0.4.25
+
+- Mökin Automaatio-kytkin toimii: pois päältä mökille ei lähetetä tavoitteita, ja patterit siirtyvät turvalämpöön noin minuutissa. Sivulla näkyy siitä ilmoitus.
+- Jokaisen mökin patterin voi kytkeä pois käytöstä ja takaisin omalla kytkimellään. Pois kytketty patteri pidetään pois päältä, mutta turvalämpö käyttää sitä silti jäätymisen estoon. Muutos näkyy Tapahtumissa. Vaatii mökin integraation version 0.4.0 (aja install.sh mökin Home Assistantissa).
+
 ## 0.4.24
 
 - Uusi ulkoasu: sivupalkki (puhelimessa alapalkki), tervehdys ja yleiskatsaus, jossa sähkön hinta nyt ja pylväinä tänään ja huomenna, ulko- ja sisälämpötila sekä pumput.

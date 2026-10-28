@@ -63,6 +63,7 @@ _ROLE_BY_CLASS = {"temperature": "temperature", "humidity": "humidity",
                   "carbon_dioxide": "co2", "pm25": "pm25"}
 ACTOR_CONTROLLER = "Mökin ohjain"
 ACTOR_MANUAL = "käsin"
+INTEGRATION_DOMAIN = "villa_kuppis_cottage"
 DEFAULT_SAMPLE_INTERVAL = 15.0
 DEFAULT_TARGET_INTERVAL = 60.0     # price targets are sent at most this often
 VISITS_DB = "visits.db"
@@ -336,6 +337,18 @@ def _num(value):
     return float(value) if math.isfinite(value) else None
 
 
+class HeaterSwitchError(ValueError):
+    """A heater on/off request that cannot be sent; the message is Finnish."""
+
+
+def heater_switched(entity_id: str, enabled: bool) -> Callable[[dict], bool]:
+    """Read-back check: the room status sensor lists the heater as switched off or not."""
+    def check(state: dict) -> bool:
+        disabled = (state.get("attributes") or {}).get("disabled_heaters")
+        return isinstance(disabled, list) and (entity_id not in disabled) == enabled
+    return check
+
+
 class CottageSite:
     """The cottage's gateway, readings, history and events for PumpService.
 
@@ -368,6 +381,7 @@ class CottageSite:
         self._target_lock = threading.Lock()
         self._known: frozenset = frozenset()
         self._roles: dict[str, str] = {}   # device id -> role seen with a reading
+        self._switches: dict[str, str] = {}   # heater device id -> last on/off request id
         self._sample_lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -498,6 +512,36 @@ class CottageSite:
             sender = self._ensure_sender()
             if sender is not None:
                 sender.preview()
+
+    def set_heater_enabled(self, device_id, enabled, actor: str) -> dict:
+        """Switch one heater off or back on through its room's integration.
+
+        Raises ``HeaterSwitchError`` when the heater or its room status
+        sensor is not bound, or the integration is too old to switch heaters.
+        """
+        if not isinstance(device_id, str) or not isinstance(enabled, bool):
+            raise HeaterSwitchError("Patteri ja päälle/pois-tila puuttuvat.")
+        bindings = {b.device_id: b for b in self._bindings() if b.room in ROOMS}
+        heater = bindings.get(device_id)
+        if heater is None or role_of(heater) != "heater":
+            raise HeaterSwitchError("Patteria ei löydy mökin laitteista.")
+        status = next((b for b in bindings.values()
+                       if b.room == heater.room and role_of(b) == "status"), None)
+        attrs = (self._gateway.snapshot().get(status.device_id) or {}).get("attributes") \
+            if status is not None else None
+        if not isinstance(attrs, dict) or "disabled_heaters" not in attrs:
+            raise HeaterSwitchError("Mökin integraatio ei vielä tue pattereiden "
+                                    "kytkemistä: päivitä se (install.sh).")
+        cmd = self._gateway.submit_service(
+            status.device_id, INTEGRATION_DOMAIN, "set_heater_enabled",
+            {"entity_id": heater.entity_id, "enabled": enabled}, actor,
+            heater_switched(heater.entity_id, enabled))
+        self._switches[device_id] = cmd["request_id"]
+        if cmd["state"] != "failed":
+            self._store.add_event(int(self._now().timestamp()), SITE_ID, heater.room, actor,
+                                  "heater", None, "on" if enabled else "off",
+                                  heater.label or heater.entity_id)
+        return cmd
 
     def visit_view(self) -> dict:
         visit = self._visits.active()
@@ -724,17 +768,26 @@ class CottageSite:
                         room[role] = {**base, "value": _num(state.get("value")),
                                       "unit": (state.get("caps") or {}).get("unit")}
                 elif role == "heater":
+                    request_id = self._switches.get(binding.device_id)
                     room["heaters"].append({
-                        **base, "available": bool(state.get("available")),
+                        **base, "entity_id": binding.entity_id,
+                        "available": bool(state.get("available")),
                         "setpoint": _num(state.get("setpoint")),
-                        "mode": state.get("mode")})
+                        "mode": state.get("mode"),
+                        "switch": self._gateway.command(request_id) if request_id else None})
                 elif role == "status" and room["status"] is None:
                     attrs = state.get("attributes") or {}
                     room["status"] = {
                         **base, "target": _num(state.get("value")),
                         **{key: attrs.get(key) for key in (
                             "mode", "reason", "drive", "revision", "requested_target",
-                            "valid_until", "manual_until", "manual_by")}}
+                            "valid_until", "manual_until", "manual_by", "disabled_heaters")}}
+            disabled = (room["status"] or {}).get("disabled_heaters")
+            for heater in room["heaters"]:
+                # Older integrations have no disabled_heaters: no switch.
+                heater["switchable"] = isinstance(disabled, list)
+                heater["enabled"] = not (isinstance(disabled, list)
+                                         and heater["entity_id"] in disabled)
             room["state"] = _worst(statuses) if statuses else "unbound"
             rooms.append(room)
         automation = self._targets_cfg["automation_on"]() if self._targets_cfg else False
@@ -810,10 +863,11 @@ class FakeSiteGateway:
         self._lock = threading.Lock()
         self._written: dict[str, dict] = {}     # room -> the integration's last accepted write
         self._commands: dict[str, dict] = {}
+        self._disabled: set[str] = set()         # heater entities switched off
 
     def submit_service(self, device_id, domain, service, data, actor, confirm, *,
                        target_entity: bool = False) -> dict:
-        """Act like the cottage integration: accept a set_target and report it back."""
+        """Act like the cottage integration: accept a write and report it back."""
         now = self._now()
         cmd = {"request_id": uuid.uuid4().hex, "site_id": SITE_ID, "device_id": device_id,
                "action": f"{domain}.{service}", "value": dict(data), "actor": actor,
@@ -822,6 +876,11 @@ class FakeSiteGateway:
         with self._lock:
             if not self._started:
                 cmd.update(state="failed", detail="Home Assistant is not connected")
+            elif service == "set_heater_enabled":
+                if data["enabled"]:
+                    self._disabled.discard(data["entity_id"])
+                else:
+                    self._disabled.add(data["entity_id"])
             else:
                 until = now + timedelta(minutes=float(data.get("valid_minutes", 45)))
                 self._written[data["room"]] = {
@@ -874,6 +933,7 @@ class FakeSiteGateway:
                 "valid_until": None, "manual_until": None, "manual_by": None}),
         }
         with self._lock:
+            disabled = set(self._disabled)
             for room, write in self._written.items():
                 if write["valid_until"] <= now:
                     continue
@@ -893,11 +953,16 @@ class FakeSiteGateway:
                      "caps": {}, "status": "ok", "pending": None}
             if binding.kind == "climate":
                 boost = binding.room == "large" and large_temp < 19.0
+                off = binding.entity_id in disabled
                 state.update({
-                    "power": True, "mode": "heat", "fan": None, "room_temp": None,
+                    "power": not off, "mode": "off" if off else "heat", "fan": None,
+                    "room_temp": None,
                     "setpoint": 22.0 if boost else (19.0 if binding.room == "large" else 7.0)})
             elif binding.device_id in status:
                 target, attrs = status[binding.device_id]
+                attrs = {**attrs, "disabled_heaters": sorted(
+                    b.entity_id for b in DEMO_BINDINGS
+                    if b.room == binding.room and b.entity_id in disabled)}
                 state.update({"value": target, "attributes": attrs,
                               "caps": {"unit": "°C", "device_class": "temperature"}})
             else:
@@ -963,6 +1028,19 @@ section.cottage[hidden] { display: none; }
 .cottage-rooms .heater { display: flex; justify-content: space-between; gap: .6rem;
                          padding: .2rem 0; font-size: .85rem; color: var(--text2); }
 .cottage-rooms .heater:first-of-type { margin-top: .3rem; }
+.heater-sw { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center;
+             gap: .3rem .8rem; padding: .45rem 0; border-top: 1px solid var(--line2);
+             font-size: .88rem; }
+.heater-sw .hs-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.heater-sw .hs-val { color: var(--text2); font-variant-numeric: tabular-nums; }
+.heater-sw.off .hs-name, .heater-sw.off .hs-val { color: var(--text3); }
+.heater-sw button.switch { min-height: 44px; font-size: .82rem; color: var(--text2); }
+.heater-sw button.switch span:last-child { min-width: 3.2rem; text-align: left; }
+.heater-sw .hs-msg { grid-column: 1 / -1; font-size: .8rem; color: var(--info); }
+.heater-sw .hs-msg.err { color: var(--err); }
+.heater-sw .hs-msg:empty { display: none; }
+#cottage-note:not(:empty) { margin: 0; padding: .6rem .8rem; border-radius: 10px;
+                            background: var(--surface2); border-left: 3px solid var(--info); }
 .visit-form { display: flex; flex-wrap: wrap; gap: .8rem 1.2rem; align-items: flex-end;
               padding-top: .8rem; border-top: 1px solid var(--line2); }
 .visit-form label, .visit-form fieldset { display: flex; flex-direction: column; gap: .25rem;
@@ -988,6 +1066,72 @@ section.cottage[hidden] { display: none; }
 """
 
 SCRIPT = r"""
+// One heater's on/off switch: a cottage heater from /api/cottage in, a row
+// with a slider switch out. It shows a sent switch until the cottage
+// confirms it, and calls onChange after a request so the caller can reload.
+function vkHeaterSwitch(heater, onChange) {
+  var num = new Intl.NumberFormat("fi-FI", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  function el(tag, cls, text, title) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined && text !== null) e.textContent = text;
+    if (title) e.title = title;
+    return e;
+  }
+  var cmd = heater.switch;
+  var recent = cmd && cmd.finished_at &&
+    Date.now() - new Date(cmd.finished_at).getTime() < 10 * 60000;
+  var sending = cmd && cmd.state === "pending";
+  var on = sending ? cmd.value.enabled : heater.enabled !== false;
+  var row = el("div", "heater-sw" + (on ? "" : " off"));
+  row.appendChild(el("span", "hs-name", heater.label, heater.entity_id || ""));
+  var value = !heater.available ? "ei saatavilla"
+    : heater.mode === "off" ? "pois" : heater.setpoint === null ? "–" : num.format(heater.setpoint) + " °C";
+  row.appendChild(el("span", "hs-val", value, "Patterin oma asetus ja tila. Päivitetty " +
+    (heater.source_ts ? new Date(heater.source_ts).toLocaleTimeString("fi-FI") : "ei tiedossa") + "."));
+  var btn = el("button", "switch", null, heater.switchable
+    ? "Pois kytketty patteri pidetään pois päältä. Turvalämpö käyttää sitä silti jäätymisen estoon."
+    : "Mökin integraatio ei vielä tue pattereiden kytkemistä; päivitä se (install.sh).");
+  btn.type = "button";
+  btn.setAttribute("role", "switch");
+  btn.setAttribute("aria-checked", on ? "true" : "false");
+  btn.setAttribute("aria-label", heater.label + " käytössä");
+  btn.disabled = !heater.switchable || sending;
+  btn.appendChild(el("span", "track"));
+  btn.appendChild(el("span", "", on ? "Päällä" : "Pois"));
+  row.appendChild(btn);
+  var msg = el("span", "hs-msg", sending ? "Lähetetään mökille…" : "");
+  if (cmd && recent && (cmd.state === "failed" || cmd.state === "unknown")) {
+    msg.className = "hs-msg err";
+    msg.textContent = "Kytkentä ei onnistunut.";
+    msg.title = cmd.detail || "";
+  }
+  row.appendChild(msg);
+  btn.addEventListener("click", function () {
+    var want = btn.getAttribute("aria-checked") !== "true";
+    btn.disabled = true;
+    btn.setAttribute("aria-checked", want ? "true" : "false");
+    btn.lastChild.textContent = want ? "Päällä" : "Pois";
+    msg.className = "hs-msg";
+    msg.textContent = "Lähetetään mökille…";
+    fetch("api/cottage/heater", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ device_id: heater.device_id, enabled: want }) })
+      .then(function (r) { return r.json().then(function (j) { return [r.ok, j]; }); })
+      .then(function (res) {
+        if (!res[0] || res[1].state === "failed") {
+          msg.className = "hs-msg err";
+          msg.textContent = res[0] ? "Kytkentä ei onnistunut." : (res[1].detail || "Kytkentä ei onnistunut.");
+          msg.title = res[1].detail || "";
+        }
+        if (onChange) onChange();
+      }).catch(function () {
+        msg.className = "hs-msg err";
+        msg.textContent = "Yhteys palveluun katkesi.";
+      });
+  });
+  return row;
+}
+
 (function () {
   "use strict";
   var COTTAGE_MODES = { follow: "Seuraa anturia", thermostat: "Patterien termostaatti",
@@ -1120,6 +1264,7 @@ SCRIPT = r"""
       c.appendChild(el("p", "detail", "Huoneen tilatietoa ei ole liitetty."));
     }
     room.heaters.forEach(function (hh) {
+      if (hh.switchable) { c.appendChild(vkHeaterSwitch(hh, load)); return; }
       var ok = hh.status === "ok";
       var text = !hh.available ? "ei saatavilla" : temp(hh.setpoint) +
         (hh.mode && hh.mode !== "heat" ? " (" + (HEATER_MODES[hh.mode] || hh.mode) + ")" : "");
@@ -1142,8 +1287,10 @@ SCRIPT = r"""
     $conn.textContent = "Yhteys mökkiin: " + conn[1];
     $conn.title = data.site.error || "Viimeisin yhteys: " + when(data.site.last_contact);
     var missing = data.site.missing_bindings || [];
-    $note.textContent = missing.length ? "Home Assistantista puuttuu liitettyjä laitteita: " +
-      missing.join(", ") + "." : "";
+    $note.textContent = (AUTOMATION_ON ? "" : "Automaatio on pois päältä: mökille ei lähetetä " +
+      "tavoitteita, ja patterit siirtyvät turvalämpöön noin minuutin kuluttua. ") +
+      (missing.length ? "Home Assistantista puuttuu liitettyjä laitteita: " +
+      missing.join(", ") + "." : "");
     $rooms.textContent = "";
     data.rooms.forEach(function (room) { $rooms.appendChild(card(room)); });
     if (typeof setExtraHistUnits === "function")

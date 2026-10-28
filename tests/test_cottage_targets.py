@@ -144,6 +144,31 @@ class TargetTests(IsolatedAsyncioTestCase):
         self.assertEqual(self.sender.tick(), [])
         self.assertEqual(self.ha.calls, [])
 
+    async def test_automation_off_releases_each_room_once_and_on_resumes(self):
+        self.ha.schedules = True
+        await self.settle(self.sender.tick())
+        self.automation = False
+        sent = self.sender.tick()
+        self.assertEqual(len(sent), 2)
+        await self.settle(sent)
+        for cmd in sent:
+            self.assertEqual(self.gateway.command(cmd["request_id"])["state"], "confirmed")
+        # Below every safe setpoint, a minute long and without the plan: the
+        # cottage drops to its fallback instead of following the old schedule.
+        released = {t["room"]: t for t in self.ha.targets[-2:]}
+        for t in released.values():
+            self.assertEqual((t["target"], t["valid_minutes"], t["revision"]),
+                             (0.0, 1, self.day_start))
+            self.assertNotIn("schedule", t)
+        self.clock.advance(INTERVAL_SECONDS)
+        self.assertEqual(self.sender.tick(), [])          # once is enough
+        self.automation = True
+        await self.settle(self.sender.tick())
+        latest = {t["room"]: t for t in self.ha.targets[-2:]}
+        self.assertEqual(latest["large"]["revision"], self.day_start + INTERVAL_SECONDS)
+        self.assertGreater(latest["large"]["target"], 0.0)
+        self.assertIn("schedule", latest["large"])
+
     async def test_disconnected_sends_nothing_then_only_the_current_target(self):
         await self.settle(self.sender.tick())
         await self.ha.drop()

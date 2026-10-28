@@ -35,10 +35,12 @@ class SimHeater:
     on: bool = False
     available: bool = True
     ignore_commands: bool = False
+    enabled: bool = True
 
     def view(self) -> control.Heater:
         return control.Heater(self.entity_id, self.available, self.mode if self.available else None,
-                              self.setpoint if self.available else None, 5.0, 35.0, 0.5)
+                              self.setpoint if self.available else None, 5.0, 35.0, 0.5,
+                              self.enabled)
 
 
 class Room:
@@ -285,6 +287,42 @@ class CommandRateTests(unittest.TestCase):
         sim.run(5)
         self.assertNotIn("manual", sim.modes_since(START))
         self.assertTrue(any(c.entity_id == heater.entity_id for _, c in sim.commands[mark:]))
+
+
+class SwitchedOffHeaterTests(unittest.TestCase):
+    def test_switched_off_heater_stays_off_and_returns_when_switched_on(self):
+        sim = Sim(large_room(), target=18.0)
+        heater = sim.room.heaters[2]
+        sim.run(60)
+        heater.enabled = False
+        sim.run(60)
+        self.assertEqual(heater.mode, "off")
+        self.assertNotIn("manual", sim.modes_since(START))
+        off_cmds = [c for _, c in sim.commands if c.entity_id == heater.entity_id
+                    and c.service == "set_hvac_mode" and c.value == "off"]
+        self.assertEqual(len(off_cmds), 1)
+        heater.mode = "heat"   # someone turns it on at the cottage
+        sim.run(10)
+        self.assertEqual(heater.mode, "off")
+        self.assertNotIn("manual", sim.modes_since(START))
+        heater.enabled = True
+        sim.run(10)
+        self.assertEqual(heater.mode, "heat")
+        self.assertNotIn("manual", sim.modes_since(START))
+
+    def test_fallback_heats_a_switched_off_heater_unless_configured_not_to(self):
+        for heat_all, expected in ((True, "heat"), (False, "off")):
+            settings = replace(SETTINGS, fallback_heats_disabled=heat_all)
+            sim = Sim(large_room(), target=18.0, valid_hours=1, settings=settings)
+            heater = sim.room.heaters[0]
+            heater.enabled = False
+            sim.run(30)
+            self.assertEqual(heater.mode, "off")
+            sim.run(2 * 60)
+            self.assertEqual(sim.decisions[-1][1].mode, "fallback")
+            self.assertEqual(heater.mode, expected, heat_all)
+            if heat_all:
+                self.assertEqual(heater.setpoint, SETTINGS.safe_setpoint)
 
 
 class SetpointTests(unittest.TestCase):

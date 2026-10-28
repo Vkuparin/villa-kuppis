@@ -19,9 +19,10 @@ integration that reports ``schedule_steps`` on its status sensor; an older
 one gets the single target as before.
 
 After a disconnect nothing is replayed: the next tick sends only the target
-valid now and the plan from it on. With ``Automaatio`` off nothing is sent, so economic control
-stops and the cottage's local fallback takes over when the last target
-expires.
+valid now and the plan from it on. Switching ``Automaatio`` off releases
+each room once: a target below every safe setpoint, valid for a minute and
+without a schedule, so the cottage drops to its fallback at once instead of
+following the last plan for up to a day. After that nothing is sent.
 
 With ``Hintaohjaus`` set to ``Optimoitu`` a room whose learned model passed
 its held-out day gets the heating optimizer's target instead (card F5.2,
@@ -51,6 +52,10 @@ DOMAIN = "villa_kuppis_cottage"
 VALID_MINUTES = 45          # three periods: a missed write or two is not a fallback
 RETRY_SECONDS = 60.0        # resend an unacknowledged target after this
 ACTOR = "Suunnitelma"
+# Automaatio off: the integration clamps this to its safe setpoint and the
+# short validity ends in fallback a minute later.
+RELEASE_TARGET = 0.0
+RELEASE_MINUTES = 1
 
 
 @dataclass(frozen=True)
@@ -280,6 +285,30 @@ class CottageTargetSender:
                 done.add(room)
         return done
 
+    def _release(self) -> list[dict]:
+        """Automaatio off: hand each room that got a plan back to its fallback."""
+        if self._gateway.health()["state"] not in ("ok", "stale"):
+            return []
+        now = self._now()
+        out = []
+        for room, previous in list(self._sent.items()):
+            device_id = self._rooms.get(room)
+            if device_id is None:
+                continue
+            revision = previous[1]
+            if previous[0] is None:   # released already: retry only a lost write
+                state = (self._gateway.command(previous[2]) or {}).get("state")
+                if state in ("pending", "confirmed") or now - previous[3] < self._retry:
+                    continue
+            cmd = self._gateway.submit_service(
+                device_id, DOMAIN, "set_target",
+                {"room": room, "target": RELEASE_TARGET, "revision": revision,
+                 "valid_minutes": RELEASE_MINUTES},
+                ACTOR, acknowledged(RELEASE_TARGET, revision))
+            self._sent[room] = (None, revision, cmd["request_id"], now)
+            out.append(cmd)
+        return out
+
     def preview(self) -> dict[str, RoomTarget]:
         """Refresh ``last`` and ``visit_plan`` without sending anything."""
         self.last = self.targets()
@@ -289,7 +318,7 @@ class CottageTargetSender:
         """Send what is due; returns the commands submitted this tick."""
         if not self._automation_on():
             self.preview()
-            return []
+            return self._release()
         if self._gateway.health()["state"] not in ("ok", "stale"):
             return []   # retried on the first tick after the reconnect
         now = self._now()

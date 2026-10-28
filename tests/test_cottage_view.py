@@ -505,6 +505,69 @@ class ServiceHttpTests(unittest.TestCase):
         status, events = self.get(server, "/api/events?limit=1")
         self.assertEqual(len(events), 1)
 
+    def post(self, server, path, body):
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_address[1]}{path}",
+            data=json.dumps(body).encode(), method="POST",
+            headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return response.status, json.loads(response.read())
+        except urllib.error.HTTPError as error:
+            return error.code, json.loads(error.read())
+
+    def test_each_heater_switches_off_and_back_on(self):
+        service = self.make_service()
+        server = self.serve(service)
+        _, body = self.get(server, "/api/cottage")
+        heaters = {h["device_id"]: h for r in body["rooms"] for h in r["heaters"]}
+        self.assertTrue(all(h["switchable"] and h["enabled"] and h["switch"] is None
+                            for h in heaters.values()))
+        status, cmd = self.post(server, "/api/cottage/heater",
+                                {"device_id": "large-heater-2", "enabled": False})
+        self.assertEqual((status, cmd["state"]), (200, "confirmed"))
+        self.assertEqual(cmd["action"], "villa_kuppis_cottage.set_heater_enabled")
+        self.assertEqual(cmd["device_id"], "large-status")
+        self.assertEqual(cmd["value"], {"entity_id": "climate.large_mill_2", "enabled": False})
+        _, body = self.get(server, "/api/cottage")
+        heaters = {h["device_id"]: h for r in body["rooms"] for h in r["heaters"]}
+        self.assertFalse(heaters["large-heater-2"]["enabled"])
+        self.assertEqual(heaters["large-heater-2"]["mode"], "off")
+        self.assertEqual(heaters["large-heater-2"]["switch"]["state"], "confirmed")
+        self.assertTrue(heaters["large-heater-1"]["enabled"])
+        _, events = self.get(server, "/api/events")
+        self.assertEqual((events[0]["action"], events[0]["requested"], events[0]["detail"]),
+                         ("heater", "off", "Mill 1050 W (2)"))
+        self.post(server, "/api/cottage/heater", {"device_id": "large-heater-2", "enabled": True})
+        _, body = self.get(server, "/api/cottage")
+        self.assertTrue(all(h["enabled"] for r in body["rooms"] for h in r["heaters"]))
+
+        for bad in ({"device_id": "large-status", "enabled": False},
+                    {"device_id": "large-heater-9", "enabled": False},
+                    {"device_id": "large-heater-1", "enabled": "no"}):
+            status, error = self.post(server, "/api/cottage/heater", bad)
+            self.assertEqual(status, 400, bad)
+            self.assertTrue(error["detail"])
+
+    def test_heaters_without_integration_support_have_no_switch(self):
+        service = self.make_service()
+        server = self.serve(service)
+        gateway = service.cottage._gateway
+        original = gateway.snapshot
+
+        def old_integration():
+            out = original()
+            for state in out.values():
+                (state.get("attributes") or {}).pop("disabled_heaters", None)
+            return out
+        gateway.snapshot = old_integration
+        _, body = self.get(server, "/api/cottage")
+        self.assertFalse(any(h["switchable"] for r in body["rooms"] for h in r["heaters"]))
+        status, error = self.post(server, "/api/cottage/heater",
+                                  {"device_id": "large-heater-1", "enabled": False})
+        self.assertEqual(status, 400)
+        self.assertIn("install.sh", error["detail"])
+
     def test_without_a_cottage_the_paths_are_empty_and_history_is_refused(self):
         server = self.serve(self.make_service(with_cottage=False))
         self.assertEqual(self.get(server, "/api/cottage"),
