@@ -35,6 +35,7 @@ Codex, Hermes and Claude Code (through `CLAUDE.md`) all read this file. This is 
 | Cottage integration in Home Assistant core (separate venv: pip install -r tests_ha/requirements.txt; Linux/WSL) | python -m pytest -c tests_ha/pytest.ini tests_ha |
 | Pump app tests (mock devices and localhost HTTP) | .venv\Scripts\python -m unittest discover -s tests -p "test_pump_app.py" -v |
 | Home Assistant devices by area tests (synthetic registries, fake Home Assistant on localhost, demo web API) | .venv\Scripts\python -m unittest discover -s tests -p "test_devices.py" -v |
+| Device rules tests (fake catalog and clock, demo web API) | .venv\Scripts\python -m unittest discover -s tests -p "test_rules.py" -v |
 | Cottage readings, history and events tests (fake Home Assistant on localhost, injected clocks) | .venv\Scripts\python -m unittest discover -s tests -p "test_cottage_view.py" -v |
 | Bind cottage devices (needs `sites` in the config; discover reads the cottage Home Assistant, owner approval for live) | .venv\Scripts\python -m villa_kuppis.sites --config CONFIG_FILE discover; .venv\Scripts\python -m villa_kuppis.sites --config CONFIG_FILE bind cottage DEVICE_ID ENTITY_ID KIND --room large; .venv\Scripts\python -m villa_kuppis.sites --config CONFIG_FILE list |
 | Runtime, credential and backup tests (mock network boundaries; temporary data) | .venv\Scripts\python -m unittest discover -s tests -p "test_runtime.py" -v; .venv\Scripts\python -m unittest discover -s tests -p "test_backup.py" -v |

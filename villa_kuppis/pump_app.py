@@ -23,6 +23,8 @@ fully offline) plus a small JSON API on top of PumpService:
 * POST /api/devices/layout   {"site", "key", "hidden" | "name" | "seen"} or {"site", "area", "order"}
                              or {"site", "areas"} or {"site", "area", "area_hidden"}
 * POST /api/devices/lights_off  {"site", "area"}: every light in the area off
+* POST /api/devices/rules  {"site", "rule", "id"?} saves a rule (rules.py);
+                           {"site", "id", "enabled"} or {"site", "id", "delete": true}
 * POST /api/settings  {"scope", "key", "value" | "reset"} (card F3.5)
 * GET/POST /api/away  home-away button, {"away": bool} (card F6.1)
 * GET/POST /api/automation  Automaatio switches; {"on": bool, "site": "home" | "cottage"}
@@ -2209,7 +2211,8 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
                              "version": os.environ.get("VK_VERSION", "")})
         elif parts.path in ("/api/command", "/api/prices/refresh", "/api/visit/end",
                             "/api/cottage/heater", "/api/devices/command",
-                            "/api/devices/layout", "/api/devices/lights_off"):
+                            "/api/devices/layout", "/api/devices/lights_off",
+                            "/api/devices/rules"):
             self._json(405, {"error": "method_not_allowed",
                              "detail": "use POST for this path"})
         elif parts.path.startswith("/api/"):
@@ -2270,7 +2273,7 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
         elif parts.path == "/api/cottage/heater":
             self._post_heater(identity)
         elif parts.path in ("/api/devices/command", "/api/devices/layout",
-                            "/api/devices/lights_off"):
+                            "/api/devices/lights_off", "/api/devices/rules"):
             self._post_devices(parts.path.rpartition("/")[2], identity)
         elif parts.path in ("/", "/api/view", "/api/events", "/api/history",
                             "/api/identity", "/api/plan", "/api/rooms",
@@ -2338,6 +2341,8 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             elif what == "layout":
                 catalog.layout(body)
                 result = {"ok": True}
+            elif what == "rules":
+                result = catalog.save_rule(body)
             else:
                 if not isinstance(body.get("area"), str):
                     raise DeviceError("area puuttuu.")

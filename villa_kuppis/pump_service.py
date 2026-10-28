@@ -1170,7 +1170,10 @@ class PumpService:
         # gets the cottage site and returns {site: gateway}.
         from .devices import DeviceHub
         self.devices = DeviceHub(
-            self._data_dir, device_sources(self.cottage) if device_sources else {}, now=now)
+            self._data_dir, device_sources(self.cottage) if device_sources else {}, now=now,
+            automation_on=lambda site: (self.cottage_automation_on() if site == "cottage"
+                                        else self.automation.automation_on()),
+            prices=self.device_prices)
         # Phone alerts (alerts.py) when a notifier is given.
         self.alerts = None
         if notifier is not None:
@@ -1313,6 +1316,17 @@ class PumpService:
                 "available": self.automation.available,
                 "cottage": {"on": self.cottage_automation_on(),
                             "available": self.cottage is not None}}
+
+    def device_prices(self, site: str, day) -> list[tuple[int, float]]:
+        """A local day's spot prices in c/kWh, with VAT as the site's settings say
+        (device rules)."""
+        if not self._prices_db.exists():
+            return []
+        from .storage import PriceStore
+        factor = Decimal(str(vat_factor(SettingsStore(self.store.path).overrides(), site)))
+        with PriceStore(self._prices_db) as store:
+            rows = store.stored_day(day.isoformat()) or []
+        return [(r.ts_utc, float(r.price_c_kwh * factor)) for r in rows]
 
     def cottage_automation_on(self) -> bool:
         """The cottage switch; until first used it follows the home switch."""

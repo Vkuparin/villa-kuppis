@@ -1,5 +1,10 @@
 # Muutokset
 
+## 0.4.27
+
+- Säännöt Laitteet-osiossa: laite päälle aikavälillä (kellonaika tai auringonnousu/-lasku siirrolla, esimerkiksi jouluvalot auringonlaskusta klo 23:een), laite päälle sähkön halvimpina 15 minuutin jaksoina valitulla ikkunalla, tai toiminnot kun jotain tapahtuu (hetki, anturin raja, laite päälle tai pois, joku tulee kotiin tai viimeinen lähtee) ja valinnaiset ehdot aikavälistä ja hintarajasta.
+- Säännöt odottavat, kun kohteen Automaatio on pois päältä. Aikaväli- ja halvimpien tuntien säännöt muuttavat laitetta vain muutoshetkellä, joten käsin tehty muutos pysyy seuraavaan muutokseen asti. Sääntöjen toiminnot näkyvät Tapahtumissa.
+
 ## 0.4.26
 
 - Uusi Laitteet-osio Koti- ja Mökki-sivuilla: kaikki Home Assistantissa johonkin alueeseen (huoneeseen) lisätyt laitteet näkyvät huoneittain ilman sovelluspäivitystä. Uudet laitteet saavat Uusi-merkin.

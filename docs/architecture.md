@@ -83,6 +83,8 @@ Every other Home Assistant device needs no code (`villa_kuppis/devices.py`). The
 
 Order, hidden tiles and areas, display names and the "new" mark live in `pumps.db`; nothing is written back to Home Assistant. Commands use only services the entity reports as supported and go through the gateway (`submit_entity`), tracked like the other commands and logged as events. Numeric sensors and on/off states are recorded each minute on change (an unchanged sensor every 15 minutes); rows older than 30 days are thinned to 15-minute means and kept.
 
+Rules for these devices are data made in the page (`villa_kuppis/rules.py`), checked every 30 seconds: a device on between two moments (a time, or sunrise or sunset with an offset, from Home Assistant's `sun.sun`), on in the cheapest 15-minute periods of a daily window, or actions when a moment passes, a sensor crosses a value, a device or binary sensor turns on or off, or someone comes home or the last one leaves (`person` entities), with an optional time window and price limit. They wait while the site's Automaatio switch is off. The first two act only when the wanted state changes, so a person's change holds until the next change point. Villa Kuppis never writes Home Assistant automations.
+
 ## Cottage control
 
 Villa Kuppis computes each room's effective target for every 15-minute period (prices, forecast, fixed thresholds, later the optimizer, visits). When the target changes it writes it to the room's Home Assistant helper with a heartbeat and revision. After a reconnect it reads actual states and sends only the currently valid target; missed periods show as gaps.

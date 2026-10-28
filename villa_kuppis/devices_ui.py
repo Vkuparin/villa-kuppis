@@ -11,6 +11,14 @@ SECTION_HTML = r"""
     </div>
     <p id="dev-note" class="detail"></p>
     <div id="dev-areas" class="dev-areas"></div>
+    <div class="panel dev-rules" id="dev-rules" hidden>
+      <div class="panel-head">
+        <h2 title="Villa Kuppiksen omat säännöt tämän kohteen laitteille. Ne odottavat, kun Automaatio on pois päältä."><span data-icon="clock"></span>Säännöt</h2>
+        <div class="tools"><button type="button" id="dev-rule-add" class="primary">Uusi sääntö</button></div>
+      </div>
+      <p id="dev-rules-note" class="detail"></p>
+      <div id="dev-rules-list"></div>
+    </div>
     <details class="panel dev-autos" id="dev-autos" hidden>
       <summary title="Home Assistantissa tehdyt automaatiot. Täältä voit kytkeä niitä päälle ja pois; muokkaus tehdään Home Assistantissa.">
         <span data-icon="auto"></span>Home Assistantin automaatiot <span id="dev-autos-count" class="badge mute"></span></summary>
@@ -86,6 +94,39 @@ section.devices[hidden] { display: none; }
 .tile .t-edit button.switch { margin-left: auto; min-height: 34px; font-size: .78rem; color: var(--text2);
                               border: 0; background: none; padding: 0; }
 .tile .t-edit button.switch span:last-child { display: none; }
+.dev-rules[hidden] { display: none; }
+#dev-rules-note:empty { display: none; }
+.dev-rule { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center;
+            gap: .15rem .6rem; padding: .55rem 0; border-top: 1px solid var(--line2); }
+.dev-rule .r-name { font-weight: 600; font-size: .92rem; }
+.dev-rule .r-sum { grid-column: 1; font-size: .86rem; color: var(--text2); }
+.dev-rule .r-stat { grid-column: 1; font-size: .78rem; color: var(--text3); }
+.dev-rule .r-stat.err { color: var(--err); }
+.dev-rule button.switch { grid-row: 1 / span 3; grid-column: 2; border: 0; background: none; min-height: 40px;
+                          font-size: .82rem; color: var(--text2); }
+.dev-rule .r-edit { grid-row: 1 / span 3; grid-column: 3; min-height: 38px; font-size: .84rem; }
+.dev-rule.off .r-name, .dev-rule.off .r-sum { color: var(--text3); }
+.rule-form label.fld select, .rule-form label.fld input { min-height: 44px; }
+.rule-form input[type=time], .rule-form input[type=number] {
+  min-height: 44px; padding: 0 .6rem; border: 1px solid var(--line3); border-radius: 10px;
+  background: var(--surface); color: var(--text); font-size: .95rem; }
+.rule-form [hidden] { display: none !important; }
+.rule-form .r-off { display: inline-flex; align-items: center; gap: .4rem; flex: 0 1 150px; color: var(--text3);
+                    font-size: .86rem; }
+.rule-form .r-off input { width: 90px; }
+.rule-form .r-line { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+.rule-form .r-line > * { flex: 1 1 140px; min-width: 0; }
+.rule-form .r-line input[type=number] { flex: 0 1 110px; }
+.rule-form fieldset { border: 1px solid var(--line2); border-radius: 12px; padding: .5rem .7rem .7rem; margin: .6rem 0; }
+.rule-form legend { font-size: .82rem; color: var(--text3); padding: 0 .3rem; }
+.rule-form .r-act { display: flex; flex-wrap: wrap; gap: .4rem; margin: .35rem 0; }
+.rule-form .r-act > select { flex: 1 1 150px; min-width: 0; }
+.rule-form .r-act input[type=number] { width: 90px; }
+.rule-form .r-act button { min-width: 44px; }
+.rule-form .r-buttons { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
+.rule-form .r-buttons .danger { margin-left: auto; color: var(--err); }
+.rule-form .r-msg { color: var(--err); font-size: .86rem; }
+.rule-form .r-msg:empty { display: none; }
 .dev-autos { padding: .2rem 1.1rem; }
 .dev-autos summary { display: flex; align-items: center; gap: .55rem; min-height: 48px; cursor: pointer;
                      font-weight: 600; font-size: .98rem; }
@@ -461,6 +502,331 @@ SCRIPT = r"""
       $autosList.appendChild(row);
     });
   }
+  // --- rules (rules.py) ---
+  var $rules = document.getElementById("dev-rules");
+  var $rulesList = document.getElementById("dev-rules-list");
+  var $rulesNote = document.getElementById("dev-rules-note");
+  var KIND_NAMES = { between: "Päällä aikavälillä", cheapest: "Halvimmat tunnit", event: "Kun tapahtuu…" };
+  var TRIGGER_NAMES = { time: "Tiettynä hetkenä", above: "Arvo nousee yli",
+    below: "Arvo laskee alle", turns_on: "Laite tai anturi menee päälle", turns_off: "Laite tai anturi menee pois",
+    arrive: "Joku tulee kotiin", leave: "Viimeinen lähtee" };
+  var ACTION_NAMES = { on: "Päälle", off: "Pois", brightness: "Kirkkaus %", run: "Käynnistä" };
+  function allDevices() {
+    var out = [];
+    (DATA ? DATA.areas : []).forEach(function (a) {
+      a.devices.forEach(function (d) { out.push({ d: d, area: a.name }); });
+    });
+    (DATA ? DATA.automations : []).forEach(function (a) {
+      out.push({ d: { key: a.key, name: a.name, kind: "automation", caps: { power: true } }, area: "Automaatiot" });
+    });
+    return out;
+  }
+  function devName(key) {
+    var f = allDevices().filter(function (x) { return x.d.key === key; })[0];
+    return f ? f.d.name : "(puuttuva laite)";
+  }
+  function hm(minutes) {
+    var m = Math.abs(minutes), h = Math.floor(m / 60), r = m % 60;
+    return (h ? h + " h" : "") + (h && r ? " " : "") + (r ? r + " min" : "");
+  }
+  function momentText(m) {
+    if (!m) return "";
+    if (m.type === "time") return "klo " + m.at;
+    var ev = m.event === "sunset" ? "auringonlasku" : "auringonnousu";
+    var evIn = m.event === "sunset" ? "auringonlaskua" : "auringonnousua";
+    var evOf = m.event === "sunset" ? "auringonlaskun" : "auringonnousun";
+    if (!m.offset) return ev;
+    return m.offset < 0 ? hm(m.offset) + " ennen " + evIn : hm(m.offset) + " " + evOf + " jälkeen";
+  }
+  function actionText(a) {
+    var what = a.action === "power" ? (a.value ? "päälle" : "pois") : a.action === "brightness"
+      ? "kirkkaus " + a.value + " %" : a.action === "run" ? "käynnistä" : a.action;
+    return devName(a.key) + " " + what;
+  }
+  function ruleText(r) {
+    if (r.kind === "between") return devName(r.key) + " päällä " + momentText(r.start) + " – " + momentText(r.end);
+    if (r.kind === "cheapest")
+      return devName(r.key) + " päällä " + String(r.hours).replace(".", ",") + " h halvimpina jaksoina klo " + r.start + "–" + r.end;
+    var t = r.trigger, when;
+    if (t.type === "time" || t.type === "sun") when = momentText(t);
+    else if (t.type === "above" || t.type === "below")
+      when = devName(t.key) + (t.type === "above" ? " yli " : " alle ") + String(t.value).replace(".", ",");
+    else if (t.type === "turns_on" || t.type === "turns_off")
+      when = devName(t.key) + (t.type === "turns_on" ? " päälle" : " pois");
+    else when = t.type === "arrive" ? "joku tulee kotiin" : "viimeinen lähtee";
+    var s = "Kun " + when + ": " + r.actions.map(actionText).join(", ");
+    if (r.only) s += " (vain klo " + r.only.start + "–" + r.only.end + ")";
+    if (r.max_price !== undefined && r.max_price !== null) s += ", jos hinta enintään " + String(r.max_price).replace(".", ",") + " c/kWh";
+    return s;
+  }
+  function periodsText(list) {
+    if (!list || !list.length) return "";
+    var spans = [], start = null, prev = null;
+    list.forEach(function (iso) {
+      var t = new Date(iso).getTime();
+      if (prev !== null && t === prev + 900000) { prev = t; return; }
+      if (start !== null) spans.push([start, prev + 900000]);
+      start = t; prev = t;
+    });
+    spans.push([start, prev + 900000]);
+    return spans.map(function (s) { return clock.format(new Date(s[0])) + "–" + clock.format(new Date(s[1])); }).join(", ");
+  }
+  var RESULT = { confirmed: "tehty", pending: "lähetetty", failed: "epäonnistui", unknown: "ei vahvistusta" };
+  function renderRules(list) {
+    $rules.hidden = !DATA.registry;
+    $rulesNote.textContent = autoOn() ? "" : "Automaatio on pois päältä: säännöt odottavat, kunnes kytket sen päälle.";
+    $rulesList.textContent = "";
+    if (!list.length) $rulesList.appendChild(el("p", "detail",
+      "Ei sääntöjä. Esimerkiksi jouluvalot päälle auringonlaskusta klo 23:een tai laite päälle sähkön halvimpina tunteina."));
+    list.forEach(function (r) {
+      var row = el("div", "dev-rule" + (r.enabled ? "" : " off"));
+      if (r.rule.name) row.appendChild(el("span", "r-name", r.rule.name));
+      row.appendChild(el("span", r.rule.name ? "r-sum" : "r-name", ruleText(r.rule)));
+      var st = r.status || {}, parts = [];
+      if (r.rule.kind === "cheapest" && st.periods && st.periods.length) parts.push("Jaksot: " + periodsText(st.periods));
+      if (st.now_on !== undefined && st.now_on !== null && r.rule.kind === "between") parts.push(st.now_on ? "Nyt päällä" : "Nyt pois");
+      if (r.last_run) parts.push("Viimeksi " + when(r.last_run) + ": " + (RESULT[r.last_result] || r.last_result));
+      var stat = el("span", "r-stat" + (st.problem || r.last_result === "failed" ? " err" : ""),
+        st.problem || parts.join(" · "), r.last_detail || "");
+      row.appendChild(stat);
+      var sw = switchBtn(r.enabled, (r.rule.name || "Sääntö") + " käytössä", "Onko sääntö käytössä. Oletus: käytössä.");
+      sw.addEventListener("click", function () {
+        sw.disabled = true;
+        post("rules", { id: r.id, enabled: !r.enabled }).then(load);
+      });
+      row.appendChild(sw);
+      var ed = el("button", "r-edit", "Muokkaa");
+      ed.type = "button";
+      ed.addEventListener("click", function () { editRule(r); });
+      row.appendChild(ed);
+      $rulesList.appendChild(row);
+    });
+  }
+  function autoOn() {
+    var b = document.getElementById("auto-btn");
+    return !b || b.getAttribute("aria-checked") === "true";
+  }
+  function select(options, value, label) {
+    var s = el("select");
+    s.setAttribute("aria-label", label);
+    options.forEach(function (o) {
+      var opt = el("option", "", o[1]);
+      opt.value = o[0];
+      if (String(o[0]) === String(value)) opt.selected = true;
+      s.appendChild(opt);
+    });
+    return s;
+  }
+  function field(label, control, help) {
+    var l = el("label", "fld", label, help);
+    l.appendChild(control);
+    return l;
+  }
+  function deviceSelect(filter, value, label) {
+    var opts = allDevices().filter(function (x) { return filter(x.d); })
+      .map(function (x) { return [x.d.key, x.d.name + " (" + x.area + ")"]; });
+    if (value && !opts.some(function (o) { return o[0] === value; })) opts.unshift([value, "(puuttuva laite)"]);
+    if (!value) opts.unshift(["", "Valitse…"]);
+    return select(opts, value || "", label);
+  }
+  function powerable(d) { return d.caps && d.caps.power; }
+  function numeric(d) {
+    return ["temperature", "humidity", "co2", "air", "power", "energy", "illuminance", "battery", "number", "climate"]
+      .indexOf(d.kind) >= 0;
+  }
+  function onOff(d) { return d.kind === "binary" || powerable(d); }
+  function momentEditor(m, label) {
+    m = m || { type: "time", at: "18:00" };
+    var box = el("div", "r-line");
+    var type = select([["time", "Kellonaika"], ["sunset", "Auringonlasku"], ["sunrise", "Auringonnousu"]],
+      m.type === "time" ? "time" : m.event, label);
+    var time = el("input"); time.type = "time"; time.value = m.at || "18:00"; time.setAttribute("aria-label", label + ": kellonaika");
+    var off = el("input"); off.type = "number"; off.step = 5; off.min = -240; off.max = 240;
+    off.value = m.offset || 0;
+    off.setAttribute("aria-label", label + ": siirto minuutteina");
+    var offBox = el("span", "r-off", null, "Siirto minuutteina: miinus on ennen, plus jälkeen. Oletus 0.");
+    offBox.appendChild(off);
+    offBox.appendChild(el("span", "", "min"));
+    function show() { time.hidden = type.value !== "time"; offBox.hidden = type.value === "time"; }
+    type.addEventListener("change", show);
+    show();
+    box.appendChild(type); box.appendChild(time); box.appendChild(offBox);
+    box.read = function () {
+      return type.value === "time" ? { type: "time", at: time.value }
+        : { type: "sun", event: type.value, offset: Number(off.value) || 0 };
+    };
+    return box;
+  }
+  function editRule(existing) {
+    var r = existing ? JSON.parse(JSON.stringify(existing.rule)) : { kind: "between" };
+    $dTitle.textContent = existing ? "Muokkaa sääntöä" : "Uusi sääntö";
+    $dBody.textContent = "";
+    var form = el("div", "rule-form");
+    var name = el("input"); name.type = "text"; name.maxLength = 60; name.value = r.name || "";
+    name.placeholder = "Esim. Jouluvalot";
+    form.appendChild(field("Nimi", name, "Vapaaehtoinen."));
+    var kind = select([["between", KIND_NAMES.between], ["cheapest", KIND_NAMES.cheapest], ["event", KIND_NAMES.event]],
+      r.kind, "Säännön tyyppi");
+    form.appendChild(field("Tyyppi", kind,
+      "Aikaväli: laite päällä alusta loppuun, muuten pois. Halvimmat tunnit: laite päällä sähkön halvimpina jaksoina. Kun tapahtuu: toiminnot hetkellä tai muutoksessa."));
+    var body = el("div");
+    form.appendChild(body);
+    var msg = el("p", "r-msg");
+    var read = null;
+    function build() {
+      body.textContent = "";
+      var k = kind.value;
+      if (k === "between") {
+        var dev = deviceSelect(powerable, r.key, "Laite");
+        var start = momentEditor(r.start || { type: "sun", event: "sunset", offset: 0 }, "Alku");
+        var end = momentEditor(r.end || { type: "time", at: "23:00" }, "Loppu");
+        body.appendChild(field("Laite", dev));
+        body.appendChild(field("Päälle", start, "Auringon ajat tulevat Home Assistantista."));
+        body.appendChild(field("Pois", end));
+        read = function () { return { kind: k, key: dev.value, start: start.read(), end: end.read() }; };
+      } else if (k === "cheapest") {
+        var dev2 = deviceSelect(powerable, r.key, "Laite");
+        var hours = el("input"); hours.type = "number"; hours.min = 0.25; hours.max = 24; hours.step = 0.25;
+        hours.value = r.hours || 3;
+        var ws = el("input"); ws.type = "time"; ws.value = r.start || "22:00";
+        var we = el("input"); we.type = "time"; we.value = r.end || "07:00";
+        body.appendChild(field("Laite", dev2));
+        body.appendChild(field("Tunteja päällä", hours, "Montako tuntia laite on päällä ikkunan aikana. Oletus 3."));
+        var win = el("div", "r-line"); win.appendChild(ws); win.appendChild(we);
+        body.appendChild(field("Ikkuna (alku – loppu)", win, "Päivittäinen aikaväli, jonka halvimmat 15 minuutin jaksot valitaan."));
+        read = function () { return { kind: k, key: dev2.value, hours: Number(hours.value), start: ws.value, end: we.value }; };
+      } else {
+        var t = r.trigger || { type: "time", at: "07:00" };
+        var trig = select(Object.keys(TRIGGER_NAMES).filter(function (x) {
+          return (x !== "arrive" && x !== "leave") || DATA.people;
+        }).map(function (x) { return [x, TRIGGER_NAMES[x]]; }), t.type === "sun" ? "time" : t.type, "Kun");
+        var tbox = el("div");
+        var tread = null;
+        function buildTrigger() {
+          tbox.textContent = "";
+          var tt = trig.value;
+          if (tt === "time") {
+            var m = momentEditor(t.type === "time" || t.type === "sun" ? t : { type: "time", at: "07:00" }, "Hetki");
+            tbox.appendChild(m);
+            tread = m.read;
+          } else if (tt === "above" || tt === "below") {
+            var sd = deviceSelect(numeric, t.key, "Anturi");
+            var v = el("input"); v.type = "number"; v.step = "any"; v.value = t.value !== undefined ? t.value : 20;
+            v.setAttribute("aria-label", "Raja");
+            var line = el("div", "r-line"); line.appendChild(sd); line.appendChild(v);
+            tbox.appendChild(line);
+            tread = function () { return { type: tt, key: sd.value, value: Number(v.value) }; };
+          } else if (tt === "turns_on" || tt === "turns_off") {
+            var od = deviceSelect(onOff, t.key, "Laite");
+            tbox.appendChild(od);
+            tread = function () { return { type: tt, key: od.value }; };
+          } else {
+            tread = function () { return { type: tt }; };
+          }
+        }
+        trig.addEventListener("change", buildTrigger);
+        buildTrigger();
+        body.appendChild(field("Kun", trig));
+        body.appendChild(tbox);
+        var fs = el("fieldset");
+        fs.appendChild(el("legend", "", "Ehdot (vapaaehtoiset)"));
+        var onlySw = switchBtn(!!r.only, "Vain tiettynä aikana", "Toiminnot tehdään vain tällä aikavälillä. Oletus: aina.");
+        var oStart = el("input"); oStart.type = "time"; oStart.value = r.only ? r.only.start : "16:00";
+        var oEnd = el("input"); oEnd.type = "time"; oEnd.value = r.only ? r.only.end : "23:00";
+        var oLine = el("div", "r-line"); oLine.appendChild(oStart); oLine.appendChild(oEnd);
+        oLine.hidden = !r.only;
+        onlySw.lastChild.textContent = "Vain tiettynä aikana";
+        onlySw.addEventListener("click", function () {
+          var on = onlySw.getAttribute("aria-checked") !== "true";
+          onlySw.setAttribute("aria-checked", on ? "true" : "false");
+          oLine.hidden = !on;
+        });
+        fs.appendChild(onlySw); fs.appendChild(oLine);
+        var price = el("input"); price.type = "number"; price.step = "any";
+        price.value = r.max_price !== undefined && r.max_price !== null ? r.max_price : "";
+        price.placeholder = "ei rajaa";
+        fs.appendChild(field("Hinta enintään (c/kWh)", price, "Toiminnot tehdään vain, kun sähkön hinta on enintään tämä. Tyhjä: ei rajaa."));
+        body.appendChild(fs);
+        var acts = el("fieldset");
+        acts.appendChild(el("legend", "", "Toiminnot"));
+        var rows = [];
+        function addAction(a) {
+          a = a || { key: "", action: "power", value: true };
+          var line = el("div", "r-act");
+          var dsel = deviceSelect(function (d) { return powerable(d) || d.kind === "scene" || d.kind === "script"; }, a.key, "Laite");
+          var asel = select([["on", ACTION_NAMES.on], ["off", ACTION_NAMES.off], ["brightness", ACTION_NAMES.brightness],
+            ["run", ACTION_NAMES.run]], a.action === "power" ? (a.value ? "on" : "off") : a.action, "Toiminto");
+          var val = el("input"); val.type = "number"; val.min = 1; val.max = 100; val.value = a.action === "brightness" ? a.value : 50;
+          val.setAttribute("aria-label", "Kirkkaus %");
+          function showVal() { val.hidden = asel.value !== "brightness"; }
+          asel.addEventListener("change", showVal);
+          showVal();
+          var rm = el("button", "", "×", "Poista toiminto");
+          rm.type = "button";
+          rm.setAttribute("aria-label", "Poista toiminto");
+          var item = { read: function () {
+            var act = asel.value;
+            return { key: dsel.value, action: act === "on" || act === "off" ? "power" : act,
+                     value: act === "on" ? true : act === "off" ? false : act === "brightness" ? Number(val.value) : true };
+          } };
+          rm.addEventListener("click", function () { line.remove(); rows.splice(rows.indexOf(item), 1); });
+          line.appendChild(dsel); line.appendChild(asel); line.appendChild(val); line.appendChild(rm);
+          acts.insertBefore(line, addBtn);
+          rows.push(item);
+        }
+        var addBtn = el("button", "", "Lisää toiminto");
+        addBtn.type = "button";
+        addBtn.addEventListener("click", function () { addAction(); });
+        acts.appendChild(addBtn);
+        (r.actions && r.actions.length ? r.actions : [null]).forEach(addAction);
+        body.appendChild(acts);
+        read = function () {
+          var out = { kind: "event", trigger: tread(), actions: rows.map(function (x) { return x.read(); }) };
+          if (onlySw.getAttribute("aria-checked") === "true") out.only = { start: oStart.value, end: oEnd.value };
+          if (price.value !== "") out.max_price = Number(price.value);
+          return out;
+        };
+      }
+    }
+    kind.addEventListener("change", function () { r = { kind: kind.value }; build(); });
+    build();
+    var buttons = el("div", "r-buttons");
+    var save = el("button", "primary", "Tallenna");
+    save.type = "button";
+    save.addEventListener("click", function () {
+      var rule = read();
+      rule.name = name.value;
+      var payload = { rule: rule };
+      if (existing) payload.id = existing.id;
+      save.disabled = true;
+      post("rules", payload).then(function (res) {
+        save.disabled = false;
+        if (!res[0]) { msg.textContent = res[1].detail || "Tallennus ei onnistunut."; return; }
+        $dialog.close();
+        load();
+      }).catch(function () { save.disabled = false; msg.textContent = "Yhteys palveluun katkesi."; });
+    });
+    buttons.appendChild(save);
+    var cancel = el("button", "", "Peruuta");
+    cancel.type = "button";
+    cancel.addEventListener("click", function () { $dialog.close(); });
+    buttons.appendChild(cancel);
+    if (existing) {
+      var del = el("button", "danger", "Poista sääntö");
+      del.type = "button";
+      del.addEventListener("click", function () {
+        if (del.dataset.sure !== "1") { del.dataset.sure = "1"; del.textContent = "Vahvista poisto"; return; }
+        post("rules", { id: existing.id, delete: true }).then(function () { $dialog.close(); load(); });
+      });
+      buttons.appendChild(del);
+    }
+    form.appendChild(msg);
+    form.appendChild(buttons);
+    $dBody.appendChild(form);
+    if (typeof $dialog.showModal === "function") $dialog.showModal(); else $dialog.setAttribute("open", "");
+  }
+  document.getElementById("dev-rule-add").addEventListener("click", function () { editRule(null); });
+
   function render() {
     var data = DATA;
     if (!data || !data.configured) { $section.hidden = true; return; }
@@ -479,9 +845,10 @@ SCRIPT = r"""
       if (b) $areas.appendChild(b);
     });
     renderAutos(data.automations || []);
+    renderRules(data.rules || []);
   }
   function load() {
-    if (LOADING) return;
+    if (LOADING || $dialog.open) return;   // an open editor or detail is not redrawn under the user
     LOADING = true;
     var site = vkSite();
     fetch("api/devices?site=" + site).then(function (r) { return r.ok ? r.json() : null; })
@@ -636,7 +1003,7 @@ SCRIPT = r"""
     $dBody.appendChild(dl);
     if (typeof $dialog.showModal === "function") $dialog.showModal(); else $dialog.setAttribute("open", "");
   }
-  $dialog.addEventListener("close", function () { OPEN_KEY = null; });
+  $dialog.addEventListener("close", function () { OPEN_KEY = null; load(); });
   $edit.addEventListener("click", function () {
     EDIT = !EDIT;
     $edit.setAttribute("aria-checked", EDIT ? "true" : "false");

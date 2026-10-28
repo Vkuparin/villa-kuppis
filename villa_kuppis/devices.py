@@ -27,6 +27,7 @@ Rules:
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import sqlite3
@@ -35,6 +36,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
+
+from . import rules as rules_mod
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +50,7 @@ SKIP_PLATFORMS = ("villa_kuppis_cottage",)
 SKIP_CATEGORIES = ("config", "diagnostic")
 UNAVAILABLE = ("unavailable", "unknown")
 SAMPLE_INTERVAL = 60.0
+RULE_INTERVAL = 30.0
 SAMPLE_REFRESH = 900          # record an unchanged value at least this often (s)
 THIN_AFTER = 30 * 86400       # older rows become 15-minute means
 THIN_BUCKET = 900
@@ -386,7 +390,7 @@ class DeviceStore:
         self.path = Path(path)
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
-        self._conn.executescript(_SCHEMA)
+        self._conn.executescript(_SCHEMA + rules_mod.SCHEMA)
         self._conn.commit()
 
     # layout
@@ -521,6 +525,60 @@ class DeviceStore:
                  "unit_name": r[4], "actor": r[5], "action": "device", "requested": r[6],
                  "result": r[7], "detail": r[8]} for r in rows]
 
+    # rules
+
+    def rules(self, site_id: str) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, body, enabled, last_key, last_state, last_run_utc, last_result, "
+                "last_detail FROM device_rule WHERE site_id = ? ORDER BY COALESCE(position, id), id",
+                (site_id,)).fetchall()
+        return rules_mod.rows_to_rules(rows)
+
+    def save_rule(self, site_id: str, rule_id: int | None, body: dict, now: datetime) -> int:
+        text = json.dumps(body, ensure_ascii=False)
+        with self._lock, self._conn:
+            if rule_id is None:
+                cur = self._conn.execute(
+                    "INSERT INTO device_rule (site_id, body, created_utc) VALUES (?, ?, ?)",
+                    (site_id, text, now.isoformat()))
+                return cur.lastrowid
+            # A changed rule starts afresh: it acts on its next change point.
+            cur = self._conn.execute(
+                "UPDATE device_rule SET body = ?, last_key = NULL, last_state = NULL "
+                "WHERE id = ? AND site_id = ?", (text, rule_id, site_id))
+            if cur.rowcount == 0:
+                raise DeviceError("Sääntöä ei löydy.")
+            return rule_id
+
+    def set_rule(self, site_id: str, rule_id: int, *, enabled: bool | None = None,
+                 delete: bool = False) -> None:
+        with self._lock, self._conn:
+            if delete:
+                cur = self._conn.execute("DELETE FROM device_rule WHERE id = ? AND site_id = ?",
+                                         (rule_id, site_id))
+            else:
+                cur = self._conn.execute(
+                    "UPDATE device_rule SET enabled = ?, last_state = NULL WHERE id = ? AND site_id = ?",
+                    (int(bool(enabled)), rule_id, site_id))
+            if cur.rowcount == 0:
+                raise DeviceError("Sääntöä ei löydy.")
+
+    def rule_ran(self, rule_id: int, now: datetime, result: str, detail: str) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE device_rule SET last_run_utc = ?, last_result = ?, last_detail = ? WHERE id = ?",
+                (now.isoformat(), result, detail, rule_id))
+
+    def rule_state(self, rule_id: int, on: bool) -> None:
+        with self._lock, self._conn:
+            self._conn.execute("UPDATE device_rule SET last_state = ? WHERE id = ?",
+                               (int(on), rule_id))
+
+    def rule_key(self, rule_id: int, key: str) -> None:
+        with self._lock, self._conn:
+            self._conn.execute("UPDATE device_rule SET last_key = ? WHERE id = ?", (key, rule_id))
+
     def close(self) -> None:
         with self._lock:
             self._conn.close()
@@ -549,11 +607,23 @@ class DeviceCatalog:
         self._lock = threading.Lock()
         self._commands: dict[str, str] = {}      # key -> last request id
         self._sparks: tuple[float, dict] | None = None
+        self.rules: rules_mod.RuleEngine | None = None
 
     def _build(self) -> dict:
         states = self._source.raw_states()
         skip = self._source.bound_entities()
         return build(self._source.registry(), states, skip)
+
+    def raw_states(self) -> dict:
+        return self._source.raw_states()
+
+    def devices_by_key(self) -> dict:
+        """Every shown device and automation by key (rules)."""
+        built = self._build()
+        out = {d["key"]: d for a in built["areas"] for d in a["devices"]}
+        for a in built["automations"]:
+            out[a["key"]] = {**a, "domain": "automation", "kind": "automation"}
+        return out
 
     def _find(self, key: str) -> dict:
         built = self._build()
@@ -597,10 +667,19 @@ class DeviceCatalog:
             a["level"] if isinstance(a["level"], (int, float)) else 1e9, a["name"].lower())))
         for a in built["automations"]:
             a["command"] = self._command_state(a["key"])
+        rules = []
+        if self.rules is not None:
+            by_key = {d["key"]: d for a in areas for d in a["devices"]}
+            by_key.update({a["key"]: a for a in built["automations"]})
+            states = self._source.raw_states()
+            for rule in self._store.rules(self.site_id):
+                rules.append({**rule, "status": self.rules.status(rule, by_key, states)})
         return {"site": self.site_id, "configured": True,
                 "connection": health.get("state"), "registry": built["registry"],
                 "registry_error": health.get("registry_error"),
-                "areas": areas, "automations": built["automations"]}
+                "areas": areas, "automations": built["automations"], "rules": rules,
+                "sun": "sun.sun" in self._source.raw_states(),
+                "people": any(e.startswith("person.") for e in self._source.raw_states())}
 
     def _command_state(self, key: str) -> dict | None:
         with self._lock:
@@ -677,6 +756,26 @@ class DeviceCatalog:
             fields["name"] = name or None
         self._store.update(self.site_id, key, now, **fields)
 
+    def save_rule(self, body: dict) -> dict:
+        if "id" in body and (isinstance(body["id"], bool) or not isinstance(body["id"], int)):
+            raise DeviceError("id: säännön numero")
+        rule_id = body.get("id")
+        if body.get("delete") is True or "enabled" in body and "rule" not in body:
+            if rule_id is None:
+                raise DeviceError("id puuttuu.")
+            if body.get("delete") is True:
+                self._store.set_rule(self.site_id, rule_id, delete=True)
+            else:
+                if not isinstance(body["enabled"], bool):
+                    raise DeviceError("enabled: päällä tai pois")
+                self._store.set_rule(self.site_id, rule_id, enabled=body["enabled"])
+            return {"ok": True, "id": rule_id}
+        try:
+            clean = rules_mod.validate(body.get("rule"))
+        except rules_mod.RuleError as err:
+            raise DeviceError(str(err)) from err
+        return {"ok": True, "id": self._store.save_rule(self.site_id, rule_id, clean, self._now())}
+
     def command(self, key: str, action: str, value, actor: str) -> dict:
         device = self._find(key)
         domain, service, data, confirm, text = action_call(device, action, value)
@@ -750,12 +849,23 @@ class DeviceHub:
     """Every site's catalog, their store and the history sampler."""
 
     def __init__(self, data_dir, sources: dict, *, now=utc_now,
-                 sample_interval: float = SAMPLE_INTERVAL):
+                 sample_interval: float = SAMPLE_INTERVAL,
+                 rule_interval: float = RULE_INTERVAL,
+                 automation_on: Callable[[str], bool] | None = None,
+                 prices: Callable | None = None):
         self._now = now
         self._store = DeviceStore(Path(data_dir) / DB_FILENAME)
         self.catalogs = {site: DeviceCatalog(site, src, self._store, now=now)
                          for site, src in sources.items()}
+        for site, catalog in self.catalogs.items():
+            catalog.rules = rules_mod.RuleEngine(
+                site, catalog, self._store,
+                automation_on=(lambda s=site: automation_on(s)) if automation_on else (lambda: True),
+                prices=(lambda day, s=site: prices(s, day)) if prices else (lambda day: []),
+                now=now)
         self._sample_interval = sample_interval
+        self._rule_interval = rule_interval
+        self._sampled = 0.0
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._thinned: int | None = None
@@ -787,9 +897,21 @@ class DeviceHub:
             self._thinned = day
             self._store.thin(int(self._now().timestamp()) - THIN_AFTER)
 
+    def tick_rules(self) -> list[dict]:
+        sent = []
+        for catalog in self.catalogs.values():
+            try:
+                sent.extend(catalog.rules.tick())
+            except Exception:
+                log.exception("device rules failed at %s", catalog.site_id)
+        return sent
+
     def _loop(self) -> None:
-        while not self._stop.wait(self._sample_interval):
-            self.sample()
+        while not self._stop.wait(self._rule_interval):
+            self.tick_rules()
+            if time.monotonic() - self._sampled >= self._sample_interval:
+                self._sampled = time.monotonic()
+                self.sample()
 
     def start(self) -> None:
         if self._thread is not None or not self.catalogs:
@@ -933,6 +1055,19 @@ def _demo_site(site_id: str, ts: str) -> tuple[dict, dict]:
         states[entity_id] = {"entity_id": entity_id, "state": state,
                              "attributes": {"friendly_name": name, **attrs},
                              "last_changed": ts}
+    # Home Assistant's own sun and people, outside any area (rules.py).
+    local = datetime.fromisoformat(ts).astimezone(rules_mod.HELSINKI)
+    sunset = local.replace(hour=16, minute=40, second=0, microsecond=0)
+    sunrise = local.replace(hour=8, minute=5, second=0, microsecond=0)
+    if sunset <= local:
+        sunset += timedelta(days=1)
+    if sunrise <= local:
+        sunrise += timedelta(days=1)
+    states["sun.sun"] = {"entity_id": "sun.sun", "state": "below_horizon", "last_changed": ts,
+                         "attributes": {"next_setting": sunset.astimezone(timezone.utc).isoformat(),
+                                        "next_rising": sunrise.astimezone(timezone.utc).isoformat()}}
+    states["person.demo"] = {"entity_id": "person.demo", "state": "home", "last_changed": ts,
+                             "attributes": {"friendly_name": "Demo"}}
     for entity_id, name, state in automations:
         registry["entities"].append({"entity_id": entity_id, "id": "demo-" + entity_id,
                                      "area_id": None, "device_id": None})
