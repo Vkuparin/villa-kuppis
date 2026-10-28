@@ -77,6 +77,12 @@ A small `DeviceGateway` interface (card H1.2) covers what the product uses:
 
 Stable Villa Kuppis IDs stay separate from Home Assistant `entity_id` strings, and the mapping is stored. A missing or renamed entity is a clear mapping error; a command must never silently reach a different device. The existing pump client can implement the same interface until H1.5. No plugin system or event bus.
 
+## Other devices
+
+Every other Home Assistant device needs no code (`villa_kuppis/devices.py`). The gateway also reads each site's area, floor, device and entity registries, again after a registry event or a new entity and at every resync. An entity in an area (its own or its device's) appears on that site's page under the area, unless Home Assistant hides or disables it, marks it `config` or `diagnostic`, or Villa Kuppis already runs it (bound pumps and cottage devices). The tile comes from the domain and device class: sensors by class, binary sensors, lights, plugs and switches, climate, covers, fans, scenes and scripts; Home Assistant automations are listed apart with an on/off switch. Entities are keyed by their entity registry id, so a renamed `entity_id` keeps its order, name and history.
+
+Order, hidden tiles and areas, display names and the "new" mark live in `pumps.db`; nothing is written back to Home Assistant. Commands use only services the entity reports as supported and go through the gateway (`submit_entity`), tracked like the other commands and logged as events. Numeric sensors and on/off states are recorded each minute on change (an unchanged sensor every 15 minutes); rows older than 30 days are thinned to 15-minute means and kept.
+
 ## Cottage control
 
 Villa Kuppis computes each room's effective target for every 15-minute period (prices, forecast, fixed thresholds, later the optimizer, visits). When the target changes it writes it to the room's Home Assistant helper with a heartbeat and revision. After a reconnect it reads actual states and sends only the currently valid target; missed periods show as gaps.

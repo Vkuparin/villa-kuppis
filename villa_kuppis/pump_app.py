@@ -17,6 +17,12 @@ fully offline) plus a small JSON API on top of PumpService:
 * POST /api/visit/end  end the active visit
 * POST /api/cottage/heater  {"device_id", "enabled"}: switch one cottage heater off or on
 * GET  /api/sites     connection health of each Home Assistant site
+* GET  /api/devices?site=home|cottage  Home Assistant devices by area (devices.py)
+* GET  /api/devices/history?site&key&hours  one device's recorded values
+* POST /api/devices/command  {"site", "key", "action", "value"}
+* POST /api/devices/layout   {"site", "key", "hidden" | "name" | "seen"} or {"site", "area", "order"}
+                             or {"site", "areas"} or {"site", "area", "area_hidden"}
+* POST /api/devices/lights_off  {"site", "area"}: every light in the area off
 * POST /api/settings  {"scope", "key", "value" | "reset"} (card F3.5)
 * GET/POST /api/away  home-away button, {"away": bool} (card F6.1)
 * GET/POST /api/automation  Automaatio switches; {"on": bool, "site": "home" | "cottage"}
@@ -64,6 +70,8 @@ from .pump_probe import FakeClient, _unit_payload
 from . import settings as app_settings
 from . import cottage as cottage_ui
 from . import overview_ui
+from . import devices_ui
+from .devices import DeviceError, FakeDeviceSource
 from .cottage import CottageSite, FakeSiteGateway, HeaterSwitchError
 from .visit import VisitError
 from .pump_service import MAX_ACTOR_LENGTH, PumpService, make_live_service
@@ -121,6 +129,8 @@ def make_demo_service(data_dir, *, poll_interval: float = 5.0,
         automation_default_on=automation_default_on,
         price_fetch_enabled=False,
         cottage_factory=_demo_cottage,
+        device_sources=lambda _cottage: {site: FakeDeviceSource(site)
+                                         for site in ("home", "cottage")},
     )
 
 
@@ -263,7 +273,16 @@ var VK_ICONS = {
   cloud: '<path d="M7 18.5a4.5 4.5 0 0 1-.4-9 5.5 5.5 0 0 1 10.6 1.4A3.8 3.8 0 0 1 17 18.5z"/>',
   link: '<path d="M4.5 12.5a11 11 0 0 1 15 0M8 16a6 6 0 0 1 8 0"/><circle cx="12" cy="19.5" r=".9"/>',
   clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
-  chev: '<path d="m6 9 6 6 6-6"/>'
+  chev: '<path d="m6 9 6 6 6-6"/>',
+  bulb: '<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.6 10.8c.7.6 1.1 1.3 1.1 2.2h5c0-.9.4-1.6 1.1-2.2A6 6 0 0 0 12 3z"/>',
+  plug: '<path d="M9 3v5M15 3v5"/><path d="M6 8h12v3a6 6 0 0 1-12 0z"/><path d="M12 17v4"/>',
+  door: '<path d="M6 21V4.5A1.5 1.5 0 0 1 7.5 3h9A1.5 1.5 0 0 1 18 4.5V21"/><path d="M4 21h16"/><circle cx="14.5" cy="12" r=".9"/>',
+  play: '<path d="M7 4.5v15l12-7.5z"/>',
+  blind: '<path d="M4 3.5h16M5 3.5v13h14v-13M5 7.5h14M5 11.5h14"/><path d="M12 16.5v4"/>',
+  battery: '<rect x="3" y="7.5" width="16" height="9" rx="2"/><path d="M21 10.5v3"/><path d="M6.5 10.5v3M9.5 10.5v3"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"/>',
+  wind: '<path d="M3 8.5h11a2.5 2.5 0 1 0-2.5-2.5M3 12.5h15a2.5 2.5 0 1 1-2.5 2.5M3 16.5h7"/>',
+  dot: '<circle cx="12" cy="12" r="3.5"/>'
 };
 function vkIcon(name) {
   return '<span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
@@ -585,6 +604,7 @@ td.result-observed { color: var(--text2); }
 /*PLAN_STYLE*/
 /*ROOMS_STYLE*/
 /*COTTAGE_STYLE*/
+/*DEVICES_STYLE*/
 /* Control text sits on the right, next to the switches. */
 .set-row input, .set-row select { text-align: right; text-align-last: right; }
 
@@ -657,6 +677,7 @@ td.result-observed { color: var(--text2); }
     <p class="side-label">Tällä sivulla</p>
     <div class="jumps">
       <button type="button" data-jump="overview"><span data-icon="grid"></span>Yleiskatsaus</button>
+      <button type="button" data-jump="devices"><span data-icon="bulb"></span>Laitteet</button>
       <button type="button" data-jump="history"><span data-icon="chart"></span>Historia</button>
       <button type="button" data-jump="plan"><span data-icon="calendar"></span>Suunnitelma</button>
       <button type="button" data-jump="visit"><span data-icon="calendar"></span>Vierailu</button>
@@ -698,6 +719,7 @@ ohjaavat vain esittelyyksiköitä.</div>
 <!--OVERVIEW_SECTION-->
   <section id="cards" aria-label="Pumppulaitteet"></section>
 <!--COTTAGE_SECTION-->
+<!--DEVICES_SECTION-->
   <section class="history panel" id="history" aria-label="Historia ja kaaviot">
     <div class="panel-head">
       <h2><span data-icon="chart"></span>Historia</h2>
@@ -778,7 +800,8 @@ const FAN_NAMES = { Auto: "Automaattinen", One: "1", Two: "2", Three: "3",
 const MODES = ["Cool", "Heat", "Dry", "Fan", "Automatic"];
 const FAN_SPEEDS = ["Auto", "One", "Two", "Three", "Four", "Five"];
 const RESULT_TEXT = { pending: "Lähetetään…", confirmed: "Vahvistettu",
-                      failed: "Muutos epäonnistui", observed: "Havaittu" };
+                      failed: "Muutos epäonnistui", observed: "Havaittu",
+                      unknown: "Ei vahvistusta" };
 const POLL_MS = 5000;
 
 const $cards = document.getElementById("cards");
@@ -838,6 +861,7 @@ function changeText(action, requested) {
     case "heater": return requested === "on" ? "Patteri käyttöön" : "Patteri pois käytöstä";
     case "fan": return "Puhallus → " + fanName(requested);
     case "power": return requested ? "Laitteen päälle" : "Laitteen pois päältä";
+    case "device": return requested;
     default: return action;
   }
 }
@@ -1673,7 +1697,7 @@ document.querySelectorAll("[data-icon]").forEach((el) => {
   el.innerHTML = vkIcon(el.dataset.icon);
 });
 // Shortcuts in the side bar and the phone tab bar scroll to a section and open it.
-const JUMPS = { overview: "overview", history: "history", plan: "plan-section",
+const JUMPS = { overview: "overview", devices: "devices-section", history: "history", plan: "plan-section",
                 visit: "cottage-visit", rooms: "rooms-section", settings: "settings-section",
                 events: "events" };
 document.addEventListener("click", (e) => {
@@ -1734,6 +1758,7 @@ if ("serviceWorker" in navigator) {
 <script>/*PLAN_SCRIPT*/</script>
 <script>/*ROOMS_SCRIPT*/</script>
 <script>/*COTTAGE_SCRIPT*/</script>
+<script>/*DEVICES_SCRIPT*/</script>
 <script>/*OVERVIEW_SCRIPT*/</script>
 </body>
 </html>
@@ -1893,6 +1918,9 @@ def render_page(demo: bool) -> str:
             .replace("/*COTTAGE_STYLE*/", cottage_ui.STYLE)
             .replace("<!--COTTAGE_SECTION-->", cottage_ui.SECTION_HTML)
             .replace("/*COTTAGE_SCRIPT*/", cottage_ui.SCRIPT)
+            .replace("/*DEVICES_STYLE*/", devices_ui.STYLE)
+            .replace("<!--DEVICES_SECTION-->", devices_ui.SECTION_HTML)
+            .replace("/*DEVICES_SCRIPT*/", devices_ui.SCRIPT)
             .replace("/*ROOMS_STYLE*/", _ROOMS_STYLE)
             .replace("<!--ROOMS_SECTION-->", _ROOMS_HTML)
             .replace("/*ROOMS_SCRIPT*/", _ROOMS_SCRIPT)
@@ -2158,6 +2186,18 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             self._json(200, self.app.service.cottage_view())
         elif parts.path == "/api/sites":
             self._json(200, self.app.service.sites_health())
+        elif parts.path == "/api/devices":
+            site = parse_qs(parts.query).get("site", ["home"])[0]
+            self._json(200, self.app.service.devices.view(site))
+        elif parts.path == "/api/devices/history":
+            qs = parse_qs(parts.query)
+            try:
+                catalog = self.app.service.devices.catalog(qs.get("site", ["home"])[0])
+                payload = catalog.history(qs.get("key", [""])[0], float(qs.get("hours", ["24"])[0]))
+            except (DeviceError, ValueError) as err:
+                self._json(400, {"error": "bad_query", "detail": str(err)})
+                return
+            self._json(200, payload)
         elif parts.path == "/api/visit":
             cottage = self._cottage_or_error()
             if cottage is not None:
@@ -2168,7 +2208,8 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
                              "source": identity["source"],
                              "version": os.environ.get("VK_VERSION", "")})
         elif parts.path in ("/api/command", "/api/prices/refresh", "/api/visit/end",
-                            "/api/cottage/heater"):
+                            "/api/cottage/heater", "/api/devices/command",
+                            "/api/devices/layout", "/api/devices/lights_off"):
             self._json(405, {"error": "method_not_allowed",
                              "detail": "use POST for this path"})
         elif parts.path.startswith("/api/"):
@@ -2228,9 +2269,13 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
                 self._json(200, cottage.end_visit())
         elif parts.path == "/api/cottage/heater":
             self._post_heater(identity)
+        elif parts.path in ("/api/devices/command", "/api/devices/layout",
+                            "/api/devices/lights_off"):
+            self._post_devices(parts.path.rpartition("/")[2], identity)
         elif parts.path in ("/", "/api/view", "/api/events", "/api/history",
                             "/api/identity", "/api/plan", "/api/rooms",
-                            "/api/cottage", "/api/sites", "/api/overview"):
+                            "/api/cottage", "/api/sites", "/api/overview",
+                            "/api/devices", "/api/devices/history"):
             # Known paths with the wrong method: 405, mirroring how
             # do_GET answers /api/command.
             self._json(405, {"error": "method_not_allowed",
@@ -2274,6 +2319,31 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             result = cottage.set_heater_enabled(body.get("device_id"), body.get("enabled"),
                                                 identity["actor"])
         except HeaterSwitchError as error:
+            self._json(400, {"error": "bad_body", "detail": str(error)})
+            return
+        self._json(200, result)
+
+    def _post_devices(self, what: str, identity) -> None:
+        body = self._read_json_object()
+        if body is None:
+            return
+        try:
+            site = body.get("site")
+            catalog = self.app.service.devices.catalog(site if isinstance(site, str) else "")
+            if what == "command":
+                if not isinstance(body.get("key"), str) or not isinstance(body.get("action"), str):
+                    raise DeviceError("key ja action puuttuvat.")
+                result = catalog.command(body["key"], body["action"], body.get("value"),
+                                         identity["actor"])
+            elif what == "layout":
+                catalog.layout(body)
+                result = {"ok": True}
+            else:
+                if not isinstance(body.get("area"), str):
+                    raise DeviceError("area puuttuu.")
+                catalog.lights_off(body["area"], identity["actor"])
+                result = {"ok": True}
+        except DeviceError as error:
             self._json(400, {"error": "bad_body", "detail": str(error)})
             return
         self._json(200, result)

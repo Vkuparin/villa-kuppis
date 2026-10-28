@@ -69,6 +69,12 @@ DEFAULT_SITE_STALE_AFTER = 180.0
 RETRY_BASE = 5.0
 RETRY_MAX = 300.0
 COMMAND_HISTORY = 200
+REGISTRY_DEBOUNCE = 2.0            # gather a burst of registry changes
+# Registry changes that can add, move or hide a device (devices.py).
+REGISTRY_EVENTS = ("area_registry_updated", "device_registry_updated",
+                   "entity_registry_updated", "floor_registry_updated")
+# Commands to any entity (devices.py) are tracked under this prefix.
+ENTITY_PREFIX = "entity:"
 
 
 def utc_now() -> datetime:
@@ -203,23 +209,35 @@ class HAConnection:
 
     async def subscribe_state_changed(self, handler: Callable[[dict], None],
                                       timeout: float | None = None) -> None:
+        await self.subscribe_events("state_changed", handler, timeout)
+
+    async def subscribe_events(self, event_type: str, handler: Callable[[dict], None],
+                               timeout: float | None = None) -> None:
         msg_id = next(self._ids)
         self._handlers[msg_id] = handler
         fut = asyncio.get_running_loop().create_future()
         self._futures[msg_id] = fut
-        await self._ws.send_json({"id": msg_id, "type": "subscribe_events",
-                                  "event_type": "state_changed"})
-        await asyncio.wait_for(fut, timeout)
+        try:
+            await self._ws.send_json({"id": msg_id, "type": "subscribe_events",
+                                      "event_type": event_type})
+            await asyncio.wait_for(fut, timeout)
+        except BaseException:
+            self._handlers.pop(msg_id, None)
+            self._futures.pop(msg_id, None)
+            raise
 
     async def get_services(self, timeout: float | None = None) -> dict:
         return await self.request({"type": "get_services"}, timeout)
 
     async def call_service(self, domain: str, service: str, entity_id: str | None,
-                           data: dict, timeout: float | None = None) -> Any:
+                           data: dict, timeout: float | None = None, *,
+                           target: dict | None = None) -> Any:
         payload = {"type": "call_service", "domain": domain, "service": service,
                    "service_data": data}
         if entity_id is not None:
             payload["target"] = {"entity_id": entity_id}
+        elif target is not None:
+            payload["target"] = dict(target)
         return await self.request(payload, timeout)
 
     async def wait_closed(self) -> None:
@@ -496,10 +514,14 @@ class Command:
     # read-back check on the bound device's reading.
     _service: tuple | None = field(default=None, repr=False, compare=False)
     _confirm: Callable[[dict], bool] | None = field(default=None, repr=False, compare=False)
+    # An entity command (submit_entity): the entity, checked on its raw state.
+    _entity: str | None = field(default=None, repr=False, compare=False)
 
     def confirmed_by(self, state: dict | None) -> bool:
         if self._confirm is not None:
             return state is not None and bool(self._confirm(state))
+        if self._entity is not None:
+            return False
         return matches(state, self.action, self.value)
 
     def public(self) -> dict:
@@ -555,6 +577,10 @@ class HomeAssistantGateway:
         self._last_contact: datetime | None = None
         self._last_error: str | None = None
         self._ha_version = ""
+        self._registry: dict | None = None
+        self._registry_error: str | None = None
+        self._registry_entities: frozenset = frozenset()
+        self._registry_dirty: asyncio.Event | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop: asyncio.Event | None = None
         self._stop_requested = False
@@ -662,6 +688,23 @@ class HomeAssistantGateway:
             return "stale"
         return "ok"
 
+    def raw_states(self) -> dict[str, dict]:
+        """The latest Home Assistant state of every entity (entity_id -> state)."""
+        with self._lock:
+            return dict(self._raw)
+
+    def bound_entities(self) -> set[str]:
+        """Entity ids bound to Villa Kuppis devices at this site."""
+        with self._lock:
+            return set(self._by_entity)
+
+    def registry(self) -> dict | None:
+        """Areas, floors, devices and entities from Home Assistant's
+        registries (None until loaded or when Home Assistant refuses them).
+        Read-only for the caller."""
+        with self._lock:
+            return self._registry
+
     def attributes(self, entity_id: str) -> dict | None:
         """The latest attributes of any entity, bound or not (None when absent)."""
         with self._lock:
@@ -700,6 +743,7 @@ class HomeAssistantGateway:
                 "error": self._last_error,
                 "missing": sorted(self._missing),
                 "ha_version": self._ha_version,
+                "registry_error": self._registry_error,
             }
 
     # -- commands --
@@ -764,10 +808,50 @@ class HomeAssistantGateway:
                 return self._finish_locked(cmd, "failed", detail)
             if cmd.confirmed_by(state):
                 return self._finish_locked(cmd, "confirmed", "already at the requested value")
-            self._active[device_id] = cmd
-            self._commands[cmd.request_id] = cmd
-            self._latest[device_id] = cmd
-            out = cmd.public()
+            out = self._activate_locked(cmd)
+        return self._launch(cmd, binding, loop, out)
+
+    def submit_entity(self, entity_id: str, domain: str, service: str, data: dict,
+                      actor: str, confirm: Callable[[dict], bool] | None = None) -> dict:
+        """Queue a service call on any entity, bound or not (devices.py).
+
+        ``confirm`` receives the entity's Home Assistant state and returns
+        True once the call has taken effect; without it the command is
+        confirmed when Home Assistant accepts the call. One command per
+        entity at a time, as with bound devices.
+        """
+        key = ENTITY_PREFIX + entity_id
+        cmd = Command(uuid.uuid4().hex, self.site_id, key, f"{domain}.{service}",
+                      dict(data), actor, created_at=self._now().isoformat())
+        cmd._service = (domain, service, True)
+        cmd._confirm = confirm
+        cmd._entity = entity_id
+        with self._lock:
+            active = self._active.get(key)
+            if active is not None:
+                if active.action == cmd.action and active.value == cmd.value:
+                    return active.public()
+                return self._finish_locked(cmd, "failed", "another command for this device is pending")
+            loop = self._loop
+            if not self._connected or loop is None or loop.is_closed():
+                return self._finish_locked(cmd, "failed", "Home Assistant is not connected")
+            raw = self._raw.get(entity_id)
+            if raw is None:
+                return self._finish_locked(cmd, "failed", f"{entity_id} is missing in Home Assistant")
+            if raw.get("state") in UNAVAILABLE:
+                return self._finish_locked(cmd, "failed", "the device is unavailable in Home Assistant")
+            if confirm is not None and confirm(raw):
+                return self._finish_locked(cmd, "confirmed", "already at the requested value")
+            out = self._activate_locked(cmd)
+        return self._launch(cmd, Binding(self.site_id, key, entity_id, "entity"), loop, out)
+
+    def _activate_locked(self, cmd: Command) -> dict:
+        self._active[cmd.device_id] = cmd
+        self._commands[cmd.request_id] = cmd
+        self._latest[cmd.device_id] = cmd
+        return cmd.public()
+
+    def _launch(self, cmd: Command, binding: Binding, loop, out: dict) -> dict:
         try:
             loop.call_soon_threadsafe(lambda: loop.create_task(self._execute(cmd, binding)))
         except RuntimeError:
@@ -785,15 +869,16 @@ class HomeAssistantGateway:
         return sorted((result or {}).get(domain) or {})
 
     def call(self, domain: str, service: str, data: dict,
-             entity_id: str | None = None) -> None:
+             entity_id: str | None = None, *, target: dict | None = None) -> None:
         """Call a service outside the device commands (a notification, a
-        reload); blocking.
+        reload, all lights of an area); blocking.
 
         Raises HAError when Home Assistant refuses it and HAConnectionClosed
         or TimeoutError when there is no answer.
         """
         self._run(lambda conn: conn.call_service(domain, service, entity_id, data,
-                                                 timeout=self._command_timeout))
+                                                 timeout=self._command_timeout,
+                                                 target=target))
 
     def _run(self, make):
         with self._lock:
@@ -868,7 +953,10 @@ class HomeAssistantGateway:
         with self._lock:
             if cmd.state != "pending":
                 return
-            if cmd.confirmed_by(self._states.get(cmd.device_id)):
+            if cmd._entity is not None and cmd._confirm is None:
+                self._finish_locked(cmd, "confirmed", "")
+                return
+            if cmd.confirmed_by(self._reading_locked(cmd)):
                 self._finish_locked(cmd, "confirmed", "")
                 return
         try:
@@ -885,11 +973,16 @@ class HomeAssistantGateway:
         cmd = self._active.get(device_id) or self._latest.get(device_id)
         if cmd is None or cmd.state not in ("pending", "unknown"):
             return
-        if cmd.confirmed_by(self._states.get(device_id)):
+        if cmd.confirmed_by(self._reading_locked(cmd)):
             was_unknown = cmd.state == "unknown"
             if was_unknown:
                 cmd._done = None
             self._finish_locked(cmd, "confirmed", "confirmed by a later report" if was_unknown else "")
+
+    def _reading_locked(self, cmd: Command) -> dict | None:
+        if cmd._entity is not None:
+            return self._raw.get(cmd._entity)
+        return self._states.get(cmd.device_id)
 
     # -- connection loop --
 
@@ -898,10 +991,17 @@ class HomeAssistantGateway:
         entity_id = data.get("entity_id")
         if not isinstance(entity_id, str):
             return
+        new = data.get("new_state")
         with self._lock:
-            device_id = self._apply_locked(entity_id, data.get("new_state"))
+            device_id = self._apply_locked(entity_id, new)
             if device_id is not None:
                 self._confirm_locked(device_id)
+            self._confirm_locked(ENTITY_PREFIX + entity_id)
+            dirty = self._registry_dirty
+            added = (new is not None and self._registry is not None
+                     and entity_id not in self._registry_entities)
+        if added and dirty is not None:
+            dirty.set()   # a new entity: its area and device come from the registry
 
     def _touch(self) -> None:
         with self._lock:
@@ -918,7 +1018,61 @@ class HomeAssistantGateway:
                 device_id = self._apply_locked(entity_id, raw)
                 if device_id is not None:
                     self._confirm_locked(device_id)
+            for key in [k for k in self._active if k.startswith(ENTITY_PREFIX)]:
+                self._confirm_locked(key)
             self._refresh_missing_locked()
+
+    async def _load_registry(self, conn: HAConnection) -> None:
+        timeout = self._command_timeout
+        try:
+            areas = await conn.request({"type": "config/area_registry/list"}, timeout)
+            devices = await conn.request({"type": "config/device_registry/list"}, timeout)
+            entities = await conn.request({"type": "config/entity_registry/list"}, timeout)
+        except (HAError, asyncio.TimeoutError) as err:
+            with self._lock:
+                self._registry_error = f"{type(err).__name__}: {err}".rstrip(": ")
+            return
+        try:
+            floors = await conn.request({"type": "config/floor_registry/list"}, timeout)
+        except (HAError, asyncio.TimeoutError):
+            floors = []    # Home Assistant before floors (2024.4)
+
+        def rows(value):
+            return [r for r in value if isinstance(r, dict)] if isinstance(value, list) else []
+        registry = {"areas": rows(areas), "floors": rows(floors), "devices": rows(devices),
+                    "entities": rows(entities), "loaded_at": self._now().isoformat()}
+        with self._lock:
+            self._registry = registry
+            self._registry_entities = frozenset(e.get("entity_id") for e in registry["entities"])
+            self._registry_error = None
+
+    async def _registry_loop(self, conn: HAConnection) -> None:
+        """Keep the registries current: at connect, after a registry event
+        or a new entity, and at every resync interval."""
+        dirty = asyncio.Event()
+        with self._lock:
+            self._registry_dirty = dirty
+        try:
+            for event_type in REGISTRY_EVENTS:
+                try:
+                    await conn.subscribe_events(event_type, lambda _e: dirty.set(),
+                                                timeout=self._command_timeout)
+                except (HAError, asyncio.TimeoutError):
+                    pass   # not allowed for this user: the interval still applies
+            while True:
+                dirty.clear()
+                await self._load_registry(conn)
+                try:
+                    await asyncio.wait_for(dirty.wait(), self._resync_interval)
+                    await asyncio.sleep(REGISTRY_DEBOUNCE)
+                except asyncio.TimeoutError:
+                    pass
+        except HAConnectionClosed:
+            return
+        finally:
+            with self._lock:
+                if self._registry_dirty is dirty:
+                    self._registry_dirty = None
 
     def retry_delay(self, failures: int, auth_failed: bool = False) -> float:
         if auth_failed:
@@ -948,6 +1102,7 @@ class HomeAssistantGateway:
             self._set_state("ok")
             closed = asyncio.ensure_future(conn.wait_closed())
             stop = asyncio.ensure_future(self._stop.wait())
+            registry = asyncio.ensure_future(self._registry_loop(conn))
             try:
                 while True:
                     done, _ = await asyncio.wait({closed, stop}, timeout=self._resync_interval,
@@ -958,6 +1113,8 @@ class HomeAssistantGateway:
             finally:
                 closed.cancel()
                 stop.cancel()
+                registry.cancel()
+                await asyncio.gather(registry, return_exceptions=True)
         finally:
             with self._lock:
                 self._conn = None

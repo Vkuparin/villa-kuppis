@@ -22,6 +22,10 @@ from villa_kuppis.ha_gateway import (
 )
 
 TOKEN = "test-token"
+REGISTRY_LISTS = {"config/area_registry/list": "areas",
+                  "config/floor_registry/list": "floors",
+                  "config/device_registry/list": "devices",
+                  "config/entity_registry/list": "entities"}
 CLIMATE_FEATURES = 1 | 8 | 128 | 256
 
 
@@ -51,6 +55,11 @@ class FakeHA:
         self.hang = False
         self.connections = 0
         self.services: dict[str, dict] = {"climate": {"set_temperature": {}}}
+        # Registry lists by kind ("areas", "floors", "devices", "entities");
+        # None answers them as unauthorized.
+        self.registry: dict | None = None
+        self.registry_reads = 0
+        self.event_subs: list[tuple] = []
         self._tasks: set[asyncio.Task] = set()
 
     async def start(self) -> None:
@@ -99,6 +108,16 @@ class FakeHA:
                 self._tasks.add(task)
                 task.add_done_callback(self._tasks.discard)
 
+    def fire(self, event_type: str, data: dict | None = None) -> None:
+        """Send an event to its subscribers (other than state_changed)."""
+        for ws, sub_id, kind in list(self.event_subs):
+            if kind == event_type and not ws.closed:
+                task = asyncio.ensure_future(ws.send_json({
+                    "id": sub_id, "type": "event",
+                    "event": {"event_type": event_type, "data": data or {}}}))
+                self._tasks.add(task)
+                task.add_done_callback(self._tasks.discard)
+
     async def drop(self) -> None:
         for ws, _ in list(self.sockets):
             await ws.close()
@@ -124,16 +143,33 @@ class FakeHA:
                     await ws.send_json({"id": msg_id, "type": "result", "success": True,
                                         "result": list(self.states.values())})
                 elif kind == "subscribe_events":
-                    entry[1] = msg_id
+                    if data.get("event_type") == "state_changed":
+                        entry[1] = msg_id
+                    else:
+                        self.event_subs.append((ws, msg_id, data.get("event_type")))
                     await ws.send_json({"id": msg_id, "type": "result", "success": True,
                                         "result": None})
+                elif kind in REGISTRY_LISTS:
+                    self.registry_reads += 1
+                    if self.registry is None:
+                        await ws.send_json({"id": msg_id, "type": "result", "success": False,
+                                            "error": {"code": "unauthorized",
+                                                      "message": "Unauthorized"}})
+                    else:
+                        await ws.send_json({"id": msg_id, "type": "result", "success": True,
+                                            "result": self.registry.get(REGISTRY_LISTS[kind], [])})
                 elif kind == "get_services":
                     await ws.send_json({"id": msg_id, "type": "result", "success": True,
                                         "result": self.services})
                 elif kind == "call_service":
                     await self._call(ws, data)
+                else:
+                    await ws.send_json({"id": msg_id, "type": "result", "success": False,
+                                        "error": {"code": "unknown_command",
+                                                  "message": "Unknown command."}})
         finally:
             self.sockets.remove(entry)
+            self.event_subs = [sub for sub in self.event_subs if sub[0] is not ws]
         return ws
 
     async def _call(self, ws, data) -> None:

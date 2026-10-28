@@ -1,5 +1,13 @@
 # Muutokset
 
+## 0.4.26
+
+- Uusi Laitteet-osio Koti- ja Mökki-sivuilla: kaikki Home Assistantissa johonkin alueeseen (huoneeseen) lisätyt laitteet näkyvät huoneittain ilman sovelluspäivitystä. Uudet laitteet saavat Uusi-merkin.
+- Valot, pistorasiat ja kytkimet kytketään liukukytkimellä; himmennettävillä valoilla on kirkkaus ja värilämpötila, verhoilla ja tuulettimilla omat säätimet, tilanteilla ja skripteillä Käynnistä-painike. Huoneen kaikki valot saa pois yhdellä painalluksella.
+- Laitetta napauttamalla näkyy sen historia (päivä, viikko, kuukausi, vuosi), nimen voi vaihtaa ja laitteen piilottaa. Järjestä-kytkimellä huoneita ja laitteita voi siirtää ja piilotettuja palauttaa.
+- Home Assistantin automaatiot näkyvät listana, ja ne voi kytkeä päälle ja pois.
+- Anturien arvot ja laitteiden päälle/pois-tila tallentuvat historiaan; muutokset näkyvät Tapahtumissa.
+
 ## 0.4.25
 
 - Mökin Automaatio-kytkin toimii: pois päältä mökille ei lähetetä tavoitteita, ja patterit siirtyvät turvalämpöön noin minuutissa. Sivulla näkyy siitä ilmoitus.

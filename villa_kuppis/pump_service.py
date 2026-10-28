@@ -1117,7 +1117,8 @@ class PumpService:
                  price_transport=None,
                  price_fetch_enabled: bool = True,
                  cottage_factory=None,
-                 notifier=None, reloader=None):
+                 notifier=None, reloader=None,
+                 device_sources=None):
         self._data_dir = Path(data_dir)
         self._now = now
         self._stale_after = stale_after
@@ -1165,6 +1166,11 @@ class PumpService:
                 prices_db=self._prices_db, overrides=settings_store.overrides,
                 automation_on=self.cottage_automation_on,
                 models=self.cottage_heating_models)
+        # Other Home Assistant devices by area (devices.py): ``device_sources``
+        # gets the cottage site and returns {site: gateway}.
+        from .devices import DeviceHub
+        self.devices = DeviceHub(
+            self._data_dir, device_sources(self.cottage) if device_sources else {}, now=now)
         # Phone alerts (alerts.py) when a notifier is given.
         self.alerts = None
         if notifier is not None:
@@ -1193,6 +1199,7 @@ class PumpService:
         self.automation.start()
         if self.cottage is not None:
             self.cottage.start()
+        self.devices.start()
         if self.alerts is not None:
             self.alerts.start()
 
@@ -1209,6 +1216,7 @@ class PumpService:
             self.alerts.stop()
         self.automation.stop()
         self.gateway.stop()
+        self.devices.stop()
         if self.cottage is not None:
             self.cottage.stop()
         self.store.close()
@@ -1248,9 +1256,11 @@ class PumpService:
     def events(self, limit: int = 100) -> list[dict]:
         """Pump commands, plus cottage mode changes when a cottage is set up."""
         events = self.store.events(limit)
-        if self.cottage is None:
+        devices = self.devices.events(limit) if self.devices.catalogs else []
+        if self.cottage is None and not devices:
             return events
-        merged = [{**e, "site": "home"} for e in events] + self.cottage.events(limit)
+        merged = ([{**e, "site": "home"} for e in events] + devices
+                  + (self.cottage.events(limit) if self.cottage is not None else []))
         merged.sort(key=lambda e: _to_epoch(e["ts"]), reverse=True)
         return merged[:limit]
 
@@ -1712,9 +1722,15 @@ def make_live_service(data_dir, *, credentials=None, weather_sites=None,
                                        lambda: read_token_file(token_file), bindings)
         from .alerts import HomeAssistantNotifier
         from .ha_pumps import SessionReloader
+        def device_sources(cottage):
+            sources = {"home": gateway}
+            if cottage is not None:
+                sources["cottage"] = cottage.gateway
+            return sources
         service = PumpService(data_dir, client=None, client_factory=ha_client_factory(
             gateway, lambda: service.store.unit_states_with_last_mode()),
-            notifier=HomeAssistantNotifier(gateway), reloader=SessionReloader(gateway), **common)
+            notifier=HomeAssistantNotifier(gateway), reloader=SessionReloader(gateway),
+            device_sources=device_sources, **common)
         return service
 
     username = (credentials.username if credentials is not None else
@@ -1739,4 +1755,6 @@ def make_live_service(data_dir, *, credentials=None, weather_sites=None,
 
         return client, teardown
 
-    return PumpService(data_dir, client=None, client_factory=client_factory, **common)
+    return PumpService(data_dir, client=None, client_factory=client_factory,
+                       device_sources=lambda c: {} if c is None else {"cottage": c.gateway},
+                       **common)

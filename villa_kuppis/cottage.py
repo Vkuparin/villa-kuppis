@@ -387,6 +387,11 @@ class CottageSite:
         self._thread: threading.Thread | None = None
         self._target_thread: threading.Thread | None = None
 
+    @property
+    def gateway(self):
+        """The cottage Home Assistant gateway (also the source of its other devices)."""
+        return self._gateway
+
     # -- lifecycle --
 
     def start(self) -> None:
