@@ -39,6 +39,9 @@ To rehearse failures: `villa_kuppis_simulator.set_available` takes entities off 
 - The status sensor's `reported` attribute (from version 0.3.1) gives the last report time of each room device, rounded down to 5 minutes. Home Assistant does not send that time for an unchanged reading, so without it a steady room temperature would look stale to Villa Kuppis.
 - `villa_kuppis_cottage.clear_manual`: `room`. Ends a manual pause at once.
 - `villa_kuppis_cottage.set_heater_enabled`: `entity_id` (one of the rooms' heaters), `enabled` (from version 0.4.0). A switched-off heater is turned off and kept off in every mode, and switching it back on is never taken for a manual change. In `fallback` it still holds `safe_setpoint` for frost protection, unless `fallback_heats_disabled: false`. The switched-off heaters survive a restart; the status sensor lists them in `disabled_heaters`, which also tells Villa Kuppis that the integration takes this service.
+- `villa_kuppis_cottage.set_room_sensor`: `room`, optional `entity_id` (a temperature sensor; left out returns to the package's sensor), from version 0.5.0. Villa Kuppis calls it from a sensor's details under Laitteet; the choice survives a restart and the status sensor shows it in `chosen_sensor`.
+
+From version 0.5.0 a room can also name a Home Assistant area (`area:` id or name). Every climate entity in that area (its own area or its device's) is then a heater of the room next to the named ones, and the area's temperature sensor is the room sensor when none is named. Moving a device between areas in Home Assistant updates the room within seconds, and Villa Kuppis rebinds it. A heater named for one room never joins another.
 
 ## Tests
 

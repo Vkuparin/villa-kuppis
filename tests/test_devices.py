@@ -252,6 +252,25 @@ class RoomSensorTest(unittest.TestCase):
             service.close()
 
 
+class CottageRoomSensorTest(unittest.TestCase):
+    def test_cottage_sensor_choice_goes_to_the_cottage(self):
+        from villa_kuppis.pump_app import make_demo_service
+        with tempfile.TemporaryDirectory() as tmp:
+            service = make_demo_service(tmp)
+            try:
+                service.start()
+                catalog = service.devices.catalog("cottage")
+                view = catalog.view()
+                self.assertEqual(view["room_target"], "cottage")
+                self.assertEqual([r["id"] for r in view["rooms"]], ["large", "small"])
+                cmd = catalog.set_room_sensor({"room": "large", "key": "demo-sensor.sauna_temperature"},
+                                              "Ville")
+                self.assertEqual(cmd["value"], {"room": "large", "entity_id": "sensor.sauna_temperature"})
+                self.assertEqual(service.devices.catalog("home").view()["room_target"], "pump")
+            finally:
+                service.close()
+
+
 class GatewayRegistryTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()

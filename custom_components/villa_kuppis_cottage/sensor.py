@@ -71,6 +71,10 @@ class RoomTargetSensor(SensorEntity):
             # Heaters switched off in Villa Kuppis; the key also tells Villa
             # Kuppis that this version takes set_heater_enabled.
             "disabled_heaters": sorted(room.disabled),
+            # The sensor picked in Villa Kuppis (None: the package's or the
+            # area's); the key also tells Villa Kuppis that this version takes
+            # set_room_sensor.
+            "chosen_sensor": room.chosen_sensor,
             # Villa Kuppis binds the room's devices from this: rebinding a
             # room is an edit of the package, nothing in Villa Kuppis.
             "devices": room.devices,

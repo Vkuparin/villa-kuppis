@@ -349,6 +349,14 @@ def heater_switched(entity_id: str, enabled: bool) -> Callable[[dict], bool]:
     return check
 
 
+def room_sensor_chosen(entity_id: str | None) -> Callable[[dict], bool]:
+    """Read-back check: the room status sensor shows the chosen sensor."""
+    def check(state: dict) -> bool:
+        attrs = state.get("attributes") or {}
+        return "chosen_sensor" in attrs and attrs["chosen_sensor"] == entity_id
+    return check
+
+
 class CottageSite:
     """The cottage's gateway, readings, history and events for PumpService.
 
@@ -546,6 +554,32 @@ class CottageSite:
             self._store.add_event(int(self._now().timestamp()), SITE_ID, heater.room, actor,
                                   "heater", None, "on" if enabled else "off",
                                   heater.label or heater.entity_id)
+        return cmd
+
+    def set_room_sensor(self, room: str, entity_id: str | None, label: str | None,
+                        actor: str) -> dict:
+        """Use another temperature sensor for a room (None: the package's own).
+
+        Raises ``HeaterSwitchError`` when the room status sensor is not bound
+        or the integration is too old to choose sensors.
+        """
+        if room not in ROOMS or not (entity_id is None or isinstance(entity_id, str)):
+            raise HeaterSwitchError("Tuntematon mökin huone.")
+        status = next((b for b in self._bindings()
+                       if b.room == room and role_of(b) == "status"), None)
+        attrs = (self._gateway.snapshot().get(status.device_id) or {}).get("attributes") \
+            if status is not None else None
+        if not isinstance(attrs, dict) or "chosen_sensor" not in attrs:
+            raise HeaterSwitchError("Mökin integraatio ei vielä tue anturin valintaa: "
+                                    "päivitä se (install.sh).")
+        data = {"room": room, **({"entity_id": entity_id} if entity_id else {})}
+        cmd = self._gateway.submit_service(status.device_id, INTEGRATION_DOMAIN,
+                                           "set_room_sensor", data, actor,
+                                           room_sensor_chosen(entity_id))
+        if cmd["state"] != "failed":
+            self._store.add_event(int(self._now().timestamp()), SITE_ID, room, actor,
+                                  "room_sensor", None, label or entity_id or "oletus",
+                                  ROOMS[room])
         return cmd
 
     def visit_view(self) -> dict:
@@ -786,7 +820,8 @@ class CottageSite:
                         **base, "target": _num(state.get("value")),
                         **{key: attrs.get(key) for key in (
                             "mode", "reason", "drive", "revision", "requested_target",
-                            "valid_until", "manual_until", "manual_by", "disabled_heaters")}}
+                            "valid_until", "manual_until", "manual_by", "disabled_heaters",
+                            "chosen_sensor")}}
             disabled = (room["status"] or {}).get("disabled_heaters")
             for heater in room["heaters"]:
                 # Older integrations have no disabled_heaters: no switch.
@@ -869,6 +904,7 @@ class FakeSiteGateway:
         self._written: dict[str, dict] = {}     # room -> the integration's last accepted write
         self._commands: dict[str, dict] = {}
         self._disabled: set[str] = set()         # heater entities switched off
+        self._chosen: dict[str, str] = {}        # room -> sensor picked in Villa Kuppis
 
     def submit_service(self, device_id, domain, service, data, actor, confirm, *,
                        target_entity: bool = False) -> dict:
@@ -881,6 +917,11 @@ class FakeSiteGateway:
         with self._lock:
             if not self._started:
                 cmd.update(state="failed", detail="Home Assistant is not connected")
+            elif service == "set_room_sensor":
+                if data.get("entity_id"):
+                    self._chosen[data["room"]] = data["entity_id"]
+                else:
+                    self._chosen.pop(data["room"], None)
             elif service == "set_heater_enabled":
                 if data["enabled"]:
                     self._disabled.discard(data["entity_id"])
@@ -939,6 +980,7 @@ class FakeSiteGateway:
         }
         with self._lock:
             disabled = set(self._disabled)
+            chosen = dict(self._chosen)
             for room, write in self._written.items():
                 if write["valid_until"] <= now:
                     continue
@@ -967,7 +1009,8 @@ class FakeSiteGateway:
                 target, attrs = status[binding.device_id]
                 attrs = {**attrs, "disabled_heaters": sorted(
                     b.entity_id for b in DEMO_BINDINGS
-                    if b.room == binding.room and b.entity_id in disabled)}
+                    if b.room == binding.room and b.entity_id in disabled),
+                    "chosen_sensor": chosen.get(binding.room)}
                 state.update({"value": target, "attributes": attrs,
                               "caps": {"unit": "°C", "device_class": "temperature"}})
             else:
@@ -1250,6 +1293,22 @@ function vkHeaterSwitch(heater, onChange) {
      sensorChip("PM2,5", room.pm25, function (v) { return num.format(v) + " µg/m³"; }, "Hiukkaset PM2,5.")]
       .forEach(function (chip) { if (chip) stats.appendChild(chip); });
     if (stats.children.length) c.appendChild(stats);
+    if (st && st.chosen_sensor) {
+      // The room reads a sensor picked in Laitteet; one tap returns the package's own.
+      var pick = el("div", "heater-sw");
+      pick.appendChild(el("span", "hs-name", "Huoneanturi: " + (temp0 ? temp0.label : st.chosen_sensor),
+        "Valittu Laitteet-osiossa anturin tiedoista."));
+      var back = el("button", "", "Palauta oletus", "Palauttaa mökin asetuksissa nimetyn anturin.");
+      back.type = "button";
+      back.addEventListener("click", function () {
+        back.disabled = true;
+        fetch("api/cottage/room_sensor", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ room: room.id, entity_id: null }) }).then(function () { load(); });
+      });
+      pick.appendChild(el("span"));
+      pick.appendChild(back);
+      c.appendChild(pick);
+    }
     if (st) {
       var plan = room.plan;
       if (plan) {

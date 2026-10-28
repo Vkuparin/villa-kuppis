@@ -29,6 +29,9 @@ villa_kuppis_cottage:
   # A heater switched off in Villa Kuppis still holds safe_setpoint in
   # fallback, so a forgotten switch never leaves a room unheated.
   fallback_heats_disabled: true
+  # A room may also name a Home Assistant area (`area: Iso huone`): every
+  # heater in that area then joins the room, and the area's temperature
+  # sensor is used when `sensor` is left out.
   rooms:
     large:
       name: Iso huone

@@ -1,5 +1,10 @@
 # Muutokset
 
+## 0.4.29
+
+- Mökin huoneelle voi valita toisen lämpöanturin: napauta anturia Mökki-sivun Laitteet-osiossa ja valitse huone kohdasta Mökin huoneen lämpötilana. Huoneen kortilla Palauta oletus palauttaa alkuperäisen anturin.
+- Mökin huoneeseen voi liittää Home Assistantin alueen: alueen patterit liittyvät huoneeseen ja lämmitetään sen mukana, kun laite siirretään alueelle Home Assistantissa. Vaatii mökin integraation version 0.5.0 (aja install.sh mökin Home Assistantissa) ja huoneelle `area:`-rivin mökin asetuksiin.
+
 ## 0.4.28
 
 - Lämpöpumpun huonelämpötilaksi voi valita erillisen lämpöanturin: napauta anturia Laitteet-osiossa ja valitse pumppu kohdasta Pumpun huonelämpötilana. Pumpun ohjaus ja suunnitelma käyttävät anturin lukemaa aina kun anturi on tavoitettavissa, muuten pumpun omaa.

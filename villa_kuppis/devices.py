@@ -638,6 +638,9 @@ class DeviceCatalog:
         self._store = store
         self._now = now
         self._rooms = rooms                       # [(room id, name)] a sensor can serve
+        # Set for the cottage: (room, entity_id, label, actor) -> command; the
+        # cottage integration then reads the room from that sensor.
+        self.choose_room: Callable | None = None
         self._backfilled: set[str] = set()
         self._lock = threading.Lock()
         self._commands: dict[str, str] = {}      # key -> last request id
@@ -712,6 +715,7 @@ class DeviceCatalog:
         sensors = self._store.room_sensors(self.site_id)
         return {"site": self.site_id, "configured": True,
                 "rooms": [{"id": r, "name": n, "sensor": sensors.get(r)} for r, n in self._rooms()],
+                "room_target": "cottage" if self.choose_room else "pump",
                 "connection": health.get("state"), "registry": built["registry"],
                 "registry_error": health.get("registry_error"),
                 "areas": areas, "automations": built["automations"], "rules": rules,
@@ -793,14 +797,21 @@ class DeviceCatalog:
             fields["name"] = name or None
         self._store.update(self.site_id, key, now, **fields)
 
-    def set_room_sensor(self, body: dict) -> dict:
+    def set_room_sensor(self, body: dict, actor: str = "") -> dict:
         room, key = body.get("room"), body.get("key")
         if room not in {r for r, _ in self._rooms()}:
             raise DeviceError("Tuntematon huone.")
+        device = None
         if key is not None:
             device = self.devices_by_key().get(key) if isinstance(key, str) else None
             if device is None or device["kind"] != "temperature":
                 raise DeviceError("Valitse lämpötila-anturi.")
+        if self.choose_room is not None:
+            try:
+                return self.choose_room(room, device["entity_id"] if device else None,
+                                        device["ha_name"] if device else None, actor)
+            except ValueError as error:
+                raise DeviceError(str(error)) from error
         self._store.set_room_sensor(self.site_id, room, key, self._now())
         return {"ok": True}
 

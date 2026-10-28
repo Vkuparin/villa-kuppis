@@ -231,3 +231,66 @@ async def test_switched_off_heaters_are_restored_after_a_restart(hass, calls, ha
         "targets": {}, "disabled": {"large": ["climate.mill_1", "climate.gone"]}}}
     await setup(hass)
     assert status(hass).attributes["disabled_heaters"] == ["climate.mill_1"]
+
+
+AREA_CONFIG = {DOMAIN: {
+    "safe_setpoint": 7,
+    "rooms": {
+        "large": {"name": "Iso huone", "area": "Iso huone", "heaters": ["climate.mill_1"]},
+        "small": {"name": "Pieni huone", "sensor": "sensor.alpstuga_small",
+                  "heaters": ["climate.mill_4"]},
+    },
+}}
+
+
+def add_entity(hass, domain, object_id, area_id=None):
+    from homeassistant.helpers import entity_registry as er
+    registry = er.async_get(hass)
+    entry = registry.async_get_or_create(domain, "test", object_id, suggested_object_id=object_id)
+    return registry.async_update_entity(entry.entity_id, area_id=area_id)
+
+
+async def test_area_heaters_and_sensor_join_the_room(hass, calls, hass_storage):
+    from homeassistant.helpers import area_registry as ar
+    area = ar.async_get(hass).async_create("Iso huone")
+    temp = {"unit_of_measurement": "°C", "device_class": "temperature"}
+    add_entity(hass, "sensor", "lampo_iso", area.id)
+    hass.states.async_set("sensor.lampo_iso", "6.0", temp)
+    hass.states.async_remove("climate.mill_4")
+    add_entity(hass, "climate", "mill_4", area.id)       # named for the small room: stays there
+    set_heater(hass, "climate.mill_4", 7.0)
+    add_entity(hass, "climate", "mill_3")
+    set_heater(hass, "climate.mill_3", 7.0)
+    assert await async_setup_component(hass, DOMAIN, AREA_CONFIG)
+    await hass.async_block_till_done()
+    devices = status(hass).attributes["devices"]
+    assert devices == {"temperature": "sensor.lampo_iso", "heaters": ["climate.mill_1"]}
+    assert status(hass).attributes["chosen_sensor"] is None
+
+    # A heater moved into the area joins the room and is driven with it.
+    add_entity(hass, "climate", "mill_3", area.id)
+    await hass.async_block_till_done()
+    assert status(hass).attributes["devices"]["heaters"] == ["climate.mill_1", "climate.mill_3"]
+    await set_target(hass, "large", 18, revision=1)
+    assert ("climate.mill_3", 21.0) in sent(calls)
+
+    # Villa Kuppis picks another sensor, and back.
+    hass.states.async_set("sensor.ikkuna", "9.0", temp)
+    await hass.services.async_call(DOMAIN, "set_room_sensor",
+                                   {"room": "large", "entity_id": "sensor.ikkuna"}, blocking=True)
+    await hass.async_block_till_done()
+    assert status(hass).attributes["devices"]["temperature"] == "sensor.ikkuna"
+    assert status(hass).attributes["room_temperature"] == 9.0
+    assert hass_storage[DOMAIN]["data"]["sensors"] == {"large": "sensor.ikkuna"}
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(DOMAIN, "set_room_sensor",
+                                       {"room": "large", "entity_id": "sensor.alpstuga_small"},
+                                       blocking=True)
+    await hass.services.async_call(DOMAIN, "set_room_sensor", {"room": "large"}, blocking=True)
+    await hass.async_block_till_done()
+    assert status(hass).attributes["devices"]["temperature"] == "sensor.lampo_iso"
+
+    # Moved out again: no longer a heater of the room.
+    add_entity(hass, "climate", "mill_3", None)
+    await hass.async_block_till_done()
+    assert status(hass).attributes["devices"]["heaters"] == ["climate.mill_1"]

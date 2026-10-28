@@ -49,3 +49,15 @@ set_heater_enabled:
       required: true
       selector:
         boolean:
+set_room_sensor:
+  fields:
+    room:
+      required: true
+      selector:
+        text:
+    entity_id:
+      required: false
+      selector:
+        entity:
+          domain: sensor
+          device_class: temperature

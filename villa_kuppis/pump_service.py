@@ -1184,14 +1184,17 @@ class PumpService:
                 models=self.cottage_heating_models)
         # Other Home Assistant devices by area (devices.py): ``device_sources``
         # gets the cottage site and returns {site: gateway}.
+        from .cottage import ROOMS as COTTAGE_ROOMS
         from .devices import DeviceHub
         self.devices = DeviceHub(
             self._data_dir, device_sources(self.cottage) if device_sources else {}, now=now,
             automation_on=lambda site: (self.cottage_automation_on() if site == "cottage"
                                         else self.automation.automation_on()),
             prices=self.device_prices,
-            rooms=lambda site: ([] if site != "home" else
+            rooms=lambda site: (list(COTTAGE_ROOMS.items()) if site == "cottage" else
                                 [(u["id"], u["name"]) for u in self.store.unit_states()]))
+        if "cottage" in self.devices.catalogs and self.cottage is not None:
+            self.devices.catalogs["cottage"].choose_room = self.cottage.set_room_sensor
         self.gateway.room_source = lambda unit_id: self.devices.room_temperature("home", unit_id)
         # Phone alerts (alerts.py) when a notifier is given.
         self.alerts = None

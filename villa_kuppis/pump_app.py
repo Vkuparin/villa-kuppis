@@ -16,6 +16,7 @@ fully offline) plus a small JSON API on top of PumpService:
 * GET/POST /api/visit  cottage visit: state and plan; start {"arrival", "target", "rooms"} (card F4.3)
 * POST /api/visit/end  end the active visit
 * POST /api/cottage/heater  {"device_id", "enabled"}: switch one cottage heater off or on
+* POST /api/cottage/room_sensor  {"room", "entity_id"}: a cottage room's temperature sensor (null: default)
 * GET  /api/sites     connection health of each Home Assistant site
 * GET  /api/devices?site=home|cottage  Home Assistant devices by area (devices.py)
 * GET  /api/devices/history?site&key&hours  one device's recorded values
@@ -862,6 +863,7 @@ function changeText(action, requested) {
     case "mode": return "Toimintatila → " + modeName(requested);
     case "target": return "Mökin tavoite → " + fmtTemp(parseFloat(requested));
     case "heater": return requested === "on" ? "Patteri käyttöön" : "Patteri pois käytöstä";
+    case "room_sensor": return "Huoneanturi → " + requested;
     case "fan": return "Puhallus → " + fanName(requested);
     case "power": return requested ? "Laitteen päälle" : "Laitteen pois päältä";
     case "device": return requested;
@@ -2273,6 +2275,15 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
                 self._json(200, cottage.end_visit())
         elif parts.path == "/api/cottage/heater":
             self._post_heater(identity)
+        elif parts.path == "/api/cottage/room_sensor":
+            cottage = self._cottage_or_error()
+            body = self._read_json_object() if cottage is not None else None
+            if body is not None:
+                try:
+                    self._json(200, cottage.set_room_sensor(body.get("room"), body.get("entity_id"),
+                                                            None, identity["actor"]))
+                except HeaterSwitchError as error:
+                    self._json(400, {"error": "bad_body", "detail": str(error)})
         elif parts.path in ("/api/devices/command", "/api/devices/layout",
                             "/api/devices/lights_off", "/api/devices/rules",
                             "/api/devices/room_sensor"):
@@ -2346,7 +2357,7 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             elif what == "rules":
                 result = catalog.save_rule(body)
             elif what == "room_sensor":
-                result = catalog.set_room_sensor(body)
+                result = catalog.set_room_sensor(body, identity["actor"])
             else:
                 if not isinstance(body.get("area"), str):
                     raise DeviceError("area puuttuu.")

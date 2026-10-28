@@ -549,6 +549,23 @@ class ServiceHttpTests(unittest.TestCase):
             self.assertEqual(status, 400, bad)
             self.assertTrue(error["detail"])
 
+    def test_a_room_can_read_another_sensor_and_go_back(self):
+        server = self.serve(self.make_service())
+        status, cmd = self.post(server, "/api/cottage/room_sensor",
+                                {"room": "small", "entity_id": "sensor.ikkuna"})
+        self.assertEqual((status, cmd["state"]), (200, "confirmed"))
+        self.assertEqual(cmd["value"], {"room": "small", "entity_id": "sensor.ikkuna"})
+        _, body = self.get(server, "/api/cottage")
+        rooms = {r["id"]: r for r in body["rooms"]}
+        self.assertEqual(rooms["small"]["status"]["chosen_sensor"], "sensor.ikkuna")
+        self.assertIsNone(rooms["large"]["status"]["chosen_sensor"])
+        _, events = self.get(server, "/api/events")
+        self.assertEqual((events[0]["action"], events[0]["requested"]), ("room_sensor", "sensor.ikkuna"))
+        self.post(server, "/api/cottage/room_sensor", {"room": "small", "entity_id": None})
+        _, body = self.get(server, "/api/cottage")
+        self.assertIsNone(body["rooms"][1]["status"]["chosen_sensor"])
+        self.assertEqual(self.post(server, "/api/cottage/room_sensor", {"room": "sauna"})[0], 400)
+
     def test_heaters_without_integration_support_have_no_switch(self):
         service = self.make_service()
         server = self.serve(service)
