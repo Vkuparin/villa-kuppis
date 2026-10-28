@@ -1,5 +1,10 @@
 # Muutokset
 
+## 0.4.28
+
+- Lämpöpumpun huonelämpötilaksi voi valita erillisen lämpöanturin: napauta anturia Laitteet-osiossa ja valitse pumppu kohdasta Pumpun huonelämpötilana. Pumpun ohjaus ja suunnitelma käyttävät anturin lukemaa aina kun anturi on tavoitettavissa, muuten pumpun omaa.
+- Kun uusi anturi tai laite tulee Laitteet-osioon, sen historia täydennetään Home Assistantin tilastoista enintään 30 päivän ajalta tuntikeskiarvoina.
+
 ## 0.4.27
 
 - Säännöt Laitteet-osiossa: laite päälle aikavälillä (kellonaika tai auringonnousu/-lasku siirrolla, esimerkiksi jouluvalot auringonlaskusta klo 23:een), laite päälle sähkön halvimpina 15 minuutin jaksoina valitulla ikkunalla, tai toiminnot kun jotain tapahtuu (hetki, anturin raja, laite päälle tai pois, joku tulee kotiin tai viimeinen lähtee) ja valinnaiset ehdot aikavälistä ja hintarajasta.

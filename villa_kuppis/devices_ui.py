@@ -964,6 +964,28 @@ SCRIPT = r"""
       $dBody.appendChild(lab);
       $dBody.appendChild(msg);
     }
+    if (d.kind === "temperature" && DATA.rooms && DATA.rooms.length) {
+      var mine = DATA.rooms.filter(function (r) { return r.sensor === key; })[0];
+      var roomSel = select([["", "Ei mikään"]].concat(DATA.rooms.map(function (r) {
+        return [r.id, r.name + (r.sensor && r.sensor !== key ? " (korvaa nykyisen anturin)" : "")];
+      })), mine ? mine.id : "", "Huone, jonka lämpötilana tätä käytetään");
+      var roomMsg = el("div", "t-msg");
+      roomSel.addEventListener("change", function () {
+        var calls = [];
+        if (mine) calls.push(post("room_sensor", { room: mine.id, key: null }));
+        if (roomSel.value) calls.push(post("room_sensor", { room: roomSel.value, key: key }));
+        Promise.all(calls).then(function (res) {
+          var bad = res.filter(function (x) { return !x[0]; })[0];
+          roomMsg.className = bad ? "t-msg err" : "t-msg";
+          roomMsg.textContent = bad ? (bad[1].detail || "Tallennus ei onnistunut.") : "Tallennettu.";
+          mine = DATA.rooms.filter(function (r) { return r.id === roomSel.value; })[0];
+        });
+      });
+      $dBody.appendChild(field("Pumpun huonelämpötilana", roomSel,
+        "Pumppu ohjataan ja sen huone opitaan tämän anturin mukaan pumpun oman lukeman sijaan. " +
+        "Jos anturi ei vastaa, käytetään pumpun omaa lukemaa. Oletus: ei mikään."));
+      $dBody.appendChild(roomMsg);
+    }
     var nameLab = el("label", "fld", "Nimi Villa Kuppiksessa",
       "Tyhjä nimi palauttaa Home Assistantin nimen (" + d.ha_name + ").");
     var input = el("input");

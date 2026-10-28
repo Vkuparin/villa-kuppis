@@ -60,6 +60,8 @@ class FakeHA:
         self.registry: dict | None = None
         self.registry_reads = 0
         self.event_subs: list[tuple] = []
+        self.answers: dict[str, object] = {}     # other request type -> its result
+        self.asked: list[dict] = []
         self._tasks: set[asyncio.Task] = set()
 
     async def start(self) -> None:
@@ -163,6 +165,10 @@ class FakeHA:
                                         "result": self.services})
                 elif kind == "call_service":
                     await self._call(ws, data)
+                elif kind in self.answers:
+                    self.asked.append(data)
+                    await ws.send_json({"id": msg_id, "type": "result", "success": True,
+                                        "result": self.answers[kind]})
                 else:
                     await ws.send_json({"id": msg_id, "type": "result", "success": False,
                                         "error": {"code": "unknown_command",

@@ -859,6 +859,25 @@ class HomeAssistantGateway:
                 return self._finish_locked(cmd, "failed", "Home Assistant is not connected")
         return out
 
+    def statistics(self, entity_id: str, start: datetime) -> list[tuple[int, float]]:
+        """Hourly means of one entity from Home Assistant's long-term
+        statistics since ``start``: (epoch seconds, mean); blocking."""
+        result = self._run(lambda conn: conn.request({
+            "type": "recorder/statistics_during_period", "start_time": start.isoformat(),
+            "statistic_ids": [entity_id], "period": "hour", "types": ["mean"]},
+            self._command_timeout))
+        out = []
+        for row in (result or {}).get(entity_id) or []:
+            mean, begin = _number(row.get("mean")), row.get("start")
+            if isinstance(begin, (int, float)) and not isinstance(begin, bool):
+                ts = int(begin / 1000)        # milliseconds since Home Assistant 2023.3
+            else:
+                parsed = _parse_ts(begin)
+                ts = int(parsed.timestamp()) if parsed is not None else None
+            if mean is not None and ts is not None:
+                out.append((ts, mean))
+        return out
+
     def services(self, domain: str) -> list[str]:
         """Names of one domain's services in Home Assistant; blocking.
 

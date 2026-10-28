@@ -85,6 +85,8 @@ Order, hidden tiles and areas, display names and the "new" mark live in `pumps.d
 
 Rules for these devices are data made in the page (`villa_kuppis/rules.py`), checked every 30 seconds: a device on between two moments (a time, or sunrise or sunset with an offset, from Home Assistant's `sun.sun`), on in the cheapest 15-minute periods of a daily window, or actions when a moment passes, a sensor crosses a value, a device or binary sensor turns on or off, or someone comes home or the last one leaves (`person` entities), with an optional time window and price limit. They wait while the site's Automaatio switch is off. The first two act only when the wanted state changes, so a person's change holds until the next change point. Villa Kuppis never writes Home Assistant automations.
 
+A home pump can take its room temperature from a chosen temperature sensor (the sensor's detail view). While that sensor is available its reading replaces the pump's own in the stored state, the cooling controller and the optimizer; otherwise the pump's reading is used. When a sensor or on/off device is first recorded, its last 30 days of hourly means are copied from Home Assistant's long-term statistics (`recorder/statistics_during_period`) where they exist.
+
 ## Cottage control
 
 Villa Kuppis computes each room's effective target for every 15-minute period (prices, forecast, fixed thresholds, later the optimizer, visits). When the target changes it writes it to the room's Home Assistant helper with a heartbeat and revision. After a reconnect it reads actual states and sends only the currently valid target; missed periods show as gaps.

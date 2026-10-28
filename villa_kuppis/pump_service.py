@@ -809,6 +809,8 @@ class PumpGateway:
         self._readback_delay = readback_delay
         self._command_timeout = command_timeout
         self._teardown = teardown
+        # A room's own temperature sensor (devices.py): unit id -> °C or None.
+        self.room_source = None
 
         self._lock = threading.Lock()
         self._last_ok: datetime | None = None
@@ -926,6 +928,20 @@ class PumpGateway:
         return min(self._poll_interval * 2 ** failures,
                    max(MAX_POLL_BACKOFF, self._poll_interval))
 
+    def _with_rooms(self, states: list[dict]) -> list[dict]:
+        """A unit's room temperature from the room's own sensor when one is
+        chosen and reporting; otherwise the unit's own reading."""
+        if self.room_source is None:
+            return states
+        for s in states:
+            try:
+                value = self.room_source(s["id"])
+            except Exception:
+                value = None
+            if value is not None:
+                s["room_temp"] = value
+        return states
+
     async def _poll_loop(self) -> None:
         failures = 0
         while True:
@@ -934,7 +950,7 @@ class PumpGateway:
                     self._client.get_context(), timeout=self._command_timeout
                 )
                 now_iso = self._now().isoformat()
-                states = [unit_state(u, now_iso) for u in collect_units(context)]
+                states = self._with_rooms([unit_state(u, now_iso) for u in collect_units(context)])
                 self._store.upsert_units(states)
                 try:
                     self._store.record_history(states)
@@ -1070,7 +1086,7 @@ class PumpGateway:
                     # the view shows the confirmed value at once, not on
                     # the next poll.
                     try:
-                        states = [unit_state(unit, self._now().isoformat())]
+                        states = self._with_rooms([unit_state(unit, self._now().isoformat())])
                         self._store.upsert_units(states)
                         self._store.record_history(states)
                     except sqlite3.Error:
@@ -1173,7 +1189,10 @@ class PumpService:
             self._data_dir, device_sources(self.cottage) if device_sources else {}, now=now,
             automation_on=lambda site: (self.cottage_automation_on() if site == "cottage"
                                         else self.automation.automation_on()),
-            prices=self.device_prices)
+            prices=self.device_prices,
+            rooms=lambda site: ([] if site != "home" else
+                                [(u["id"], u["name"]) for u in self.store.unit_states()]))
+        self.gateway.room_source = lambda unit_id: self.devices.room_temperature("home", unit_id)
         # Phone alerts (alerts.py) when a notifier is given.
         self.alerts = None
         if notifier is not None:

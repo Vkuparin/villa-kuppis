@@ -51,6 +51,7 @@ SKIP_CATEGORIES = ("config", "diagnostic")
 UNAVAILABLE = ("unavailable", "unknown")
 SAMPLE_INTERVAL = 60.0
 RULE_INTERVAL = 30.0
+BACKFILL_DAYS = 30
 SAMPLE_REFRESH = 900          # record an unchanged value at least this often (s)
 THIN_AFTER = 30 * 86400       # older rows become 15-minute means
 THIN_BUCKET = 900
@@ -368,6 +369,13 @@ CREATE TABLE IF NOT EXISTS device_reading (
     value REAL NOT NULL,
     PRIMARY KEY (site_id, key, ts)
 ) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS room_sensor (
+    site_id TEXT NOT NULL,
+    room TEXT NOT NULL,
+    key TEXT NOT NULL,
+    since_utc TEXT NOT NULL,
+    PRIMARY KEY (site_id, room)
+);
 CREATE TABLE IF NOT EXISTS device_event (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts_utc TEXT NOT NULL,
@@ -525,6 +533,30 @@ class DeviceStore:
                  "unit_name": r[4], "actor": r[5], "action": "device", "requested": r[6],
                  "result": r[7], "detail": r[8]} for r in rows]
 
+    # room temperature sensors
+
+    def room_sensors(self, site_id: str) -> dict[str, str]:
+        with self._lock:
+            return dict(self._conn.execute(
+                "SELECT room, key FROM room_sensor WHERE site_id = ?", (site_id,)).fetchall())
+
+    def set_room_sensor(self, site_id: str, room: str, key: str | None, now: datetime) -> None:
+        with self._lock, self._conn:
+            if key is None:
+                self._conn.execute("DELETE FROM room_sensor WHERE site_id = ? AND room = ?",
+                                   (site_id, room))
+            else:
+                self._conn.execute(
+                    "INSERT INTO room_sensor (site_id, room, key, since_utc) VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT (site_id, room) DO UPDATE SET key = excluded.key, "
+                    "since_utc = excluded.since_utc", (site_id, room, key, now.isoformat()))
+
+    def has_readings(self, site_id: str, key: str) -> bool:
+        with self._lock:
+            return self._conn.execute(
+                "SELECT 1 FROM device_reading WHERE site_id = ? AND key = ? LIMIT 1",
+                (site_id, key)).fetchone() is not None
+
     # rules
 
     def rules(self, site_id: str) -> list[dict]:
@@ -599,11 +631,14 @@ class DeviceCatalog:
     ``submit_entity()``, ``command()`` and ``call()``).
     """
 
-    def __init__(self, site_id: str, source, store: DeviceStore, *, now=utc_now):
+    def __init__(self, site_id: str, source, store: DeviceStore, *, now=utc_now,
+                 rooms: Callable[[], list] = lambda: []):
         self.site_id = site_id
         self._source = source
         self._store = store
         self._now = now
+        self._rooms = rooms                       # [(room id, name)] a sensor can serve
+        self._backfilled: set[str] = set()
         self._lock = threading.Lock()
         self._commands: dict[str, str] = {}      # key -> last request id
         self._sparks: tuple[float, dict] | None = None
@@ -674,7 +709,9 @@ class DeviceCatalog:
             states = self._source.raw_states()
             for rule in self._store.rules(self.site_id):
                 rules.append({**rule, "status": self.rules.status(rule, by_key, states)})
+        sensors = self._store.room_sensors(self.site_id)
         return {"site": self.site_id, "configured": True,
+                "rooms": [{"id": r, "name": n, "sensor": sensors.get(r)} for r, n in self._rooms()],
                 "connection": health.get("state"), "registry": built["registry"],
                 "registry_error": health.get("registry_error"),
                 "areas": areas, "automations": built["automations"], "rules": rules,
@@ -756,6 +793,27 @@ class DeviceCatalog:
             fields["name"] = name or None
         self._store.update(self.site_id, key, now, **fields)
 
+    def set_room_sensor(self, body: dict) -> dict:
+        room, key = body.get("room"), body.get("key")
+        if room not in {r for r, _ in self._rooms()}:
+            raise DeviceError("Tuntematon huone.")
+        if key is not None:
+            device = self.devices_by_key().get(key) if isinstance(key, str) else None
+            if device is None or device["kind"] != "temperature":
+                raise DeviceError("Valitse lämpötila-anturi.")
+        self._store.set_room_sensor(self.site_id, room, key, self._now())
+        return {"ok": True}
+
+    def room_temperature(self, room: str) -> float | None:
+        """The chosen sensor's reading for a room, while it reports one."""
+        key = self._store.room_sensors(self.site_id).get(room)
+        if key is None or self._source.health().get("state") != "ok":
+            return None
+        device = self.devices_by_key().get(key)
+        if device is None or not device.get("available") or device["kind"] != "temperature":
+            return None
+        return device["value"]
+
     def save_rule(self, body: dict) -> dict:
         if "id" in body and (isinstance(body["id"], bool) or not isinstance(body["id"], int)):
             raise DeviceError("id: säännön numero")
@@ -829,6 +887,9 @@ class DeviceCatalog:
         rows = []
         for area in built["areas"]:
             for d in area["devices"]:
+                if d["key"] not in latest and d["key"] not in self._backfilled:
+                    self._backfilled.add(d["key"])
+                    self._backfill(d, now)
                 if d["kind"] in ON_OFF_KINDS:
                     value = None if d["on"] is None else float(d["on"])
                 elif d["kind"] in SENSOR_KINDS.values() or d["kind"] == "number":
@@ -845,6 +906,23 @@ class DeviceCatalog:
         return len(rows)
 
 
+    def _backfill(self, device: dict, now: int) -> None:
+        """A device seen for the first time: its hourly means from Home
+        Assistant's long-term statistics, when it keeps them."""
+        statistics = getattr(self._source, "statistics", None)
+        if (statistics is None or device["kind"] not in SENSOR_KINDS.values()
+                and device["kind"] != "number"):
+            return
+        start = datetime.fromtimestamp(now - BACKFILL_DAYS * 86400, timezone.utc)
+        try:
+            points = statistics(device["entity_id"], start)
+        except Exception as err:
+            log.info("no statistics for %s: %s", device["entity_id"], err)
+            return
+        rows = [(device["key"], ts, v) for ts, v in points if ts < now]
+        self._store.record(self.site_id, rows)
+
+
 class DeviceHub:
     """Every site's catalog, their store and the history sampler."""
 
@@ -852,10 +930,12 @@ class DeviceHub:
                  sample_interval: float = SAMPLE_INTERVAL,
                  rule_interval: float = RULE_INTERVAL,
                  automation_on: Callable[[str], bool] | None = None,
-                 prices: Callable | None = None):
+                 prices: Callable | None = None,
+                 rooms: Callable[[str], list] | None = None):
         self._now = now
         self._store = DeviceStore(Path(data_dir) / DB_FILENAME)
-        self.catalogs = {site: DeviceCatalog(site, src, self._store, now=now)
+        self.catalogs = {site: DeviceCatalog(site, src, self._store, now=now,
+                                             rooms=(lambda s=site: rooms(s)) if rooms else (lambda: []))
                          for site, src in sources.items()}
         for site, catalog in self.catalogs.items():
             catalog.rules = rules_mod.RuleEngine(
@@ -879,6 +959,10 @@ class DeviceHub:
         if site not in self.catalogs:
             return {"site": site, "configured": False, "areas": [], "automations": []}
         return self.catalogs[site].view()
+
+    def room_temperature(self, site: str, room: str) -> float | None:
+        catalog = self.catalogs.get(site)
+        return None if catalog is None else catalog.room_temperature(room)
 
     def events(self, limit: int) -> list[dict]:
         pending = self._store.pending_events()

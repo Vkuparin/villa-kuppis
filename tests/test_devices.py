@@ -197,6 +197,61 @@ class CatalogTest(unittest.TestCase):
         self.assertEqual([v for _, v in rows], [2.0])
 
 
+class RoomSensorTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.now = datetime(2026, 10, 28, 12, 0, tzinfo=timezone.utc)
+        self.store = DeviceStore(Path(self.tmp.name) / "pumps.db")
+        self.source = FakeDeviceSource("home", now=lambda: self.now)
+        self.source.statistics = lambda entity_id, start: [
+            (int(self.now.timestamp()) - 7200, 19.0), (int(self.now.timestamp()) - 3600, 19.5)]
+        self.catalog = DeviceCatalog("home", self.source, self.store, now=lambda: self.now,
+                                     rooms=lambda: [("unit-1", "Olohuone")])
+
+    def tearDown(self):
+        self.store.close()
+        self.tmp.cleanup()
+
+    def test_a_room_can_use_its_own_thermometer(self):
+        key = "demo-sensor.olohuone_temperature"
+        self.assertIsNone(self.catalog.room_temperature("unit-1"))
+        with self.assertRaises(DeviceError):
+            self.catalog.set_room_sensor({"room": "unit-1", "key": "demo-switch.jouluvalot"})
+        with self.assertRaises(DeviceError):
+            self.catalog.set_room_sensor({"room": "nope", "key": key})
+        self.catalog.set_room_sensor({"room": "unit-1", "key": key})
+        value = self.source.raw_states()["sensor.olohuone_temperature"]["state"]
+        self.assertEqual(self.catalog.room_temperature("unit-1"), float(value))
+        self.assertEqual(self.catalog.view()["rooms"], [{"id": "unit-1", "name": "Olohuone", "sensor": key}])
+        self.source._states["sensor.olohuone_temperature"]["state"] = "unavailable"
+        self.source.raw_states = lambda: dict(self.source._states)
+        self.assertIsNone(self.catalog.room_temperature("unit-1"))   # the unit's own reading then
+        self.catalog.set_room_sensor({"room": "unit-1", "key": None})
+        self.assertEqual(self.store.room_sensors("home"), {})
+
+    def test_new_sensor_history_is_backfilled_once(self):
+        self.catalog.sample()
+        points = self.catalog.history("demo-sensor.olohuone_humidity", 24)["points"]
+        self.assertEqual([p[1] for p in points][:2], [19.0, 19.5])
+        self.assertEqual(len(points), 3)                       # two hours back and now
+        self.catalog.sample()
+        self.assertEqual(len(self.catalog.history("demo-sensor.olohuone_humidity", 24)["points"]), 3)
+
+    def test_pump_service_uses_the_room_sensor(self):
+        from villa_kuppis.pump_app import make_demo_service
+        service = make_demo_service(self.tmp.name)
+        try:
+            service.store.upsert_units([{"id": "demo-1", "name": "Olohuone", "power": True, "mode": "cool", "setpoint": 23.0, "fan": "auto", "room_temp": 26.0, "in_error": False, "caps": None, "updated_at": "2026-10-28T12:00:00+00:00"}])
+            catalog = service.devices.catalog("home")
+            catalog.set_room_sensor({"room": "demo-1", "key": "demo-sensor.olohuone_temperature"})
+            states = service.gateway._with_rooms([{"id": "demo-1", "room_temp": 26.0},
+                                                  {"id": "demo-2", "room_temp": 27.0}])
+            self.assertNotEqual(states[0]["room_temp"], 26.0)
+            self.assertEqual(states[1]["room_temp"], 27.0)
+        finally:
+            service.close()
+
+
 class GatewayRegistryTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -248,6 +303,16 @@ class GatewayRegistryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.ha.calls[-1], ("light", "turn_on", "light.porch", {}))
         missing = self.gateway.submit_entity("light.gone", "light", "turn_on", {}, "Ville")
         self.assertEqual(missing["state"], "failed")
+
+    async def test_statistics_are_hourly_means(self):
+        start_ms = 1793000000000
+        self.ha.answers["recorder/statistics_during_period"] = {"sensor.sauna": [
+            {"start": start_ms, "mean": 20.5}, {"start": start_ms + 3600000, "mean": None},
+            {"start": "2026-10-27T10:00:00+00:00", "mean": 19.0}]}
+        points = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: self.gateway.statistics("sensor.sauna", self.clock()))
+        self.assertEqual(points, [(start_ms // 1000, 20.5), (1793095200, 19.0)])
+        self.assertEqual(self.ha.asked[-1]["statistic_ids"], ["sensor.sauna"])
 
     async def test_area_target_call(self):
         await asyncio.get_running_loop().run_in_executor(
