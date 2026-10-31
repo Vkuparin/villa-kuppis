@@ -302,6 +302,38 @@ class SnapshotTests(GatewayTestCase):
         self.assertEqual(health["ha_version"], "2026.10.0")
         self.assertEqual(health["missing"], [])
 
+    async def test_home_pump_is_named_after_its_area(self):
+        self.ha.registry = {
+            "areas": [{"area_id": "olohuone", "name": "Olohuone"},
+                      {"area_id": "keittio", "name": "Keittiö"}],
+            "devices": [{"id": "dev-pump", "area_id": "olohuone"}],
+            "entities": [{"entity_id": "climate.olohuone", "device_id": "dev-pump"},
+                         {"entity_id": "sensor.iso_huone_temperature", "area_id": "keittio"}]}
+        self.store.bind("home", "pump-living", "climate.olohuone", "climate", "MELCloud 1")
+        gw = await self.start_gateway()
+        await eventually(lambda: gw.snapshot()["pump-living"]["label"] == "Olohuone")
+        # Sensors keep their own labels.
+        self.assertEqual(gw.snapshot()["large-temp"]["label"], "Iso huone")
+        # Moving the pump in Home Assistant renames it; the id stays.
+        self.ha.registry["entities"][0]["area_id"] = "keittio"
+        self.ha.fire("entity_registry_updated", {"action": "update"})
+        await eventually(lambda: gw.snapshot()["pump-living"]["label"] == "Keittiö")
+        # No area: back to the stored label.
+        self.ha.registry["entities"][0]["area_id"] = None
+        self.ha.registry["devices"][0]["area_id"] = None
+        self.ha.fire("entity_registry_updated", {"action": "update"})
+        await eventually(lambda: gw.snapshot()["pump-living"]["label"] == "MELCloud 1")
+
+    def test_two_pumps_in_one_area_keep_their_own_names(self):
+        from villa_kuppis.ha_gateway import Binding, area_labels
+        reg = {"areas": [{"area_id": "a", "name": "Alakerta"}], "devices": [],
+               "entities": [{"entity_id": "climate.x", "area_id": "a"},
+                            {"entity_id": "climate.y", "area_id": "a"}]}
+        labels = area_labels(reg, [Binding("home", "x", "climate.x", "climate", "Eteinen"),
+                                   Binding("home", "y", "climate.y", "climate", "Sali"),
+                                   Binding("cottage", "z", "climate.y", "climate", "Z")])
+        self.assertEqual(labels, {"climate.x": "Alakerta: Eteinen", "climate.y": "Alakerta: Sali"})
+
     async def test_discover_lists_bindable_entities_only(self):
         self.ha.set_state("light.kitchen", "on", {}, push=False)
         self.ha.set_state("climate.makuuhuone", "off", climate_attrs(), push=False)

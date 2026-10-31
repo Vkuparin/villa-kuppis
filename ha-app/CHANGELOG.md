@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.32
+
+- Kodin huoneet nimetään Home Assistantin alueiden mukaan: lämpöpumpun huone on sen alueen nimi (esim. Makuuhuone-pumppu näkyy nyt Iso huone -huoneena). Kun alueen nimeää uudelleen tai pumpun siirtää toiselle alueelle Home Assistantissa, nimi vaihtuu heti. Huoneiden historia ja asetukset säilyvät.
+
 ## 0.4.31
 
 - ALV-asetus on nyt yhteinen kodille ja mökille, joten molempien sivujen hintakäyrät näyttävät samat hinnat. Kodin aiempi asetus (ALV päällä) koskee nyt myös mökkiä, ja mökin halpa/kallis-rajoja verrataan ALV:llisiin hintoihin.

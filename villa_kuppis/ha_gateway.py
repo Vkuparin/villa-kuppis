@@ -394,8 +394,40 @@ def capabilities(kind: str, attrs: dict) -> dict:
             "device_class": attrs.get("device_class")}
 
 
-def reading(binding: Binding, ha_state: dict) -> dict:
-    """Normalize one Home Assistant state for a bound device."""
+def area_labels(registry: dict | None, bindings) -> dict[str, str]:
+    """Home pump name per bound entity: its Home Assistant area.
+
+    A home pump is shown as the room it cools, so the name follows the
+    area of the climate entity (or of its device) and changes when the
+    owner renames or moves it in Home Assistant. Two pumps in one area keep
+    their own names after the area. Other bindings keep their labels.
+    """
+    if not registry:
+        return {}
+    areas = {a.get("area_id"): a.get("name") for a in registry.get("areas", [])}
+    devices = {d.get("id"): d for d in registry.get("devices", [])}
+    entries = {e.get("entity_id"): e for e in registry.get("entities", [])}
+    found = {}
+    for b in bindings:
+        if b.site_id != "home" or b.kind != "climate":
+            continue
+        entry = entries.get(b.entity_id) or {}
+        area_id = entry.get("area_id") or (devices.get(entry.get("device_id")) or {}).get("area_id")
+        if areas.get(area_id):
+            found[b.entity_id] = (areas[area_id], b)
+    counts: dict[str, int] = {}
+    for name, _ in found.values():
+        counts[name] = counts.get(name, 0) + 1
+    out = {}
+    for entity_id, (name, b) in found.items():
+        own = b.label or b.device_id
+        out[entity_id] = name if counts[name] == 1 or own == name else f"{name}: {own}"
+    return out
+
+
+def reading(binding: Binding, ha_state: dict, area_label: str | None = None) -> dict:
+    """Normalize one Home Assistant state for a bound device; ``area_label``
+    (a home pump's Home Assistant area) replaces the stored label."""
     attrs = ha_state.get("attributes") or {}
     raw = ha_state.get("state")
     available = raw not in UNAVAILABLE and raw is not None
@@ -405,7 +437,7 @@ def reading(binding: Binding, ha_state: dict) -> dict:
         "site_id": binding.site_id,
         "entity_id": binding.entity_id,
         "kind": binding.kind,
-        "label": binding.label or attrs.get("friendly_name") or binding.device_id,
+        "label": area_label or binding.label or attrs.get("friendly_name") or binding.device_id,
         "available": available,
         "source_ts": seen.isoformat() if seen is not None else None,
         "caps": capabilities(binding.kind, attrs),
@@ -580,6 +612,7 @@ class HomeAssistantGateway:
         self._registry: dict | None = None
         self._registry_error: str | None = None
         self._registry_entities: frozenset = frozenset()
+        self._area_labels: dict[str, str] = {}   # home pump entity -> area name
         self._registry_dirty: asyncio.Event | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop: asyncio.Event | None = None
@@ -594,6 +627,7 @@ class HomeAssistantGateway:
         with self._lock:
             self._bindings = bindings
             self._by_entity = {b.entity_id: b for b in bindings.values()}
+            self._area_labels = area_labels(self._registry, bindings.values())
             self._states = {k: v for k, v in self._states.items() if k in bindings}
             for entity_id, raw in self._raw.items():
                 self._apply_locked(entity_id, raw, force=True)
@@ -645,7 +679,8 @@ class HomeAssistantGateway:
         binding = self._by_entity.get(entity_id)
         if binding is None:
             return None
-        self._states[binding.device_id] = reading(binding, raw)
+        self._states[binding.device_id] = reading(binding, raw,
+                                                  self._area_labels.get(entity_id))
         self._missing.discard(binding.device_id)
         return binding.device_id
 
@@ -671,7 +706,8 @@ class HomeAssistantGateway:
             self._raw[entity_id] = held
             binding = self._by_entity.get(entity_id)
             if binding is not None:
-                self._states[binding.device_id] = reading(binding, held)
+                self._states[binding.device_id] = reading(binding, held,
+                                                          self._area_labels.get(entity_id))
 
     def _status_locked(self, device_id: str, now: datetime) -> str:
         if device_id in self._missing:
@@ -720,7 +756,8 @@ class HomeAssistantGateway:
                 state = dict(self._states.get(device_id) or {
                     "device_id": device_id, "site_id": self.site_id,
                     "entity_id": binding.entity_id, "kind": binding.kind,
-                    "label": binding.label or device_id, "available": False,
+                    "label": (self._area_labels.get(binding.entity_id)
+                              or binding.label or device_id), "available": False,
                 })
                 state["status"] = self._status_locked(device_id, now)
                 active = self._active.get(device_id)
@@ -1064,6 +1101,15 @@ class HomeAssistantGateway:
             self._registry = registry
             self._registry_entities = frozenset(e.get("entity_id") for e in registry["entities"])
             self._registry_error = None
+            labels = area_labels(registry, self._bindings.values())
+            if labels != self._area_labels:
+                # A renamed or moved area renames the pump at once.
+                self._area_labels = labels
+                for entity_id in labels.keys() | {b.entity_id for b in self._bindings.values()}:
+                    binding, raw = self._by_entity.get(entity_id), self._raw.get(entity_id)
+                    if binding is not None and raw is not None:
+                        self._states[binding.device_id] = reading(binding, raw,
+                                                                  labels.get(entity_id))
 
     async def _registry_loop(self, conn: HAConnection) -> None:
         """Keep the registries current: at connect, after a registry event
