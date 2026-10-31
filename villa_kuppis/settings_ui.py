@@ -161,7 +161,8 @@ SCRIPT = r"""
       ctl.title = "Oletus: " + fmtDefault(d);
       ctl.setAttribute("aria-label", d.label + unitLabel(d));
       var src = make("span", { className: "set-src",
-        textContent: eff[d.key].source === "default" || eff[d.key].source === level
+        textContent: d.shared ? "Koti ja mökki"
+          : eff[d.key].source === "default" || eff[d.key].source === level
           ? "" : SRC[eff[d.key].source] });
       // Saved when the control is released ("change"), not on every keystroke.
       ctl.addEventListener(d.type === "bool" ? "click" : "change", function () {
@@ -179,7 +180,8 @@ SCRIPT = r"""
       });
       row.appendChild(label); row.appendChild(ctl); row.appendChild(src);
       // A switch is its own reset: on or off.
-      if (d.type !== "bool" && Object.prototype.hasOwnProperty.call(own, d.key)) {
+      var mine = d.shared ? data.overrides.all || {} : own;
+      if (d.type !== "bool" && Object.prototype.hasOwnProperty.call(mine, d.key)) {
         var reset = make("button", { type: "button", className: "set-reset",
                                      textContent: "\u21ba", title: "Palauta oletus" });
         reset.setAttribute("aria-label", "Palauta oletus");

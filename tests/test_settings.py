@@ -127,6 +127,41 @@ class StoreTests(unittest.TestCase):
         self.assertNotIn("smart_enabled", S.BY_KEY)
 
 
+class SharedVatTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(prefix="vk-settings-")
+        self.path = Path(self._tmp.name) / "pumps.db"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_vat_set_on_one_site_applies_to_both(self):
+        store = S.SettingsStore(self.path)
+        store.set("site:cottage", "vat_enabled", True, "Ville")
+        over = store.overrides()
+        self.assertEqual(over, {"all": {"vat_enabled": True}})
+        self.assertEqual(S.vat_factor(over, "home"), 1.255)
+        self.assertEqual(S.vat_factor(over, "cottage"), 1.255)
+        self.assertEqual(S.resolve(over, "home", "r1")["vat_enabled"]["source"], "shared")
+
+    def test_old_per_site_vat_moves_to_shared_with_home_winning(self):
+        conn = sqlite3.connect(str(self.path))
+        conn.execute("CREATE TABLE setting (scope TEXT NOT NULL, key TEXT NOT NULL, "
+                     "value TEXT NOT NULL, updated_at TEXT NOT NULL, "
+                     "updated_by TEXT NOT NULL, PRIMARY KEY (scope, key))")
+        conn.executemany("INSERT INTO setting VALUES (?, ?, ?, 't', 'Ville')", [
+            ("site:home", "vat_enabled", "true"),
+            ("site:cottage", "vat_enabled", "false"),
+            ("room:home/r1", "vat_percent", "24"),
+            ("site:home", "cool_max_c", "24.0")])
+        conn.commit(); conn.close()
+        over = S.SettingsStore(self.path).overrides()
+        self.assertEqual(over["all"], {"vat_enabled": True, "vat_percent": 24})
+        self.assertEqual(over["site:home"], {"cool_max_c": 24.0})
+        self.assertNotIn("site:cottage", over)
+        self.assertEqual(S.vat_factor(over, "cottage"), 1.24)
+
+
 class MigrationTests(unittest.TestCase):
     """Overrides of the keys replaced on 2026-10-25 (audit 2.2)."""
 

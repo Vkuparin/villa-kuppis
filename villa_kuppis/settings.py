@@ -7,7 +7,9 @@ override, which wins over the default. Overrides live in the
 are read fresh by every plan, so a change takes effect in the next plan
 without a restart.
 
-Scopes are ``site:<site>`` and ``room:<site>/<room>``. The pure helpers
+Scopes are ``site:<site>`` and ``room:<site>/<room>``. A ``shared``
+setting (VAT) has one value for every site and room, stored in the
+``all`` scope whichever page changes it. The pure helpers
 at the bottom (``resolve``, ``plan_settings``) turn the stored overrides
 into the settings object that ``planning.plan_day`` consumes, so the plan
 code itself stays a pure function.
@@ -37,6 +39,7 @@ _PRICE_ON = ("fixed", "optimized")
 MAX_ACTOR_LENGTH = 200
 MIGRATION_ACTOR = "Asetusten päivitys"
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+SHARED_SCOPE = "all"
 _SCOPE_RE = re.compile(r"^(site:(home|cottage)|room:(home|cottage)/[^/\x00-\x1f\x7f]{1,100})$")
 
 
@@ -57,12 +60,14 @@ class Definition:
     kinds: tuple[str, ...] = ("cool", "heat")   # control kinds it applies to
     # Shown only while another setting has one of these values: (key, values).
     shown_if: tuple[str, tuple[object, ...]] | None = None
+    # One value for every site and room (stored in the SHARED_SCOPE).
+    shared: bool = False
 
     def public(self) -> dict:
         shown_if = None if self.shown_if is None else {
             "key": self.shown_if[0], "values": list(self.shown_if[1])}
         return {"key": self.key, "help": self.help, "kinds": list(self.kinds), "label": self.label, "group": self.group,
-                "shown_if": shown_if,
+                "shown_if": shown_if, "shared": self.shared,
                 "type": self.type, "default": self.default,
                 "unit": self.unit, "min": self.minimum, "max": self.maximum,
                 "choices": [{"value": v, "label": l} for v, l in self.choices]}
@@ -100,9 +105,9 @@ DEFINITIONS: tuple[Definition, ...] = (
     Definition("night_start", "Yötilan alku", "Yötila", "time", "22:00", help="Yötilan alkamisaika (Suomen aika).", kinds=("cool",), shown_if=("night_enabled", (True,))),
     Definition("night_end", "Yötilan loppu", "Yötila", "time", "07:00", help="Yötilan päättymisaika (Suomen aika); voi olla seuraavana päivänä.", kinds=("cool",), shown_if=("night_enabled", (True,))),
     Definition("vat_enabled", "Lisää ALV sähkönhintaan", "Pörssihinta", "bool",
-               False, help="Lisää ALV sähkön pörssihintaan. Vaikuttaa hintakäyrään, energiakustannuksiin ja halpa/kallis-rajojen vertailuun, joten rajat annetaan ALV:llisina."),
+               False, shared=True, help="Lisää ALV sähkön pörssihintaan kodissa ja mökillä (yhteinen asetus). Vaikuttaa hintakäyrään, energiakustannuksiin ja halpa/kallis-rajojen vertailuun, joten rajat annetaan ALV:llisina."),
     Definition("vat_percent", "ALV-prosentti", "Pörssihinta", "number", 25.5,
-               "%", 0, 100, help="Sähkön ALV-prosentti, jota käytetään, kun ALV-kytkin on päällä.", shown_if=("vat_enabled", (True,))),
+               "%", 0, 100, shared=True, help="Sähkön ALV-prosentti, jota käytetään, kun ALV-kytkin on päällä. Yhteinen kodille ja mökille.", shown_if=("vat_enabled", (True,))),
     Definition("heat_price_control", "Hintaohjaus", "Lämmitys", "choice", "optimized",
                choices=(("fixed", "Kiinteät rajat"), ("optimized", "Optimoitu")),
                help="Kiinteät rajat: tavoite tulee perustasosta ja hintarajoista. Optimoitu: lämpöä varataan halvoilla tunneilla ja kalliit tunnit mennään varatulla lämmöllä, niin että huone pysyy vähimmäislämpötilan ja suurimman varaavan lämpötilan välissä. Suunnitelma tehdään koko tunnetulle hintajaksolle huoneen opitun lämpenemis- ja jäähtymisnopeuden ja sääennusteen avulla, eikä se ole kiinteitä rajoja kalliimpi. Optimointi alkaa, kun huoneen nopeudet on opittu ja testipäivän ennuste on hyväksytty; siihen asti käytetään kiinteitä rajoja.",
@@ -203,8 +208,13 @@ def resolve(overrides: Mapping[str, Mapping[str, object]], site: str,
     out: dict[str, dict] = {}
     site_over = overrides.get(f"site:{site}", {})
     room_over = overrides.get(f"room:{site}/{room}", {}) if room else {}
+    shared_over = overrides.get(SHARED_SCOPE, {})
     for d in DEFINITIONS:
-        if d.key in room_over:
+        if d.shared:
+            out[d.key] = ({"value": shared_over[d.key], "source": "shared"}
+                          if d.key in shared_over
+                          else {"value": d.default, "source": "default"})
+        elif d.key in room_over:
             out[d.key] = {"value": room_over[d.key], "source": "room"}
         elif d.key in site_over:
             out[d.key] = {"value": site_over[d.key], "source": "site"}
@@ -268,6 +278,7 @@ class SettingsStore:
                 "updated_at TEXT NOT NULL, updated_by TEXT NOT NULL, "
                 "PRIMARY KEY (scope, key))")
             _migrate_legacy(conn, self._now().isoformat())
+            _migrate_shared(conn)
         finally:
             conn.close()
 
@@ -308,6 +319,8 @@ class SettingsStore:
         """Validate and store an override; ValueError on a bad change."""
         site, room = parse_scope(scope)
         value = validate_value(key, value)
+        if BY_KEY[key].shared:
+            scope = SHARED_SCOPE   # the same value for every site and room
         actor = str(actor)[:MAX_ACTOR_LENGTH]
         conn = self._connect()
         try:
@@ -337,6 +350,8 @@ class SettingsStore:
         site, room = parse_scope(scope)
         if key not in BY_KEY:
             raise ValueError("tuntematon asetus")
+        if BY_KEY[key].shared:
+            scope = SHARED_SCOPE
         conn = self._connect()
         try:
             conn.execute("BEGIN IMMEDIATE")
@@ -448,6 +463,39 @@ def _migrate_legacy(conn, now_iso: str) -> None:
                 "updated_by) VALUES (?, ?, ?, ?, ?)",
                 (scope, key, json.dumps(value), now_iso, MIGRATION_ACTOR))
         conn.execute(f"DELETE FROM setting WHERE key IN ({marks})", LEGACY_KEYS)
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+
+
+def _migrate_shared(conn) -> None:
+    """Move per-site or per-room values of shared settings to the shared
+    scope, once. Home's value wins (VAT was switched on there first)."""
+    keys = [d.key for d in DEFINITIONS if d.shared]
+    marks = ",".join("?" * len(keys))
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        rows = conn.execute(
+            f"SELECT scope, key, value, updated_at, updated_by FROM setting "
+            f"WHERE key IN ({marks}) AND scope != ?",
+            (*keys, SHARED_SCOPE)).fetchall()
+        if not rows:
+            conn.execute("ROLLBACK")
+            return
+        rank = {"site:home": 0, "site:cottage": 1}
+        rows.sort(key=lambda r: (rank.get(r[0], 2), r[0]))
+        for key in keys:
+            have = conn.execute("SELECT 1 FROM setting WHERE scope = ? AND key = ?",
+                                (SHARED_SCOPE, key)).fetchone()
+            first = next((r for r in rows if r[1] == key), None)
+            if have is None and first is not None:
+                conn.execute(
+                    "INSERT INTO setting (scope, key, value, updated_at, "
+                    "updated_by) VALUES (?, ?, ?, ?, ?)",
+                    (SHARED_SCOPE, key, first[2], first[3], first[4]))
+        conn.execute(f"DELETE FROM setting WHERE key IN ({marks}) AND scope != ?",
+                     (*keys, SHARED_SCOPE))
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")

@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.31
+
+- ALV-asetus on nyt yhteinen kodille ja mökille, joten molempien sivujen hintakäyrät näyttävät samat hinnat. Kodin aiempi asetus (ALV päällä) koskee nyt myös mökkiä, ja mökin halpa/kallis-rajoja verrataan ALV:llisiin hintoihin.
+
 ## 0.4.30
 
 - Mökin huoneet ovat nyt Mökki ja Kammari, samoin kuin mökin Home Assistantin alueet (ennen Iso huone ja Pieni huone). Huoneiden historia säilyy.
