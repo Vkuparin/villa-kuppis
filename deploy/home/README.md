@@ -127,7 +127,7 @@ reconnect, so replacing the file rotates it without a restart.
 
 Bind the cottage devices once with the `sites` tool. It stores the bindings in
 `sites.db` in the data directory; a running service picks changes up within
-seconds. The rooms are `large` (Iso huone) and `small` (Pieni huone):
+seconds. The rooms are `large` (Mökki) and `small` (Kammari):
 
 ```
 run="docker compose -f deploy/home/compose.yaml run --rm --no-deps --entrypoint python villa-kuppis -m villa_kuppis.sites --config /config/villa-kuppis.json"

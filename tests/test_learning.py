@@ -221,7 +221,7 @@ class CottageLearningTests(unittest.TestCase):
             for ts, v in outdoor_curve(mean=0.0, swing=4.0)])
         units = {u["id"]: u for u in self.service.room_rates()["units"]}
         large, small = units["cottage:large"], units["cottage:small"]
-        self.assertEqual((large["site"], large["name"]), ("cottage", "Mökki: Iso huone"))
+        self.assertEqual((large["site"], large["name"]), ("cottage", "Mökki"))
         self.assertTrue(large["model"]["ready"])
         self.assertTrue(large["model"]["uses_outdoor"])
         self.assertAlmostEqual(large["model"]["loss_per_h"], 0.05, delta=0.01)

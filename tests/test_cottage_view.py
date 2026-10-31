@@ -383,7 +383,7 @@ class ViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[0]["detail"], "the target expired")
         self.assertEqual((events[0]["site"], events[0]["unit"], events[0]["unit_name"],
                           events[0]["result"]),
-                         ("cottage", "cottage:large", "Mökki: Iso huone", "observed"))
+                         ("cottage", "cottage:large", "Mökki", "observed"))
         # The small room did not change mode.
         self.assertTrue(all(e["unit"] == "cottage:large" for e in events))
 
@@ -450,7 +450,7 @@ class ServiceHttpTests(unittest.TestCase):
         self.assertEqual(set(rooms), {"large", "small"})
         self.assertEqual(rooms["large"]["status"]["mode"], "follow")
         self.assertEqual(rooms["small"]["status"]["mode"], "fallback")
-        self.assertEqual(rooms["large"]["name"], "Iso huone")
+        self.assertEqual(rooms["large"]["name"], "Mökki")
         self.assertEqual(len(rooms["large"]["heaters"]), 3)
         self.assertTrue(all(r["state"] == "ok" for r in rooms.values()))
         status, sites_body = self.get(server, "/api/sites")

@@ -16,7 +16,7 @@ villa_kuppis_simulator:
   command_delay_seconds: 2
   rooms:
     large:
-      name: Iso huone
+      name: Mökki
       # Loss 60 W/K and 0.8 kWh/K: 5 -> 21 °C takes about 11 hours at -10 °C.
       loss_w_per_k: 60
       capacity_kwh_per_k: 0.8
@@ -29,7 +29,7 @@ villa_kuppis_simulator:
         - name: Mill 500 W
           power_w: 500
     small:
-      name: Pieni huone
+      name: Kammari
       loss_w_per_k: 22
       capacity_kwh_per_k: 0.3
       start_temperature: 6

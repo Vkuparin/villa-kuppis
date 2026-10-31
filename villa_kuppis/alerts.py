@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from . import settings as app_settings
+from .cottage import room_label
 
 log = logging.getLogger(__name__)
 
@@ -143,9 +144,9 @@ class AlertMonitor:
             limit = app_settings.resolve(overrides, "cottage", room["id"])["cold_alert_c"]["value"]
             if value < limit or (key in self._open and value < limit + COLD_CLEAR_MARGIN):
                 out.append(Problem(key, "alert_cold", "cottage", room["id"],
-                                   (f"Mökki: {room['name']} on kylmä",
+                                   (f"{room_label(room['name'])} on kylmä",
                                     f"Lämpötila on {_deg(value)}, alle hälytysrajan {_deg(limit)}."),
-                                   (f"Mökki: {room['name']} on taas lämpimämpi",
+                                   (f"{room_label(room['name'])} on taas lämpimämpi",
                                     f"Lämpötila on noussut yli {_deg(limit + COLD_CLEAR_MARGIN)}.")))
         return out
 

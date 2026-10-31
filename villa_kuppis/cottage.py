@@ -57,7 +57,13 @@ from .visit import MAX_TARGET, MIN_TARGET, VisitError, VisitPlan, VisitStore
 SITE_ID = "cottage"
 SITE_LABEL = "Mökki"
 SITES_DB = "sites.db"
-ROOMS = {"large": "Iso huone", "small": "Pieni huone"}
+# Room names follow the cottage Home Assistant areas (Ville, 2026-10-31).
+ROOMS = {"large": "Mökki", "small": "Kammari"}
+
+
+def room_label(name: str) -> str:
+    """A cottage room with the site in front, without "Mökki: Mökki"."""
+    return name if name == SITE_LABEL else f"{SITE_LABEL}: {name}"
 SENSOR_ROLES = ("temperature", "humidity", "co2", "pm25")
 _ROLE_BY_CLASS = {"temperature": "temperature", "humidity": "humidity",
                   "carbon_dioxide": "co2", "pm25": "pm25"}
@@ -298,7 +304,7 @@ class CottageStore:
                 "FROM site_event ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
         return [{"id": f"{r[2]}-{r[0]}", "ts": r[1], "site": r[2],
                  "unit": f"{r[2]}:{r[3]}",
-                 "unit_name": f"{SITE_LABEL}: {ROOMS.get(r[3], r[3])}",
+                 "unit_name": room_label(ROOMS.get(r[3], r[3])),
                  "actor": r[4], "action": r[5], "requested": r[6],
                  "result": "observed", "detail": r[7]} for r in rows]
 
@@ -880,13 +886,13 @@ DEMO_BINDINGS = (
     Binding(SITE_ID, "large-heater-3", "climate.large_mill_3", "climate",
             "Mill 500 W", "large"),
     Binding(SITE_ID, "large-status", status_entity("large"), "sensor",
-            "Iso huoneen tila", "large"),
+            "Mökin tila", "large"),
     Binding(SITE_ID, "small-temperature", "sensor.small_alpstuga_temperature", "sensor",
             "ALPSTUGA", "small"),
     Binding(SITE_ID, "small-heater-1", "climate.small_mill_1", "climate",
             "Mill 1050 W", "small"),
     Binding(SITE_ID, "small-status", status_entity("small"), "sensor",
-            "Pienen huoneen tila", "small"),
+            "Kammarin tila", "small"),
 )
 
 
@@ -1043,8 +1049,8 @@ SECTION_HTML = r"""
           <input type="number" id="visit-target" value="21" min="5" max="25" step="0.5"></label>
         <fieldset title="Huoneet, jotka lämmitetään vierailua varten. Oletuksena molemmat.">
           <legend>Huoneet</legend>
-          <label><input type="checkbox" id="visit-large" checked> Iso huone</label>
-          <label><input type="checkbox" id="visit-small" checked> Pieni huone</label>
+          <label><input type="checkbox" id="visit-large" checked> Mökki</label>
+          <label><input type="checkbox" id="visit-small" checked> Kammari</label>
         </fieldset>
         <button type="button" id="visit-start" class="primary"
           title="Aloittaa vierailun. Uusi vierailu korvaa käynnissä olevan.">Aloita vierailu</button>
@@ -1208,7 +1214,7 @@ function vkHeaterSwitch(heater, onChange) {
   var $note = document.getElementById("cottage-note");
   var $rooms = document.getElementById("cottage-rooms");
   var AUTOMATION_ON = true;
-  var ROOM_NAMES = { large: "Iso huone", small: "Pieni huone" };
+  var ROOM_NAMES = { large: "Mökki", small: "Kammari" };
   var LATEST = null;
   var num = new Intl.NumberFormat("fi-FI", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
   var clock = new Intl.DateTimeFormat("fi-FI", { timeZone: "Europe/Helsinki",
@@ -1359,7 +1365,7 @@ function vkHeaterSwitch(heater, onChange) {
     data.rooms.forEach(function (room) { $rooms.appendChild(card(room)); });
     if (typeof setExtraHistUnits === "function")
       setExtraHistUnits(data.rooms.map(function (r) {
-        return { id: "cottage:" + r.id, name: "Mökki: " + r.name }; }));
+        return { id: "cottage:" + r.id, name: r.name === "Mökki" ? r.name : "Mökki: " + r.name }; }));
   }
   // --- visit card (card F4.3): the form is built once so refreshes never reset it ---
   var $vState = document.getElementById("visit-state");

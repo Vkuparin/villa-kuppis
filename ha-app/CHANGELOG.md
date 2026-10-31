@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.30
+
+- Mökin huoneet ovat nyt Mökki ja Kammari, samoin kuin mökin Home Assistantin alueet (ennen Iso huone ja Pieni huone). Huoneiden historia säilyy.
+
 ## 0.4.29
 
 - Mökin huoneelle voi valita toisen lämpöanturin: napauta anturia Mökki-sivun Laitteet-osiossa ja valitse huone kohdasta Mökin huoneen lämpötilana. Huoneen kortilla Palauta oletus palauttaa alkuperäisen anturin.

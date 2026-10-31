@@ -24,7 +24,7 @@ class FakeCottage:
         self.temps = {"large": 6.0, "small": 6.0}
 
     def view(self):
-        names = {"large": "Iso huone", "small": "Pieni huone"}
+        names = {"large": "Mökki", "small": "Kammari"}
         return {"site": {"connection": self.connection},
                 "rooms": [{"id": r, "name": names[r],
                            "temperature": None if t is None else {"value": t}}
@@ -77,24 +77,24 @@ class MonitorTests(unittest.TestCase):
     def test_cold_room_alerts_once_and_is_over_a_degree_above_the_limit(self):
         self.assertEqual(self.check(), [])
         self.service.cottage.temps["large"] = 2.5
-        self.assertEqual(self.check(1), ["Mökki: Iso huone on kylmä"])
+        self.assertEqual(self.check(1), ["Mökki on kylmä"])
         self.assertEqual(self.notifier.sent[0][1], "Lämpötila on 2,5 °C, alle hälytysrajan 3 °C.")
         self.service.cottage.temps["large"] = 3.5
         self.assertEqual(len(self.check(1)), 1)
         self.service.cottage.temps["large"] = 4.0
-        self.assertEqual(self.check(1)[1:], ["Mökki: Iso huone on taas lämpimämpi"])
+        self.assertEqual(self.check(1)[1:], ["Mökki on taas lämpimämpi"])
         self.assertEqual(len(self.check(1)), 2)
 
     def test_cold_limit_comes_from_the_settings(self):
         self.settings.set("site:cottage", "cold_alert_c", 5.0, "test")
         self.service.cottage.temps["small"] = 4.5
-        self.assertEqual(self.check(), ["Mökki: Pieni huone on kylmä"])
+        self.assertEqual(self.check(), ["Mökki: Kammari on kylmä"])
 
     def test_unreachable_cottage_waits_30_minutes_and_keeps_a_cold_room_open(self):
         self.service.cottage.temps["large"] = 2.0
         self.check()
         self.service.cottage.connection = "offline"
-        self.assertEqual(self.check(1), ["Mökki: Iso huone on kylmä"])
+        self.assertEqual(self.check(1), ["Mökki on kylmä"])
         self.assertEqual(len(self.check(29)), 1)
         self.assertEqual(self.check(1)[1:], ["Mökki ei vastaa"])
         self.service.cottage.connection = "ok"
@@ -153,7 +153,7 @@ class MonitorTests(unittest.TestCase):
         self.check(1)
         self.check(1)
         self.assertEqual([t for t, _ in self.notifier.sent[3:]],
-                         ["Mökki: Iso huone on taas lämpimämpi"] * 2)
+                         ["Mökki on taas lämpimämpi"] * 2)
 
 
 class FakeGateway:
