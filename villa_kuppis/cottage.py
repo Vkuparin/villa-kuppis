@@ -73,6 +73,7 @@ ACTOR_CONTROLLER = "Mökin ohjain"
 ACTOR_MANUAL = "käsin"
 INTEGRATION_DOMAIN = "villa_kuppis_cottage"
 DEFAULT_SAMPLE_INTERVAL = 15.0
+HEARTBEAT_EVERY = timedelta(minutes=5)   # the cottage alarm waits for 60 min of silence
 DEFAULT_TARGET_INTERVAL = 60.0     # price targets are sent at most this often
 VISITS_DB = "visits.db"
 PLAN_REASONS = {"base": "Perustaso", "threshold": "Hintaraja", "noprice": "Ei hintaa",
@@ -561,6 +562,7 @@ class CottageSite:
         self._acked: dict[str, str] = {}         # room -> time of the last acknowledgement
         self._logged: set = set()
         self._target_lock = threading.Lock()
+        self._heartbeat_at: datetime | None = None
         self._known: frozenset = frozenset()
         self._roles: dict[str, str] = {}   # device id -> role seen with a reading
         self._switches: dict[str, str] = {}   # heater device id -> last on/off request id
@@ -611,7 +613,28 @@ class CottageSite:
                 self.sample()
             except Exception as error:
                 logging.error("Cottage sampling failed: %s", type(error).__name__)
+            self.heartbeat()
             self._stop.wait(self._sample_interval)
+
+    def heartbeat(self) -> bool:
+        """Tell the cottage integration that Villa Kuppis runs, at most every
+        HEARTBEAT_EVERY: its own alarm speaks up only when these stop (the
+        integration's alarm.py). True when one was sent."""
+        now = self._now()
+        if self._heartbeat_at is not None and now - self._heartbeat_at < HEARTBEAT_EVERY:
+            return False
+        call = getattr(self._gateway, "call", None)
+        if call is None or self._gateway.health()["state"] not in ("ok", "stale"):
+            return False
+        self._heartbeat_at = now
+        try:
+            if "heartbeat" not in self._gateway.services(INTEGRATION_DOMAIN):
+                return False        # an integration older than 0.7.0
+            call(INTEGRATION_DOMAIN, "heartbeat", {})
+            return True
+        except Exception as error:
+            logging.warning("Cottage heartbeat failed: %s", type(error).__name__)
+            return False
 
     # -- price targets and visits (cards H2.4, F4.3) --
 

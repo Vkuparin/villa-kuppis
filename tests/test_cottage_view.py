@@ -295,6 +295,16 @@ class ViewTests(unittest.IsolatedAsyncioTestCase):
         await eventually(lambda: (self.gateway._raw[entity_id]["state"],
                                   self.gateway._raw[entity_id]["last_updated"]) == key)
 
+    async def test_heartbeat_goes_to_an_integration_that_has_it(self):
+        self.assertFalse(await asyncio.to_thread(self.site.heartbeat))     # older integration
+        self.ha.services["villa_kuppis_cottage"] = {"heartbeat": {}}
+        self.assertFalse(await asyncio.to_thread(self.site.heartbeat))     # not 5 min yet
+        self.clock.advance(300)
+        self.assertTrue(await asyncio.to_thread(self.site.heartbeat))
+        self.assertEqual(self.ha.calls[-1][:2], ("villa_kuppis_cottage", "heartbeat"))
+        self.clock.advance(60)
+        self.assertFalse(await asyncio.to_thread(self.site.heartbeat))
+
     async def test_room_values_for_the_planner(self):
         self.assertEqual(self.site.room_temperatures(), {"large": 18.4, "small": 7.2})
         self.assertEqual(self.site.room_humidity(), {"large": 41.0})

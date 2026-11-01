@@ -340,3 +340,48 @@ async def test_area_heaters_and_sensor_join_the_room(hass, calls, hass_storage):
     add_entity(hass, "climate", "mill_3", None)
     await hass.async_block_till_done()
     assert status(hass).attributes["devices"]["heaters"] == ["climate.mill_1"]
+
+
+async def test_cottage_alarm_speaks_up_only_when_villa_kuppis_is_silent(
+        hass, calls, freezer: FrozenDateTimeFactory, hass_storage):
+    phone = async_mock_service(hass, "notify", "mobile_app_ville")
+    await setup(hass)
+    cold = lambda value: hass.states.async_set("sensor.alpstuga_large", value,
+                                               {"unit_of_measurement": "°C"})
+    cold("2.0")
+    freezer.tick(timedelta(minutes=120))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert phone == []                    # no heartbeat yet: an older Villa Kuppis
+
+    await hass.services.async_call(DOMAIN, "heartbeat", {}, blocking=True)
+    assert hass_storage[DOMAIN]["data"]["heard"]
+    freezer.tick(timedelta(minutes=59))
+    cold("2.1")
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert phone == []                    # Villa Kuppis sends its own alerts
+
+    freezer.tick(timedelta(minutes=2))
+    cold("2.2")
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert [c.data["title"] for c in phone] == [
+        "Mökki: Villa Kuppis ei vastaa", "Mökki: Iso huone on kylmä"]
+    assert "7 °C" in phone[0].data["message"]
+
+    await hass.services.async_call(DOMAIN, "heartbeat", {}, blocking=True)
+    await hass.async_block_till_done()
+    assert phone[-1].data["title"] == "Mökki: Villa Kuppis vastaa taas"
+
+
+async def test_cottage_alarm_can_be_switched_off(hass, calls, freezer):
+    phone = async_mock_service(hass, "notify", "mobile_app_ville")
+    config = {DOMAIN: {**CONFIG[DOMAIN], "alarm": {"enabled": False}}}
+    assert await async_setup_component(hass, DOMAIN, config)
+    await hass.async_block_till_done()
+    await hass.services.async_call(DOMAIN, "heartbeat", {}, blocking=True)
+    freezer.tick(timedelta(minutes=90))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert phone == []

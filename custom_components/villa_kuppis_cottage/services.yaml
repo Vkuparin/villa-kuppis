@@ -61,3 +61,5 @@ set_room_sensor:
         entity:
           domain: sensor
           device_class: temperature
+heartbeat:
+  fields: {}

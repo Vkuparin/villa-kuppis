@@ -423,3 +423,31 @@ class SetpointTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+_ALARM_PATH = _PATH.with_name("alarm.py")
+_alarm_spec = importlib.util.spec_from_file_location("cottage_alarm", _ALARM_PATH)
+cottage_alarm = importlib.util.module_from_spec(_alarm_spec)
+sys.modules[_alarm_spec.name] = cottage_alarm
+_alarm_spec.loader.exec_module(cottage_alarm)
+
+
+class CottageAlarmTests(unittest.TestCase):
+    """The cottage's own alarm (alarm.py) when Villa Kuppis is silent."""
+
+    def titles(self, alarm, minutes, rooms):
+        return [t for t, _ in alarm.check(START + timedelta(minutes=minutes), rooms, 5.0)]
+
+    def test_a_cold_room_is_reported_once_and_over_a_degree_above(self):
+        alarm = cottage_alarm.Alarm()
+        alarm.heartbeat(START)
+        self.assertEqual(self.titles(alarm, 30, {"Kammari": 2.0}), [])
+        self.assertEqual(self.titles(alarm, 61, {"Kammari": 2.0, "Mökki": None}),
+                         ["Mökki: Villa Kuppis ei vastaa", "Mökki: Kammari on kylmä"])
+        self.assertEqual(self.titles(alarm, 70, {"Kammari": 3.5}), [])
+        self.assertEqual(self.titles(alarm, 80, {"Kammari": None}), [])
+        self.assertEqual(self.titles(alarm, 90, {"Kammari": 4.0}), ["Mökki: Kammari on taas lämpimämpi"])
+
+    def test_nothing_before_the_first_heartbeat(self):
+        alarm = cottage_alarm.Alarm()
+        self.assertEqual(self.titles(alarm, 600, {"Mökki": 1.0}), [])

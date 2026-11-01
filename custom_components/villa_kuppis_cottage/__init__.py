@@ -11,7 +11,9 @@ on; a switched-off heater is kept off. A room with ``area`` also takes every
 climate entity in that Home Assistant area as a heater (and its temperature
 sensor when none is named), followed as devices move between areas;
 ``villa_kuppis_cottage.set_room_sensor`` picks the room's temperature sensor
-from Villa Kuppis. The decision logic is in
+from Villa Kuppis. ``villa_kuppis_cottage.heartbeat`` tells the cottage that
+Villa Kuppis runs; when it stops, the cottage sends its own phone notices
+(``alarm.py``, option ``alarm``). The decision logic is in
 ``control.py``; this file only reads states, calls the climate services
 and keeps the targets and switched-off heaters across restarts.
 """
@@ -41,6 +43,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.util import dt as dt_util
 
+from . import alarm as cottage_alarm
 from . import control
 
 _LOGGER = logging.getLogger(__name__)
@@ -74,6 +77,15 @@ ROOM_SCHEMA = vol.All(vol.Schema({
     vol.Optional("pm25"): cv.entity_id,
 }), cv.has_at_least_one_key("area", "sensor"))
 
+ALARM_SCHEMA = vol.Schema({
+    vol.Optional("enabled", default=True): cv.boolean,
+    # notify services of the cottage Home Assistant; empty: every phone
+    # with the Home Assistant app (notify.mobile_app_*).
+    vol.Optional("notify", default=list): vol.All(cv.ensure_list, [cv.string]),
+    vol.Optional("cold_below", default=3.0): vol.Coerce(float),
+    vol.Optional("silent_minutes", default=60): vol.All(vol.Coerce(float), vol.Range(min=10)),
+})
+
 CONFIG_SCHEMA = vol.Schema({
     DOMAIN: vol.Schema({
         vol.Optional("safe_setpoint", default=_DEFAULTS.safe_setpoint): vol.Coerce(float),
@@ -88,6 +100,7 @@ CONFIG_SCHEMA = vol.Schema({
                      default=_DEFAULTS.max_commands_per_hour): cv.positive_int,
         vol.Optional("fallback_heats_disabled",
                      default=_DEFAULTS.fallback_heats_disabled): cv.boolean,
+        vol.Optional("alarm"): ALARM_SCHEMA,
         vol.Required("rooms"): vol.Schema({cv.slug: ROOM_SCHEMA}),
     }),
 }, extra=vol.ALLOW_EXTRA)
@@ -202,6 +215,7 @@ class Room:
         self.target: control.Target | None = None
         self.decision: control.Decision | None = None
         self.room_temp: float | None = None
+        self.fresh_temp: float | None = None     # for the alarm: a recent reading only
 
     def _publish(self) -> None:
         self.devices = {**({"temperature": self.sensor} if self.sensor else {}),
@@ -234,9 +248,14 @@ class CottageController:
         self.rooms = {rid: Room(rid, rc) for rid, rc in conf["rooms"].items()}
         self.store = Store(hass, STORAGE_VERSION, DOMAIN)
         self.context = Context()
+        self.alarm_conf = ALARM_SCHEMA(conf.get("alarm") or {})
+        self.alarm = cottage_alarm.Alarm(cottage_alarm.AlarmSettings(
+            cold_below=self.alarm_conf["cold_below"],
+            silent=timedelta(minutes=self.alarm_conf["silent_minutes"])))
 
     async def async_load(self) -> None:
         data = await self.store.async_load() or {}
+        self.alarm.heard = dt_util.parse_datetime(data.get("heard") or "")
         for room_id, entity_id in (data.get("sensors") or {}).items():
             room = self.rooms.get(room_id)
             if room is not None:
@@ -262,7 +281,8 @@ class CottageController:
                   "schedule": [[start.isoformat(), value] for start, value in r.target.schedule]}
             for rid, r in self.rooms.items() if r.target is not None
         }, "disabled": {rid: sorted(r.disabled) for rid, r in self.rooms.items() if r.disabled},
-           "sensors": {rid: r.chosen_sensor for rid, r in self.rooms.items() if r.chosen_sensor}})
+           "sensors": {rid: r.chosen_sensor for rid, r in self.rooms.items() if r.chosen_sensor},
+           "heard": self.alarm.heard.isoformat() if self.alarm.heard else None})
 
     def resolve(self) -> list[Room]:
         """Rooms whose sensor or heaters changed (areas and chosen sensors)."""
@@ -339,6 +359,37 @@ class CottageController:
         await self.async_registry_changed()
         async_dispatcher_send(self.hass, SIGNAL_UPDATE, room.room_id)
 
+    async def async_heartbeat(self, call: ServiceCall) -> None:
+        """Villa Kuppis runs; the cottage alarm waits for its silence."""
+        self.alarm.heartbeat(dt_util.utcnow())
+        await self._async_save()
+        await self.async_check_alarm()
+
+    async def async_check_alarm(self) -> None:
+        if not self.alarm_conf["enabled"]:
+            return
+        rooms = {room.name: room.fresh_temp for room in self.rooms.values()}
+        for title, message in self.alarm.check(dt_util.utcnow(), rooms,
+                                               self.settings.safe_setpoint):
+            await self._async_notify(title, message)
+
+    async def _async_notify(self, title: str, message: str) -> None:
+        names = self.alarm_conf["notify"]
+        if not names:
+            services = self.hass.services.async_services_for_domain("notify")
+            names = sorted(s for s in services if s.startswith("mobile_app_"))
+        if not names:
+            _LOGGER.warning("Alarm not sent, no phone has the Home Assistant app: %s", title)
+            return
+        for name in names:
+            try:
+                await self.hass.services.async_call("notify", name,
+                                                    {"title": title, "message": message},
+                                                    blocking=True, context=self.context)
+            except Exception as err:   # one phone must not stop the others
+                _LOGGER.warning("Alarm to %s failed: %s", name, err or type(err).__name__)
+        _LOGGER.warning("Alarm sent: %s", title)
+
     async def async_clear_manual(self, call: ServiceCall) -> None:
         room = self._room(call.data["room"])
         room.memory.manual_until = None
@@ -350,7 +401,11 @@ class CottageController:
         heaters = [read_heater(eid, states.get(eid), eid not in room.disabled)
                    for eid in room.heaters]
         room.room_temp = sensor.value if sensor else None
-        decision = control.decide(dt_util.utcnow(), room.target, sensor, heaters,
+        now = dt_util.utcnow()
+        room.fresh_temp = (sensor.value if sensor and sensor.reported_at is not None
+                           and now - sensor.reported_at <= self.settings.sensor_max_age
+                           else None)
+        decision = control.decide(now, room.target, sensor, heaters,
                                   room.memory, self.settings)
         if room.decision is None or decision.mode != room.decision.mode:
             _LOGGER.info("%s: %s (%s)", room.name, decision.mode, decision.reason)
@@ -373,6 +428,7 @@ class CottageController:
     async def async_evaluate_all(self, *_args) -> None:
         for room in self.rooms.values():
             await self.async_evaluate(room)
+        await self.async_check_alarm()
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -390,6 +446,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                                  schema=SET_HEATER_ENABLED_SCHEMA)
     hass.services.async_register(DOMAIN, "set_room_sensor", controller.async_set_room_sensor,
                                  schema=SET_ROOM_SENSOR_SCHEMA)
+    hass.services.async_register(DOMAIN, "heartbeat", controller.async_heartbeat,
+                                 schema=vol.Schema({}))
 
     for room in controller.rooms.values():
         controller.track(room)

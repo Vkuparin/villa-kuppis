@@ -29,6 +29,14 @@ villa_kuppis_cottage:
   # A heater switched off in Villa Kuppis still holds safe_setpoint in
   # fallback, so a forgotten switch never leaves a room unheated.
   fallback_heats_disabled: true
+  # The cottage's own phone alarm when Villa Kuppis goes silent (from
+  # integration 0.7.0; on by default with these values). Phones need the
+  # Home Assistant app connected to this cottage Home Assistant too.
+  # alarm:
+  #   enabled: true
+  #   notify: []            # notify services; empty: every mobile_app_* phone
+  #   cold_below: 3
+  #   silent_minutes: 60
   # A room may also name a Home Assistant area (`area: Mökki`): every
   # heater in that area then joins the room, and the area's temperature
   # sensor is used when `sensor` is left out.
