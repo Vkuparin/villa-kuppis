@@ -196,6 +196,37 @@ class StoreTests(unittest.TestCase):
             self.assertEqual([r[1] for r in rows], [5.0, 5.5, 5.5])
             store.close()
 
+    def test_heater_energy_is_estimated_from_its_rating_and_drive(self):
+        self.assertEqual(cottage.rated_kw("Mökki Järvenpuoli 1050W patteri"), 1.05)
+        self.assertEqual(cottage.rated_kw(None, "climate.mokki_mokki_500w_patteri"), 0.5)
+        self.assertIsNone(cottage.rated_kw("Mill", "climate.kammari"))
+        with tempfile.TemporaryDirectory() as temp:
+            store = CottageStore(Path(temp) / "pumps.db")
+            t = 1_700_002_800 - 1_700_002_800 % 3600       # an hour start
+            # Hour 1: room 10 °C, heater driven to 13 °C: full power.
+            # Hour 2: set to 10 °C, holding the room: half. Hour 3: off.
+            for k in range(0, 3 * 3600, 600):
+                store.record("cottage", "temp", t + k, value=10.0)
+                setpoint, mode = ((13.0, "heat") if k < 3600 else
+                                  (10.0, "heat") if k < 7200 else (5.0, "off"))
+                store.record("cottage", "heater", t + k, mode=mode, setpoint=setpoint)
+            rows = store.energy_estimate(
+                "cottage", "temp", {"heater": 1.05},
+                datetime.fromtimestamp(t, timezone.utc),
+                datetime.fromtimestamp(t + 4 * 3600, timezone.utc))
+            self.assertEqual([h for h, _ in rows], [t, t + 3600])
+            self.assertAlmostEqual(rows[0][1], 1.05)
+            self.assertAlmostEqual(rows[1][1], 0.525)
+            # Readings that stop count only while they are fresh.
+            store.record("cottage", "temp", t + 5 * 3600, value=10.0)
+            store.record("cottage", "heater", t + 5 * 3600, mode="heat", setpoint=13.0)
+            rows = store.energy_estimate(
+                "cottage", "temp", {"heater": 1.0},
+                datetime.fromtimestamp(t + 5 * 3600, timezone.utc),
+                datetime.fromtimestamp(t + 8 * 3600, timezone.utc))
+            self.assertAlmostEqual(sum(k for _, k in rows), 1200 / 3600, places=3)
+            store.close()
+
 
 def bind_all(store):
     # The large ALPSTUGA is recognised by its device class, not its name.

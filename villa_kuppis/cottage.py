@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 import sqlite3
 import threading
 import uuid
@@ -116,6 +117,26 @@ def _heater_state(row: tuple | None, ts: int, room_c: float | None,
     if target is not None and setpoint >= target - learning.DEADBAND_C:
         return "on"
     return None
+
+
+_WATTS_RE = re.compile(r"(\d{3,4})\s*w(?![a-z])", re.IGNORECASE)
+
+
+def rated_kw(*names: str | None) -> float | None:
+    """A heater's rated power from its name ("Mökki 500W patteri",
+    ``climate.kammari_1000w``), or None. Matter heaters report no power."""
+    for name in names:
+        match = _WATTS_RE.search(name or "")
+        if match:
+            return int(match.group(1)) / 1000
+    return None
+
+
+def heating_share(setpoint: float, room_c: float) -> float:
+    """Estimated share of full power a heater in heat mode uses: all of it
+    when set a degree or more above the room (the controller's high drive),
+    none a degree or more below, and in between while it holds the room."""
+    return min(1.0, max(0.0, (setpoint - room_c + 1.0) / 2.0))
 
 
 # --- site configuration ------------------------------------------------------------
@@ -360,6 +381,59 @@ class CottageStore:
             else:
                 out.append(learning.Reading(ts, room_c, None, None, None))
         return out
+
+    def energy_estimate(self, site_id: str, temperature: str, heaters: dict[str, float],
+                        start, end) -> list[tuple[int, float]]:
+        """Estimated (hour start, kWh) of a room's heaters: each heater's
+        rated power (``heaters``: device id -> kW) times ``heating_share`` of
+        its setpoint against the room reading, while both are fresh."""
+        if not heaters:
+            return []
+        s, e = _to_epoch(start), _to_epoch(end)
+        devices = (temperature, *heaters)
+        marks = ", ".join("?" * len(devices))
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT ts_utc, device_id, value, mode, setpoint FROM site_reading "
+                f"WHERE site_id = ? AND device_id IN ({marks}) AND ts_utc >= ? "
+                "AND ts_utc < ? ORDER BY ts_utc, id",
+                (site_id, *devices, s - learning.MAX_READING_AGE, e)).fetchall()
+        hours: dict[int, float] = {}
+        room: tuple | None = None
+        last: dict[str, tuple] = {}
+
+        def power(t: int) -> float:
+            if room is None or room[1] is None or t - room[0] > learning.MAX_READING_AGE:
+                return 0.0
+            total = 0.0
+            for device, kw in heaters.items():
+                row = last.get(device)
+                if (row is not None and t - row[0] <= learning.MAX_READING_AGE
+                        and row[1] == "heat" and row[2] is not None):
+                    total += kw * heating_share(row[2], room[1])
+            return total
+
+        def add(a: int, b: int, kw: float) -> None:
+            while a < b:
+                hour = a - a % 3600
+                upto = min(b, hour + 3600)
+                hours[hour] = hours.get(hour, 0.0) + kw * (upto - a) / 3600
+                a = upto
+
+        prev = None
+        for ts, device, value, mode, setpoint in [*rows, (e, None, None, None, None)]:
+            if prev is not None:
+                # A silent stretch counts only as long as the readings stay fresh.
+                a, b = max(prev, s), min(ts, e, prev + learning.MAX_READING_AGE)
+                kw = power(prev)
+                if kw and a < b:
+                    add(a, b, kw)
+            if device == temperature:
+                room = (ts, value)
+            elif device is not None:
+                last[device] = (ts, mode, setpoint)
+            prev = ts
+        return sorted((hour, round(kwh, 4)) for hour, kwh in hours.items() if kwh > 0)
 
     def learn_since(self, site_id: str, room: str) -> int | None:
         with self._lock:
@@ -777,6 +851,24 @@ class CottageSite:
                 return []
         return self._store.learning_readings(SITE_ID, found["temperature"],
                                              found["status"], start, end, heaters)
+
+    def energy(self, room_id: str, start, end) -> list[tuple[int, float]]:
+        """Estimated (hour start, kWh) of the room's heaters whose rated power
+        is in their name; [] without a temperature sensor or such heaters."""
+        temperature, heaters = None, {}
+        for binding in sorted(self._bindings(), key=lambda b: b.device_id):
+            if binding.room != room_id:
+                continue
+            role = self._role(binding)
+            if role == "temperature" and temperature is None:
+                temperature = binding.device_id
+            elif role == "heater":
+                kw = rated_kw(binding.label, binding.entity_id)
+                if kw is not None:
+                    heaters[binding.device_id] = kw
+        if temperature is None:
+            return []
+        return self._store.energy_estimate(SITE_ID, temperature, heaters, start, end)
 
     def learning_since(self, room_id: str) -> datetime | None:
         """Where the room's learning history starts: when its temperature

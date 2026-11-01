@@ -333,6 +333,18 @@ class GatewayRegistryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(points, [(start_ms // 1000, 20.5), (1793095200, 19.0)])
         self.assertEqual(self.ha.asked[-1]["statistic_ids"], ["sensor.sauna"])
 
+    async def test_statistics_rows_carry_the_asked_types(self):
+        start_ms = 1793000000000
+        self.ha.answers["recorder/statistics_during_period"] = {"sensor.pump_energy": [
+            {"start": start_ms, "change": 0.3, "state": 12.3},
+            {"start": start_ms + 3600000, "change": -12.3, "state": 0.1}]}
+        rows = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: self.gateway.statistics_rows("sensor.pump_energy", self.clock(),
+                                                       ("change", "state")))
+        self.assertEqual(rows, [(start_ms // 1000, {"change": 0.3, "state": 12.3}),
+                                (start_ms // 1000 + 3600, {"change": -12.3, "state": 0.1})])
+        self.assertEqual(self.ha.asked[-1]["types"], ["change", "state"])
+
     async def test_area_target_call(self):
         await asyncio.get_running_loop().run_in_executor(
             None, lambda: self.gateway.call("light", "turn_off", {}, target={"area_id": "piha"}))

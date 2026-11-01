@@ -736,55 +736,61 @@ class PumpStore:
 
     def energy_daily(self, unit_id: str, prices_db, start, end,
                      factor: float = 1.0, extra: float = 0.0) -> list[dict]:
-        """Energy and cost per Helsinki day; [] when no energy is stored.
-
-        Each energy row covers the hour starting at its timestamp and is
-        priced with the mean of the 15-minute spot prices in that hour
-        (times ``factor`` for VAT) plus ``extra`` c/kWh (transfer, tax, margin).
-        cost_eur is None when no hour of the day has a price; cost_complete
-        is False when some hours lack one (cost then covers priced hours).
-        """
+        """Energy and cost per Helsinki day; [] when no energy is stored
+        (see ``price_energy``)."""
         s, e = _to_epoch(start), _to_epoch(end)
         with self._lock:
             energy = self._conn.execute(
                 "SELECT ts_utc, kwh FROM pump_energy WHERE unit_id = ? "
                 "AND ts_utc >= ? AND ts_utc < ? ORDER BY ts_utc",
                 (unit_id, s, e)).fetchall()
-        if not energy:
-            return []
-        prices: dict[int, float] = {}
-        path = Path(prices_db)
-        if path.exists():
-            conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro",
-                                   uri=True)
-            try:
-                for ts, raw in conn.execute(
-                        "SELECT ts_utc, price_raw_eur_mwh FROM price_interval "
-                        "WHERE ts_utc >= ? AND ts_utc < ?", (s, e + 3600)):
-                    prices[ts] = float(Decimal(raw) / Decimal(10)) * factor + extra
-            finally:
-                conn.close()
-        days: dict[str, dict] = {}
-        for ts, kwh in energy:
-            day = datetime.fromtimestamp(ts, tz=HELSINKI).date().isoformat()
-            d = days.setdefault(day, {"date": day, "kwh": 0.0,
-                                      "cost_eur": None, "cost_complete": True})
-            d["kwh"] += kwh
-            hour = [v for t, v in prices.items() if ts <= t < ts + 3600]
-            if hour:
-                d["cost_eur"] = (d["cost_eur"] or 0.0) + (
-                    kwh * (sum(hour) / len(hour)) / 100)
-            else:
-                d["cost_complete"] = False
-        for d in days.values():
-            d["kwh"] = round(d["kwh"], 3)
-            if d["cost_eur"] is not None:
-                d["cost_eur"] = round(d["cost_eur"], 4)
-        return list(days.values())
+        return price_energy(energy, prices_db, start, end, factor, extra)
 
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+
+
+def price_energy(energy, prices_db, start, end, factor: float = 1.0,
+                 extra: float = 0.0) -> list[dict]:
+    """Energy and cost per Helsinki day from (hour start, kWh) rows.
+
+    Each row covers the hour starting at its timestamp and is priced with
+    the mean of the 15-minute spot prices in that hour (times ``factor`` for
+    VAT) plus ``extra`` c/kWh (transfer, tax, margin). cost_eur is None when
+    no hour of the day has a price; cost_complete is False when some hours
+    lack one (cost then covers priced hours).
+    """
+    if not energy:
+        return []
+    s, e = _to_epoch(start), _to_epoch(end)
+    prices: dict[int, float] = {}
+    path = Path(prices_db)
+    if path.exists():
+        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+        try:
+            for ts, raw in conn.execute(
+                    "SELECT ts_utc, price_raw_eur_mwh FROM price_interval "
+                    "WHERE ts_utc >= ? AND ts_utc < ?", (s, e + 3600)):
+                prices[ts] = float(Decimal(raw) / Decimal(10)) * factor + extra
+        finally:
+            conn.close()
+    days: dict[str, dict] = {}
+    for ts, kwh in energy:
+        day = datetime.fromtimestamp(ts, tz=HELSINKI).date().isoformat()
+        d = days.setdefault(day, {"date": day, "kwh": 0.0,
+                                  "cost_eur": None, "cost_complete": True})
+        d["kwh"] += kwh
+        hour = [prices[t] for t in range(ts, ts + 3600, 900) if t in prices]
+        if hour:
+            d["cost_eur"] = (d["cost_eur"] or 0.0) + kwh * (sum(hour) / len(hour)) / 100
+        else:
+            d["cost_complete"] = False
+    for d in days.values():
+        d["kwh"] = round(d["kwh"], 3)
+        if d["cost_eur"] is not None:
+            d["cost_eur"] = round(d["cost_eur"], 4)
+    return list(days.values())
 
 
 # --- gateway (async client on its own loop) ---------------------------------------
@@ -1138,7 +1144,7 @@ class PumpService:
                  price_transport=None,
                  price_fetch_enabled: bool = True,
                  cottage_factory=None,
-                 notifier=None, reloader=None,
+                 notifier=None, reloader=None, energy=None,
                  device_sources=None):
         self._data_dir = Path(data_dir)
         self._now = now
@@ -1206,7 +1212,7 @@ class PumpService:
         if notifier is not None:
             from .alerts import AlertMonitor
             self.alerts = AlertMonitor(self, notifier, SettingsStore(self.store.path),
-                                       reloader=reloader, now=now)
+                                       reloader=reloader, energy=energy, now=now)
         self._closed = False
 
     # -- lifecycle --
@@ -1419,8 +1425,14 @@ class PumpService:
                                         max_points, factor)
         plan = self.store.plan_series(unit, start, end, max_points)
         commands = self.store.command_marks(unit, start, end)
-        energy = self.store.energy_daily(unit, self._prices_db, start, end,
-                                         factor, price_extra(overrides, site))
+        if cottage_room is not None:
+            # The heaters report no power: estimated from their rated power.
+            energy = price_energy(self.cottage.energy(cottage_room, start, end),
+                                  self._prices_db, start, end, factor,
+                                  price_extra(overrides, "cottage"))
+        else:
+            energy = self.store.energy_daily(unit, self._prices_db, start, end,
+                                             factor, price_extra(overrides, site))
         forecast = self.store.forecast_rows(
             site, max(start, now - timedelta(hours=1)), end)
         payload = {
@@ -1442,6 +1454,7 @@ class PumpService:
             "plan": [[_iso(ts), v] for ts, v in plan],
             "commands": commands,
             "energy": energy,
+            "energy_estimated": cottage_room is not None,
         }
         if cottage is not None:
             payload.update(cottage)
@@ -1792,7 +1805,7 @@ def make_live_service(data_dir, *, credentials=None, weather_sites=None,
         gateway = HomeAssistantGateway("home", pump_site.url,
                                        lambda: read_token_file(token_file), bindings)
         from .alerts import HomeAssistantNotifier
-        from .ha_pumps import SessionReloader
+        from .ha_pumps import EnergyRecorder, SessionReloader
         def device_sources(cottage):
             sources = {"home": gateway}
             if cottage is not None:
@@ -1801,6 +1814,7 @@ def make_live_service(data_dir, *, credentials=None, weather_sites=None,
         service = PumpService(data_dir, client=None, client_factory=ha_client_factory(
             gateway, lambda: service.store.unit_states_with_last_mode()),
             notifier=HomeAssistantNotifier(gateway), reloader=SessionReloader(gateway),
+            energy=EnergyRecorder(gateway),
             device_sources=device_sources, **common)
         return service
 

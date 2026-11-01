@@ -915,20 +915,28 @@ class HomeAssistantGateway:
     def statistics(self, entity_id: str, start: datetime) -> list[tuple[int, float]]:
         """Hourly means of one entity from Home Assistant's long-term
         statistics since ``start``: (epoch seconds, mean); blocking."""
+        return [(ts, row["mean"]) for ts, row in self.statistics_rows(entity_id, start, ("mean",))
+                if row.get("mean") is not None]
+
+    def statistics_rows(self, entity_id: str, start: datetime,
+                        types: tuple[str, ...]) -> list[tuple[int, dict]]:
+        """Hourly long-term statistics of one entity since ``start``:
+        (epoch seconds, {type: number or None}) for the given ``types``
+        (mean, change, state, sum...); blocking."""
         result = self._run(lambda conn: conn.request({
             "type": "recorder/statistics_during_period", "start_time": start.isoformat(),
-            "statistic_ids": [entity_id], "period": "hour", "types": ["mean"]},
+            "statistic_ids": [entity_id], "period": "hour", "types": list(types)},
             self._command_timeout))
         out = []
         for row in (result or {}).get(entity_id) or []:
-            mean, begin = _number(row.get("mean")), row.get("start")
+            begin = row.get("start")
             if isinstance(begin, (int, float)) and not isinstance(begin, bool):
                 ts = int(begin / 1000)        # milliseconds since Home Assistant 2023.3
             else:
                 parsed = _parse_ts(begin)
                 ts = int(parsed.timestamp()) if parsed is not None else None
-            if mean is not None and ts is not None:
-                out.append((ts, mean))
+            if ts is not None:
+                out.append((ts, {t: _number(row.get(t)) for t in types}))
         return out
 
     def services(self, domain: str) -> list[str]:

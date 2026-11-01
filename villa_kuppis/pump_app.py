@@ -1382,7 +1382,7 @@ function drawHistory(data) {
   if (marks.length) items.push(
     '<li><span class="badge mute" title="Lähetetyt komennot näkyvät kaavion alareunassa.">Komennot</span></li>');
   $histLegend.innerHTML = items.join("");
-  drawEnergy(data.energy || []);
+  drawEnergy(data.energy || [], data.energy_estimated);
 }
 $histLegend.addEventListener("click", (e) => {
   const b = e.target.closest("[data-series]");
@@ -1396,23 +1396,34 @@ const eurFmt = new Intl.NumberFormat("fi-FI",
   { style: "currency", currency: "EUR" });
 const kwhFmt = new Intl.NumberFormat("fi-FI", { maximumFractionDigits: 1 });
 
-function drawEnergy(days) {
+function drawEnergy(days, estimated) {
   if (!days.length) {
     $histEnergy.innerHTML = '<p class="detail">Energian kulutus ja kustannus: ei tiedossa.</p>';
     return;
   }
   const shown = days.slice(-31);
   const top = Math.max(0.001, ...shown.map((d) => d.kwh));
-  $histEnergy.innerHTML = (days.length > shown.length
-    ? '<p class="detail">Viimeiset 31 päivää.</p>' : "") +
+  const priced = shown.filter((d) => d.cost_eur !== null);
+  const kwh = shown.reduce((a, d) => a + d.kwh, 0);
+  const eur = priced.reduce((a, d) => a + d.cost_eur, 0);
+  const pricedKwh = priced.reduce((a, d) => a + d.kwh, 0);
+  // The average price paid shows whether the energy went to cheap hours.
+  const avg = (e, k) => k > 0 ? ' <span class="detail">' + kwhFmt.format(100 * e / k) + " snt/kWh</span>" : "";
+  const cost = (d) => d.cost_eur === null ? "ei tiedossa"
+    : eurFmt.format(d.cost_eur) + avg(d.cost_eur, d.kwh) + (d.cost_complete ? "" : " (osa tunneista)");
+  const notes = [];
+  if (days.length > shown.length) notes.push("Viimeiset 31 päivää.");
+  if (estimated) notes.push("Arvio: patterien nimessä oleva teho ja aika, jonka ne ovat lämmittäneet.");
+  $histEnergy.innerHTML = (notes.length ? '<p class="detail">' + notes.join(" ") + "</p>" : "") +
     "<table><thead><tr><th>Päivä</th><th>kWh</th><th></th>" +
     "<th>Kustannus</th></tr></thead><tbody>" + shown.map((d) =>
     "<tr><td>" + esc(d.date) + "</td><td>" + kwhFmt.format(d.kwh) + "</td>" +
     '<td class="bar"><span class="ebar" style="width:' + (100 * d.kwh / top).toFixed(1) +
-    '%"></span></td><td>' +
-    (d.cost_eur === null ? "ei tiedossa"
-      : eurFmt.format(d.cost_eur) + (d.cost_complete ? "" : " (osa tunneista)")) +
-    "</td></tr>").join("") + "</tbody></table>";
+    '%"></span></td><td>' + cost(d) + "</td></tr>").join("") + "</tbody>" +
+    (shown.length > 1 ? "<tfoot><tr><td><strong>Yhteensä</strong></td><td><strong>" + kwhFmt.format(kwh) +
+      "</strong></td><td></td><td><strong>" + (priced.length ? eurFmt.format(eur) : "ei tiedossa") + "</strong>" +
+      (priced.length ? avg(eur, pricedKwh) : "") + "</td></tr></tfoot>" : "") +
+    "</table>";
 }
 
 let histRequest = 0;

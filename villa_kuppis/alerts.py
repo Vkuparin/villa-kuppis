@@ -22,6 +22,8 @@ memory, so a problem that persists over a restart is reported again. A
 notice that cannot be sent is retried at the next check. The same check
 runs the pumps' session reloader (``ha_pumps.SessionReloader``, setting
 ``pump_relogin``), so a pump alert comes only when the reload did not help.
+It also reads the pumps' hourly energy (``ha_pumps.EnergyRecorder``) once
+an hour.
 """
 
 from __future__ import annotations
@@ -100,11 +102,12 @@ class HomeAssistantNotifier:
 class AlertMonitor:
     """Checks the sites every minute and sends notices when problems start and end."""
 
-    def __init__(self, service, notifier, settings, *, reloader=None, now=utc_now,
-                 interval: float = CHECK_INTERVAL):
+    def __init__(self, service, notifier, settings, *, reloader=None, energy=None,
+                 now=utc_now, interval: float = CHECK_INTERVAL):
         self._service = service
         self._notifier = notifier
         self._reloader = reloader
+        self._energy = energy
         self._settings = settings
         self._now = now
         self._interval = interval
@@ -201,6 +204,11 @@ class AlertMonitor:
         units = self._service.view()["units"]
         if self._reloader is not None:
             self._reloader.check(units, app_settings.resolve(overrides, "home")["pump_relogin"]["value"])
+        if self._energy is not None:
+            try:
+                self._energy.check(self._service.store)
+            except Exception as error:
+                log.warning("Pump energy read failed: %s", type(error).__name__)
         current = {p.key: p for p in self.problems(overrides, units)}
         for key in [k for k in self._since if k not in current]:
             del self._since[key]

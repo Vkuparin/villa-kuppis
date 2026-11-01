@@ -10,7 +10,7 @@ from pathlib import Path
 
 from villa_kuppis.alerts import AlertMonitor, HomeAssistantNotifier
 from villa_kuppis.ha_gateway import HAError
-from villa_kuppis.ha_pumps import SessionReloader
+from villa_kuppis.ha_pumps import EnergyRecorder, SessionReloader
 from villa_kuppis.settings import SettingsStore
 
 from tests.test_ha_gateway import GatewayTestCase
@@ -198,6 +198,65 @@ class MonitorTests(unittest.TestCase):
         self.check(1)
         self.assertEqual([t for t, _ in self.notifier.sent[3:]],
                          ["Mökki on taas lämpimämpi"] * 2)
+
+
+class EnergyGateway:
+    """Two pumps on their Home Assistant devices; one has an energy sensor."""
+
+    def __init__(self):
+        self.asked = []
+        self.rows = {"sensor.olohuone_energy_consumed_monthly": [
+            (1793000000, {"change": 0.3, "state": 40.2}),
+            (1793003600, {"change": -40.2, "state": 0.2}),     # the monthly reset
+            (1793007200, {"change": 0.0, "state": 0.2})]}
+
+    def registry(self):
+        return {"entities": [
+            {"entity_id": "climate.olohuone", "device_id": "dev-olo"},
+            {"entity_id": "sensor.olohuone_energy_consumed_monthly", "device_id": "dev-olo"},
+            {"entity_id": "sensor.olohuone_signal_strength", "device_id": "dev-olo"},
+            {"entity_id": "climate.eteinen", "device_id": "dev-ete"}]}
+
+    def raw_states(self):
+        return {"sensor.olohuone_energy_consumed_monthly": {"attributes": {
+                    "device_class": "energy", "unit_of_measurement": "kWh"}},
+                "sensor.olohuone_signal_strength": {"attributes": {
+                    "device_class": "signal_strength", "unit_of_measurement": "dBm"}}}
+
+    def snapshot(self):
+        return {"u-olo": {"kind": "climate", "entity_id": "climate.olohuone"},
+                "u-ete": {"kind": "climate", "entity_id": "climate.eteinen"}}
+
+    def statistics_rows(self, entity_id, start, types):
+        self.asked.append((entity_id, start, types))
+        return self.rows.get(entity_id, [])
+
+
+class EnergyStore:
+    def __init__(self):
+        self.rows = {}
+
+    def energy_upsert(self, unit_id, values):
+        self.rows.setdefault(unit_id, []).extend(values)
+        return len(values)
+
+
+class EnergyRecorderTests(unittest.TestCase):
+    def test_hourly_energy_from_the_pump_device_sensor(self):
+        now = [datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)]
+        gateway, store = EnergyGateway(), EnergyStore()
+        recorder = EnergyRecorder(gateway, now=lambda: now[0])
+        self.assertEqual(recorder.sensors(), {"u-olo": "sensor.olohuone_energy_consumed_monthly"})
+        self.assertEqual(recorder.check(store), 2)
+        self.assertEqual([(ts.timestamp(), kwh) for ts, kwh in store.rows["u-olo"]],
+                         [(1793000000, 0.3), (1793003600, 0.2)])
+        self.assertEqual(gateway.asked[0][1], now[0] - timedelta(days=35))
+        # Once an hour, and after the first read only the last two days.
+        now[0] += timedelta(minutes=30)
+        self.assertEqual(recorder.check(store), 0)
+        now[0] += timedelta(minutes=31)
+        recorder.check(store)
+        self.assertEqual(gateway.asked[-1][1], now[0] - timedelta(days=2))
 
 
 class FakeGateway:

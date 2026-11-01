@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from .ha_gateway import HAError
@@ -263,3 +263,69 @@ class SessionReloader:
                             error.message or error.code)
         except Exception as error:
             log.warning("Reloading the pumps' integration failed: %s", type(error).__name__)
+
+
+ENERGY_EVERY = 3600.0          # seconds between reads of the energy statistics
+ENERGY_BACKFILL_DAYS = 35      # the first read after a start reaches this far back
+
+
+class EnergyRecorder:
+    """Hourly kWh of each pump from the energy sensor on its Home Assistant
+    device (MELCloud Home: "Energy consumed (monthly)", which starts from
+    zero every month), read once an hour from Home Assistant's long-term
+    statistics into the pump store's energy table. A negative hourly change
+    is the monthly reset; the hour then counts the counter's new value.
+    Rewriting an hour is harmless, so a restart only reads back again."""
+
+    def __init__(self, gateway, *, now=None):
+        self._gateway = gateway
+        self._now = now or (lambda: datetime.now(timezone.utc))
+        self._next: datetime | None = None
+        self._backfilled = False
+
+    def sensors(self) -> dict[str, str]:
+        """Pump unit id -> its energy sensor's entity id."""
+        registry = self._gateway.registry()
+        if not registry:
+            return {}
+        states = self._gateway.raw_states()
+        entries = registry.get("entities") or []
+        device_of = {e.get("entity_id"): e.get("device_id") for e in entries}
+        energy: dict[str, list[str]] = {}
+        for entry in entries:
+            entity_id = entry.get("entity_id") or ""
+            attrs = (states.get(entity_id) or {}).get("attributes") or {}
+            if (entity_id.startswith("sensor.") and not entry.get("disabled_by")
+                    and attrs.get("device_class") == "energy"
+                    and attrs.get("unit_of_measurement") in ("kWh", "Wh")
+                    and entry.get("device_id")):
+                energy.setdefault(entry["device_id"], []).append(entity_id)
+        out = {}
+        for unit_id, state in self._gateway.snapshot().items():
+            if state.get("kind") == "climate":
+                found = sorted(energy.get(device_of.get(state.get("entity_id"))) or [])
+                if found:
+                    out[unit_id] = found[0]
+        return out
+
+    def check(self, store) -> int:
+        """Read the statistics when an hour has passed; rows written."""
+        now = self._now()
+        if self._next is not None and now < self._next:
+            return 0
+        self._next = now + timedelta(seconds=ENERGY_EVERY)
+        start = now - timedelta(days=2 if self._backfilled else ENERGY_BACKFILL_DAYS)
+        states = self._gateway.raw_states()
+        written = 0
+        for unit_id, entity_id in self.sensors().items():
+            unit = ((states.get(entity_id) or {}).get("attributes") or {}).get("unit_of_measurement")
+            scale = 0.001 if unit == "Wh" else 1.0
+            values = []
+            for ts, row in self._gateway.statistics_rows(entity_id, start, ("change", "state")):
+                change, value = row.get("change"), row.get("state")
+                kwh = change if change is not None and change >= 0 else value
+                if kwh is not None and kwh > 0:
+                    values.append((datetime.fromtimestamp(ts, timezone.utc), kwh * scale))
+            written += store.energy_upsert(unit_id, values)
+        self._backfilled = True
+        return written
