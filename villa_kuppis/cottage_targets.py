@@ -22,17 +22,23 @@ After a disconnect nothing is replayed: the next tick sends only the target
 valid now and the plan from it on. Switching ``Automaatio`` off releases
 each room once: a target below every safe setpoint, valid for a minute and
 without a schedule, so the cottage drops to its fallback at once instead of
-following the last plan for up to a day. After that nothing is sent.
+following the last plan for up to a day. A sender that starts with
+``Automaatio`` off releases every room once too, since the cottage may
+still hold a plan from before the restart. After that nothing is sent.
 
 With ``Hintaohjaus`` set to ``Optimoitu`` a room whose learned model passed
 its held-out day gets the heating optimizer's target instead (card F5.2,
 ``heat_optimizer``), planned once per period over all known prices; the
-fixed thresholds stay its fallback and its baseline.
+fixed thresholds stay its fallback and its baseline. The optimizer's floor
+is the higher of ``smart_min_c`` and ``heat_base_c``. A visit heat-up uses
+the optimizer only in ``Optimoitu`` rooms, and plans with
+``VISIT_HEAT_MARGIN`` of the learned heating rate so the room is warm by
+the arrival even if the heaters are slower than learned.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -56,6 +62,9 @@ ACTOR = "Suunnitelma"
 # short validity ends in fallback a minute later.
 RELEASE_TARGET = 0.0
 RELEASE_MINUTES = 1
+# A visit heat-up is planned as if the heaters warmed the room this much
+# slower than learned: an early warm room costs a little, a cold arrival more.
+VISIT_HEAT_MARGIN = 0.7
 
 
 @dataclass(frozen=True)
@@ -100,6 +109,12 @@ def schedule(steps: Sequence[RoomTarget]) -> list[dict]:
             out.append({"start": start.isoformat(), "target": step.target_c})
             value = step.target_c
     return out
+
+
+def heat_limits(values: Mapping) -> HeatLimits:
+    """The optimizer's band for a room: never below its base level."""
+    floor = max(float(values["smart_min_c"]["value"]), float(values["heat_base_c"]["value"]))
+    return HeatLimits(floor, max(floor, float(values["smart_max_c"]["value"])))
 
 
 def takes_schedule(state: dict | None) -> bool:
@@ -224,8 +239,8 @@ class CottageTargetSender:
         for room in rooms:
             values = app_settings.resolve(overrides, SITE, room)
             fixed = [target.target_c for target in out[room]]
-            key = (ahead[0].ts_utc, len(ahead), values["smart_min_c"]["value"],
-                   values["smart_max_c"]["value"], tuple(fixed))
+            limits = heat_limits(values)
+            key = (ahead[0].ts_utc, len(ahead), limits, tuple(fixed))
             cached = self._optimized.get(room)
             if cached is None or cached[0] != key:
                 if models is None:
@@ -234,9 +249,7 @@ class CottageTargetSender:
                 model = models.get(room)
                 plan = None if model is None else optimize_heating(
                     model, temps.get(room), [(p.ts_utc, float(p.price_c_kwh)) for p in ahead],
-                    outdoor, HeatLimits(float(values["smart_min_c"]["value"]),
-                                        float(values["smart_max_c"]["value"])),
-                    fixed)
+                    outdoor, limits, fixed)
                 cached = self._optimized[room] = (key, plan)
             plan = cached[1]
             if plan is not None and plan.optimized:
@@ -252,7 +265,9 @@ class CottageTargetSender:
         now_ts = int(now.timestamp())
         if self._models is None or visit.ended_at is not None or now_ts >= arrival:
             return set()
-        rooms = [r for r in visit.rooms if r in out and out[r][0].reason != "noprice"]
+        rooms = [r for r in visit.rooms if r in out and out[r][0].reason != "noprice"
+                 and app_settings.resolve(overrides, SITE, r)["heat_price_control"]["value"]
+                 == "optimized"]
         ahead = [p for p in periods if p.ts_utc >= now_ts - now_ts % INTERVAL_SECONDS]
         if not rooms or not ahead or ahead[-1].ts_utc < arrival:
             return set()   # the arrival is past the known prices
@@ -264,19 +279,20 @@ class CottageTargetSender:
             values = app_settings.resolve(overrides, SITE, room)
             base = [visit.target_c if p.ts_utc >= start_ts else float(r.temperature_c)
                     for p, r in zip(ahead, fixed[room])]
+            limits = heat_limits(values)
             key = ("visit", ahead[0].ts_utc, len(ahead), arrival, visit.target_c,
-                   values["smart_min_c"]["value"], values["smart_max_c"]["value"], tuple(base))
+                   limits, tuple(base))
             cached = self._optimized.get(("visit", room))
             if cached is None or cached[0] != key:
                 if models is None:
                     models, outdoor = self._models()
                     temps = self._room_temps() if self._room_temps is not None else {}
                 model = models.get(room)
+                if model is not None and model.heat_c_per_h:
+                    model = replace(model, heat_c_per_h=model.heat_c_per_h * VISIT_HEAT_MARGIN)
                 result = None if model is None else optimize_heating(
                     model, temps.get(room), [(p.ts_utc, float(p.price_c_kwh)) for p in ahead],
-                    outdoor, HeatLimits(float(values["smart_min_c"]["value"]),
-                                        float(values["smart_max_c"]["value"])),
-                    base, visit=(arrival, visit.target_c))
+                    outdoor, limits, base, visit=(arrival, visit.target_c))
                 cached = self._optimized[("visit", room)] = (key, result)
             result = cached[1]
             if result is not None:
@@ -286,19 +302,27 @@ class CottageTargetSender:
         return done
 
     def _release(self) -> list[dict]:
-        """Automaatio off: hand each room that got a plan back to its fallback."""
+        """Automaatio off: hand each room back to its fallback, once.
+
+        A room this sender has not written yet (Villa Kuppis restarted) is
+        released too, with the current period as the revision, since the
+        cottage may still follow a plan from before the restart.
+        """
         if self._gateway.health()["state"] not in ("ok", "stale"):
             return []
         now = self._now()
+        now_ts = int(now.timestamp())
         out = []
-        for room, previous in list(self._sent.items()):
-            device_id = self._rooms.get(room)
-            if device_id is None:
-                continue
+        for room, device_id in self._rooms.items():
+            previous = self._sent.get(room)
+            if previous is None:
+                previous = (RELEASE_TARGET, now_ts - now_ts % INTERVAL_SECONDS, None, now)
             revision = previous[1]
             if previous[0] is None:   # released already: retry only a lost write
                 state = (self._gateway.command(previous[2]) or {}).get("state")
-                if state in ("pending", "confirmed") or now - previous[3] < self._retry:
+                # A refused release (an older revision) would be refused again.
+                if (state in ("pending", "confirmed", "failed")
+                        or now - previous[3] < self._retry):
                     continue
             cmd = self._gateway.submit_service(
                 device_id, DOMAIN, "set_target",

@@ -94,14 +94,19 @@ class SiteTargetTests(IsolatedAsyncioTestCase):
         # Confirmed writes never reach the event log.
         self.assertEqual(self.site.events(), [])
 
-    async def test_automation_off_sends_nothing_but_shows_the_plan(self):
+    async def test_automation_off_releases_once_then_sends_nothing_but_shows_the_plan(self):
         self.automation = False
+        # The cottage may still hold a plan from before a restart: one release.
+        released = self.site.tick_targets()
+        self.assertEqual(len(released), 2)
+        await self.settle(released)
+        self.assertEqual({t["target"] for t in self.ha.targets}, {0.0})
+        calls = len(self.ha.calls)
         self.assertEqual(self.site.tick_targets(), [])
-        self.assertEqual(self.ha.calls, [])
+        self.assertEqual(len(self.ha.calls), calls)
         view = self.site.view()
         self.assertFalse(view["automation_on"])
         self.assertEqual(self.room("large")["plan"]["target"], 12.0)
-        self.assertIsNone(self.room("large")["plan"]["acked_at"])
 
     async def test_room_without_a_status_binding_is_skipped(self):
         self.bindings.unbind("cottage", "small-status")

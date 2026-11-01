@@ -139,10 +139,27 @@ class TargetTests(IsolatedAsyncioTestCase):
         latest = {t["room"]: t["target"] for t in self.ha.targets}
         self.assertEqual(latest, {"large": 5.0, "small": 10.0})
 
-    async def test_automation_off_sends_nothing(self):
+    async def test_automation_off_after_a_restart_releases_each_room_once(self):
+        # A new sender (Villa Kuppis restarted) does not know what the
+        # cottage follows: it releases every room once, then stays quiet.
         self.automation = False
+        sent = self.sender.tick()
+        self.assertEqual(len(sent), 2)
+        await self.settle(sent)
+        self.assertEqual({(t["room"], t["target"], t["revision"]) for t in self.ha.targets},
+                         {("large", 0.0, self.day_start), ("small", 0.0, self.day_start)})
+        self.clock.advance(INTERVAL_SECONDS)
         self.assertEqual(self.sender.tick(), [])
-        self.assertEqual(self.ha.calls, [])
+        self.assertEqual(len(self.ha.targets), 2)
+
+    async def test_refused_release_is_not_repeated(self):
+        self.ha.revisions = {"large": self.day_start + 10 * INTERVAL_SECONDS}
+        self.automation = False
+        await self.settle(self.sender.tick())
+        calls = len(self.ha.calls)
+        self.clock.advance(5 * 60)
+        self.assertEqual(self.sender.tick(), [])
+        self.assertEqual(len(self.ha.calls), calls)
 
     async def test_automation_off_releases_each_room_once_and_on_resumes(self):
         self.ha.schedules = True
@@ -331,6 +348,41 @@ class OptimizedTargetTests(unittest.TestCase):
         self.overrides = {}
         self.temps = {}
         self.assertEqual(self.sender.targets()["large"].reason, "threshold")
+
+    def test_optimized_floor_is_never_below_the_base_level(self):
+        self.overrides = {"site:cottage": {"heat_base_c": 9.0}}
+        for _ in range(8):
+            large = self.sender.targets()["large"]
+            self.assertGreaterEqual(large.target_c, 9.0)
+            self.now += timedelta(seconds=INTERVAL_SECONDS)
+
+    def test_visit_in_a_fixed_room_keeps_the_fixed_lead(self):
+        from villa_kuppis.visit import VisitStore
+        visits = VisitStore(Path(self.tmp.name) / "visits.db")
+        self.addCleanup(visits.close)
+        self.sender._visits = visits
+        self.overrides = {"site:cottage": {"heat_price_control": "fixed"}}
+        visits.start(self.now + timedelta(hours=20), 20.0, ["large"], "Ville", self.now)
+        self.assertNotEqual(self.sender.targets()["large"].reason, "visit")   # 12 h rule: later
+
+    def test_visit_heat_up_is_planned_with_a_slower_heater(self):
+        from villa_kuppis import cottage_targets
+        from villa_kuppis.visit import VisitStore
+        visits = VisitStore(Path(self.tmp.name) / "visits.db")
+        self.addCleanup(visits.close)
+        self.sender._visits = visits
+        seen = []
+        real = cottage_targets.optimize_heating
+
+        def spy(model, *args, **kwargs):
+            if kwargs.get("visit"):
+                seen.append(model.heat_c_per_h)
+            return real(model, *args, **kwargs)
+        cottage_targets.optimize_heating = spy
+        self.addCleanup(setattr, cottage_targets, "optimize_heating", real)
+        visits.start(self.now + timedelta(hours=20), 20.0, ["large"], "Ville", self.now)
+        self.sender.targets()
+        self.assertEqual(seen, [2.0 * cottage_targets.VISIT_HEAT_MARGIN])
 
     def test_visit_heat_up_of_a_learned_room_is_planned_to_the_arrival(self):
         from villa_kuppis.visit import VisitStore
