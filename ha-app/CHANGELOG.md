@@ -1,5 +1,16 @@
 # Muutokset
 
+## 0.4.36
+
+- Historian energiataulukko näyttää kulutuksen ja kustannuksen. Lämpöpumppujen kilowattitunnit tulevat MELCloud Home -integraation kuukausilaskureista tunneittain. Mökin huoneiden luvut ovat arvio: patterin nimessä oleva teho kertaa aika, jonka patteri on lämmittänyt. Kustannus lasketaan pörssihinnasta, ALV:stä ja Siirto, vero ja marginaali -asetuksesta. Taulukon lopussa on yhteissumma ja keskihinta.
+- Mökkivierailulle voi antaa lähtöajan, jolloin vierailu päättyy itsestään ja huoneet palaavat hintaohjaukseen.
+- Vierailukortti näyttää lämmityksen aikana, kuinka nopeasti huone lämpenee ja milloin se on arviolta tavoitteessa. Jos huone ei ehdi tavoitteeseen saapumiseen mennessä, rivi muuttuu oranssiksi.
+- Uudet ilmoitukset, kukin omalla kytkimellään: mökki on lämmin, mökki ei ehdi lämmetä ajoissa, ja muistutus vierailusta, joka on ollut päällä kolme vuorokautta ilman lähtöaikaa.
+- Uusi asetus Koti Poissa-tilaan vierailun ajaksi (oletuksena pois): kodin Poissa-tila kytkeytyy päälle saapumisaikana ja pois, kun vierailu päättyy.
+- Kosteusvahti: ilmoitus, kun mökin huoneen ilmankosteus on ollut vuorokauden yli kosteusrajan (oletus 80 %). Valinnainen Lämmitä kosteaa huonetta -asetus pitää kostean huoneen 2 °C perustasoa lämpimämpänä, kunnes kosteus laskee.
+- Vierailun aikana tulee tuuletusmuistutus, kun huoneen hiilidioksidi on ollut 10 minuuttia yli 1 200 ppm.
+- Seinänäkymä tabletille: iso, vain luettava näkymä kodista, mökistä ja seuraavien 24 tunnin hinnoista. Avaa se kohdasta Asetukset > Käyttöliittymä > Seinänäkymä tabletille.
+
 ## 0.4.35
 
 - Uusi asetus Siirto, vero ja marginaali (c/kWh) Pörssihinta-ryhmässä, erikseen kodille ja mökille: mitä maksat pörssihinnan päälle jokaisesta kilowattitunnista. Optimoitu ohjaus ja energiakustannukset käyttävät kokonaishintaa. Hintakäyrä ja hintarajat pysyvät pörssihinnassa.
