@@ -95,6 +95,29 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _heater_state(row: tuple | None, ts: int, room_c: float | None,
+                  target: float | None) -> str | None:
+    """off | idle | on for one heater's latest row, None when unknown.
+
+    ``idle``: in heat mode but set at least the deadband below the room,
+    so its own thermostat does not heat (the low drive). ``on``: in heat
+    mode and set at or above the target in force, so it heats while the
+    room is below the target.
+    """
+    if row is None or ts - row[0] > learning.MAX_READING_AGE:
+        return None
+    _ts, mode, setpoint = row
+    if mode == "off":
+        return "off"
+    if mode != "heat" or setpoint is None:
+        return None
+    if room_c is not None and setpoint <= room_c - learning.DEADBAND_C:
+        return "idle"
+    if target is not None and setpoint >= target - learning.DEADBAND_C:
+        return "on"
+    return None
+
+
 # --- site configuration ------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -228,6 +251,12 @@ CREATE TABLE IF NOT EXISTS site_event (
     detail TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_site_event_id_desc ON site_event (id DESC);
+CREATE TABLE IF NOT EXISTS site_learning (
+    site_id TEXT NOT NULL,
+    room TEXT NOT NULL,
+    since_utc INTEGER NOT NULL,
+    PRIMARY KEY (site_id, room)
+);
 """
 
 
@@ -287,35 +316,64 @@ class CottageStore:
                 (_iso(ts), site_id, room, actor, action, old_value, new_value, detail))
 
     def learning_readings(self, site_id: str, temperature: str, status: str,
-                          start, end) -> list:
+                          start, end, heaters=()) -> list:
         """One room's history as learning.Reading rows (card F5.2).
 
-        The room temperature is the temperature sensor's; the control is
-        the status sensor's target in force, heating while the controller
-        runs the room (follow, thermostat or fallback). In manual mode, or
-        without a recent status row, the control is unknown, so learning
-        skips those steps.
+        The room temperature is the temperature sensor's. The heaters decide
+        the control: every heater off, or set below the room, is a room
+        without heating (passive). Every heater working towards the status
+        sensor's target in force, while the controller runs the room
+        (follow, thermostat or fallback), is heating to that target. Anything
+        else (a heater unreported, unavailable, switched off while others
+        heat, or a manual change) leaves the control unknown, so learning
+        skips those steps. A room without heaters has nothing to learn.
         """
+        heaters = tuple(heaters)
+        if not heaters:
+            return []
         s, e = _to_epoch(start), _to_epoch(end)
+        devices = (temperature, status, *heaters)
+        marks = ", ".join("?" * len(devices))
         with self._lock:
             rows = self._conn.execute(
-                "SELECT ts_utc, device_id, value, mode FROM site_reading "
-                "WHERE site_id = ? AND device_id IN (?, ?) AND ts_utc >= ? "
+                "SELECT ts_utc, device_id, value, mode, setpoint FROM site_reading "
+                f"WHERE site_id = ? AND device_id IN ({marks}) AND ts_utc >= ? "
                 "AND ts_utc < ? ORDER BY ts_utc, id",
-                (site_id, temperature, status, s, e)).fetchall()
+                (site_id, *devices, s, e)).fetchall()
         out, room, control = [], None, None
-        for ts, device, value, mode in rows:
+        last: dict[str, tuple] = {}    # heater -> (ts, mode, setpoint)
+        for ts, device, value, mode, setpoint in rows:
             if device == temperature:
                 room = (ts, value)
-            else:
+            elif device == status:
                 control = (ts, value, mode)
+            else:
+                last[device] = (ts, mode, setpoint)
             room_c = room[1] if room and ts - room[0] <= learning.MAX_READING_AGE else None
-            if (control and ts - control[0] <= learning.MAX_READING_AGE
-                    and control[2] in HEATING_MODES and control[1] is not None):
-                out.append(learning.Reading(ts, room_c, control[1], True, "Heat"))
+            target = (control[1] if control and ts - control[0] <= learning.MAX_READING_AGE
+                      and control[2] in HEATING_MODES else None)
+            states = {_heater_state(last.get(h), ts, room_c, target) for h in heaters}
+            if states <= {"off", "idle"}:
+                out.append(learning.Reading(ts, room_c, None, False, None))
+            elif states == {"on"}:
+                out.append(learning.Reading(ts, room_c, target, True, "Heat"))
             else:
                 out.append(learning.Reading(ts, room_c, None, None, None))
         return out
+
+    def learn_since(self, site_id: str, room: str) -> int | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT since_utc FROM site_learning WHERE site_id = ? AND room = ?",
+                (site_id, room)).fetchone()
+        return row[0] if row else None
+
+    def set_learn_since(self, site_id: str, room: str, ts: int) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT INTO site_learning (site_id, room, since_utc) VALUES (?, ?, ?) "
+                "ON CONFLICT (site_id, room) DO UPDATE SET since_utc = excluded.since_utc",
+                (site_id, room, ts))
 
     def events(self, limit: int = 100) -> list[dict]:
         with self._lock:
@@ -381,6 +439,12 @@ def room_sensor_chosen(entity_id: str | None) -> Callable[[dict], bool]:
         attrs = state.get("attributes") or {}
         return "chosen_sensor" in attrs and attrs["chosen_sensor"] == entity_id
     return check
+
+
+def manual_cleared(state: dict) -> bool:
+    """Read-back check: the room is out of its manual pause."""
+    attrs = state.get("attributes") or {}
+    return attrs.get("mode") != "manual" or attrs.get("manual_until") is None
 
 
 class CottageSite:
@@ -608,6 +672,25 @@ class CottageSite:
                                   ROOMS[room])
         return cmd
 
+    def clear_manual(self, room, actor: str) -> dict:
+        """End a room's manual pause at once ("Palauta automaatio").
+
+        Raises ``HeaterSwitchError`` when the room status sensor is not bound.
+        """
+        if room not in ROOMS:
+            raise HeaterSwitchError("Tuntematon mökin huone.")
+        status = next((b for b in self._bindings()
+                       if b.room == room and role_of(b) == "status"), None)
+        if status is None:
+            raise HeaterSwitchError("Huoneen tilatietoa ei ole liitetty.")
+        cmd = self._gateway.submit_service(status.device_id, INTEGRATION_DOMAIN,
+                                           "clear_manual", {"room": room}, actor,
+                                           manual_cleared)
+        if cmd["state"] != "failed":
+            self._store.add_event(int(self._now().timestamp()), SITE_ID, room, actor,
+                                  "clear_manual", None, "auto", ROOMS[room])
+        return cmd
+
     def visit_view(self) -> dict:
         visit = self._visits.active()
         if visit is None:
@@ -676,15 +759,52 @@ class CottageSite:
         return out
 
     def learning_readings(self, room_id: str, start, end) -> list:
-        """The room's history for learning its rates (card F5.2)."""
-        found = {}
+        """The room's history for learning its rates (card F5.2), from
+        ``learning_since`` on."""
+        found, heaters = {}, []
         for binding in sorted(self._bindings(), key=lambda b: b.device_id):
             if binding.room == room_id:
-                found.setdefault(self._role(binding), binding.device_id)
-        if "temperature" not in found or "status" not in found:
+                role = self._role(binding)
+                found.setdefault(role, binding.device_id)
+                if role == "heater":
+                    heaters.append(binding.device_id)
+        if "temperature" not in found or "status" not in found or not heaters:
             return []
+        since = self.learning_since(room_id)
+        if since is not None:
+            start = max(_to_epoch(start), int(since.timestamp()))
+            if start >= _to_epoch(end):
+                return []
         return self._store.learning_readings(SITE_ID, found["temperature"],
-                                             found["status"], start, end)
+                                             found["status"], start, end, heaters)
+
+    def learning_since(self, room_id: str) -> datetime | None:
+        """Where the room's learning history starts: when its temperature
+        sensor or a heater was last bound to another entity (the stand-ins
+        replaced by real devices, a heater added), or a fresh start chosen
+        in Villa Kuppis (``restart_learning``), whichever is later."""
+        times = []
+        if self._binding_store is not None:
+            bound = self._binding_store.bound_at(SITE_ID)
+            for binding in self._bindings():
+                if (binding.room == room_id and binding.device_id in bound
+                        and self._role(binding) in ("temperature", "heater")):
+                    times.append(bound[binding.device_id])
+        chosen = self._store.learn_since(SITE_ID, room_id)
+        if chosen is not None:
+            times.append(datetime.fromtimestamp(chosen, timezone.utc))
+        return max(times) if times else None
+
+    def restart_learning(self, room_id: str, actor: str) -> datetime:
+        """Forget the room's learned history from now on (after moving the
+        heaters to the cottage, for example)."""
+        if room_id not in ROOMS:
+            raise ValueError("unknown cottage room")
+        now = self._now()
+        self._store.set_learn_since(SITE_ID, room_id, int(now.timestamp()))
+        self._store.add_event(int(now.timestamp()), SITE_ID, room_id, actor, "learning",
+                              None, "restart", ROOMS[room_id])
+        return now
 
     def _role(self, binding: Binding, state: dict | None = None) -> str | None:
         role = role_of(binding, state) or self._roles.get(binding.device_id)
@@ -956,6 +1076,8 @@ class FakeSiteGateway:
                     self._disabled.discard(data["entity_id"])
                 else:
                     self._disabled.add(data["entity_id"])
+            elif service == "clear_manual":
+                pass   # the demo rooms are never in a manual pause
             else:
                 until = now + timedelta(minutes=float(data.get("valid_minutes", 45)))
                 self._written[data["room"]] = {
@@ -1349,9 +1471,24 @@ function vkHeaterSwitch(heater, onChange) {
           plan.acked_at ? clock.format(new Date(plan.acked_at)) : "Mökki ei ole vielä kuitannut tämän käynnistyksen jälkeen yhtään tavoitetta.",
           "Milloin mökin ohjain viimeksi vahvisti saaneensa tavoitteen."));
       }
-      if (st.mode === "manual" && st.manual_until)
-        c.appendChild(el("p", "detail", "Käsiohjaus päättyy klo " + clock.format(new Date(st.manual_until)) + "."));
-      else if (st.valid_until && st.mode !== "fallback")
+      if (st.mode === "manual" && st.manual_until) {
+        // One tap ends the pause; the room follows Villa Kuppis again.
+        var resume = el("div", "heater-sw");
+        resume.appendChild(el("span", "hs-name", "Käsiohjaus päättyy klo " +
+          clock.format(new Date(st.manual_until)), st.manual_by ? "Muutettu: " + st.manual_by : ""));
+        var rbtn = el("button", "", "Palauta automaatio",
+          "Lopettaa käsiohjauksen heti; mökin ohjain jatkaa Villa Kuppiksen tavoitteella.");
+        rbtn.type = "button";
+        rbtn.addEventListener("click", function () {
+          rbtn.disabled = true;
+          fetch("api/cottage/clear_manual", { method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ room: room.id }) }).then(function () { load(); },
+            function () { rbtn.disabled = false; });
+        });
+        resume.appendChild(el("span"));
+        resume.appendChild(rbtn);
+        c.appendChild(resume);
+      } else if (st.valid_until && st.mode !== "fallback")
         c.appendChild(el("p", "detail", "Villa Kuppiksen tavoite voimassa klo " + clock.format(new Date(st.valid_until)) + " asti."));
     } else {
       c.appendChild(el("p", "detail", "Huoneen tilatietoa ei ole liitetty."));

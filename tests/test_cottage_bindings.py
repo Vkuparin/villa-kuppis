@@ -70,6 +70,22 @@ class FollowPublishedTest(unittest.TestCase):
     def bound(self):
         return {b.device_id: b.entity_id for b in self.store.bindings("cottage")}
 
+    def test_learning_starts_again_when_a_device_is_replaced_not_relabelled(self):
+        from datetime import datetime, timezone
+        t1, t2, t3 = (datetime(2026, 10, d, tzinfo=timezone.utc) for d in (25, 30, 31))
+
+        def bind(device_id, entity_id, kind, label, at):
+            self.store.bind("cottage", device_id, entity_id, kind, label, "large", now=lambda: at)
+        bind("large-status", cottage.status_entity("large"), "sensor", "Mökki: tila", t1)
+        bind("large-temperature", "sensor.sim_alpstuga_large_temperature", "sensor", "Sim", t1)
+        bind("large-heater-1", "climate.sim_mill_large_1", "climate", "Sim Mill", t1)
+        self.assertEqual(self.site.learning_since("large"), t1)
+        bind("large-heater-1", "climate.sim_mill_large_1", "climate", "Renamed", t2)
+        self.assertEqual(self.site.learning_since("large"), t1)
+        bind("large-temperature", "sensor.alpstuga_temperature_2", "sensor", "ALPSTUGA", t3)
+        self.assertEqual(self.site.learning_since("large"), t3)
+        self.assertIsNone(self.site.learning_since("small"))
+
     def test_published_devices_are_bound_with_labels(self):
         publish(self.gateway, "large", SIMULATED)
         self.gateway.attrs["climate.sim_mill_large_3"] = {"friendly_name": "Sim Mill 500 W"}

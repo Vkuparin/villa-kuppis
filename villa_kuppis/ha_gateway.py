@@ -312,9 +312,10 @@ class BindingStore:
                     "INSERT INTO device_binding (site_id, device_id, entity_id, kind, "
                     "label, bound_at_utc, room) VALUES (?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT (site_id, device_id) DO UPDATE SET "
+                    "bound_at_utc = CASE WHEN device_binding.entity_id = excluded.entity_id "
+                    "THEN device_binding.bound_at_utc ELSE excluded.bound_at_utc END, "
                     "entity_id = excluded.entity_id, kind = excluded.kind, "
-                    "label = excluded.label, bound_at_utc = excluded.bound_at_utc, "
-                    "room = excluded.room",
+                    "label = excluded.label, room = excluded.room",
                     (site_id, device_id, entity_id, kind, label, now().isoformat(), room),
                 )
                 self._conn.commit()
@@ -322,6 +323,21 @@ class BindingStore:
                 self._conn.rollback()
                 raise BindingError(f"{entity_id} is already bound to another device") from err
         return Binding(site_id, device_id, entity_id, kind, label, room)
+
+    def bound_at(self, site_id: str) -> dict[str, datetime]:
+        """When each device of a site was bound to its current entity (a
+        relabel keeps the time; a new entity starts it again)."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT device_id, bound_at_utc FROM device_binding WHERE site_id = ?",
+                (site_id,)).fetchall()
+        out = {}
+        for device_id, at in rows:
+            try:
+                out[device_id] = datetime.fromisoformat(at)
+            except (TypeError, ValueError):
+                continue
+        return out
 
     def unbind(self, site_id: str, device_id: str) -> bool:
         with self._lock:

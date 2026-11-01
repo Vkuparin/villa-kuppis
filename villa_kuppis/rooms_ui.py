@@ -34,6 +34,7 @@ STYLE = r"""
 .room-card ul:empty { display: none; }
 .rooms-ok { color: var(--ok); }
 .rooms-bad { color: var(--err); }
+.room-card .room-restart { align-self: flex-start; font-size: .8rem; }
 """
 
 SCRIPT = r"""
@@ -134,19 +135,51 @@ SCRIPT = r"""
       }
       if (u.validation) {
         var v = u.validation;
+        var period = v.days > 1 ? "Testijakso " + v.days + " päivää " + fiDate(v.day) + " asti"
+                                : "Testipäivä " + fiDate(v.day);
         var ok = document.createElement("span");
-        ok.className = "badge " + (v.passed ? "ok" : "err");
-        ok.textContent = v.passed ? "Testi hyväksytty" : "Testi yli rajan";
-        ok.title = "Testipäivä " + fiDate(v.day) + ": keskivirhe " + num(v.mae_c, 2) +
-          " °C, suurin " + num(v.max_error_c, 1) + " °C" +
-          (v.passed ? " (hyväksytty)." : " (yli rajan).");
+        if (v.reason === "few_moves") {
+          ok.className = "badge info";
+          ok.textContent = "Ei vielä testattavaa";
+          ok.title = period + ": huone ei " + (cot ? "lämmennyt pattereilla" : "jäähtynyt laitteella") +
+            " tai muuttunut ilman niitä tarpeeksi kauan mallin testaamiseen. " +
+            "Mallia ei vielä käytetä ohjaukseen.";
+        } else {
+          ok.className = "badge " + (v.passed ? "ok" : "err");
+          ok.textContent = v.passed ? "Testi hyväksytty" : "Testi yli rajan";
+          ok.title = period + ": keskivirhe " + num(v.mae_c, 2) +
+            " °C, suurin " + num(v.max_error_c, 1) + " °C" +
+            (v.passed ? " (hyväksytty)." : " (yli rajan).");
+        }
         head.appendChild(ok);
-        item(ul, ok.title, v.passed ? "rooms-ok" : "rooms-bad");
+        item(ul, ok.title, v.reason === "few_moves" ? "" : (v.passed ? "rooms-ok" : "rooms-bad"));
       } else if (m.ready) {
         item(ul, "Testipäivää ei voi vielä arvioida: tarvitaan kokonainen päivä ja sitä edeltävät lukemat.");
       }
+      if (cot && u.since)
+        item(ul, "Opittu " + fiDate(u.since.slice(0, 10)) + " alkaen (laitteiden vaihdosta tai " +
+          "uudesta aloituksesta).");
       if (stats.children.length) card.appendChild(stats);
       card.appendChild(ul);
+      if (cot) {
+        // After moving the heaters (to the cottage, for example) the old
+        // readings describe another room.
+        var restart = document.createElement("button");
+        restart.type = "button";
+        restart.className = "room-restart";
+        restart.textContent = "Aloita oppiminen alusta";
+        restart.title = "Unohtaa huoneen tähänastiset lukemat oppimisesta, esimerkiksi kun " +
+          "patterit on siirretty mökille. Historia säilyy kuvaajissa.";
+        restart.addEventListener("click", function () {
+          if (!window.confirm(u.name + ": aloitetaanko oppiminen alusta?")) return;
+          restart.disabled = true;
+          fetch("api/cottage/learning/restart", { method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ room: u.id.replace(/^cottage:/, "") }) })
+            .then(function () { load(); }).catch(function () { restart.disabled = false; });
+        });
+        card.appendChild(restart);
+      }
       $body.appendChild(card);
     });
   }

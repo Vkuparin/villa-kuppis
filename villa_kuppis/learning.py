@@ -26,6 +26,15 @@ The held-out check trains on the days before the most recent complete day,
 simulates that day from its first reading with the recorded controls and
 outdoor temperature, and compares with the readings. The agreed error is
 ``MAX_MAE_C``: the day's mean absolute error must not exceed it.
+
+A day that only holds the setpoint says nothing about the unit's power,
+so the held-out period must also show the room changing: at least
+``MIN_HELD_ACTIVE`` steps of active cooling or heating and
+``MIN_HELD_PASSIVE`` steps without the unit. Without them on the last day
+the period grows back a day at a time, up to ``MAX_HELD_DAYS``; if it
+still lacks them the check fails. Points where both the reading and the
+prediction hold the setpoint are left out of the error, so a model is
+judged on the moves it predicts.
 """
 
 from __future__ import annotations
@@ -48,6 +57,9 @@ MIN_ACTIVE_STEPS = 8         # two hours of active cooling or heating
 MIN_DAY_COVERAGE = 0.75      # held-out day needs this share of readings
 LEARN_DAYS = 28
 MAX_MAE_C = 1.0              # agreed held-out error (mean absolute, °C)
+MIN_HELD_PASSIVE = 8         # held-out steps without the unit
+MIN_HELD_ACTIVE = 8          # held-out steps of active cooling or heating
+MAX_HELD_DAYS = 7            # the held-out period grows back to this many days
 
 
 @dataclass(frozen=True)
@@ -104,12 +116,14 @@ class Validation:
     points: int
     passed: bool
     predicted: list = field(default_factory=list)   # [(ts, °C)]
+    days: int = 1                 # held-out days, ending with ``day``
+    reason: str = ""              # "", "few_moves" (too little cooling/heating seen)
 
     def public(self) -> dict:
-        return {"day": self.day, "mae_c": _r(self.mae_c, 2),
+        return {"day": self.day, "days": self.days, "mae_c": _r(self.mae_c, 2),
                 "max_error_c": _r(self.max_error_c, 2),
                 "points": self.points, "passed": self.passed,
-                "limit_c": MAX_MAE_C}
+                "reason": self.reason, "limit_c": MAX_MAE_C}
 
 
 def _r(value, digits):
@@ -213,16 +227,12 @@ def _solve(rows: list[list[float]], ys: list[float]) -> list[float] | None:
     return [m[i][n] / m[i][i] for i in range(n)]
 
 
-def fit(readings: Sequence[Reading], outdoor: Outdoor) -> RoomModel:
-    """Fit the room model from a unit's readings and outdoor temperatures."""
-    history = _History(readings)
-    span = history.span
-    if span is None:
-        return RoomModel(False, "no_data")
-    steps = []   # (regime, room, outdoor or None, rate °C/h)
+def _steps(history: _History, outdoor: Outdoor, t: int, end: int) -> list:
+    """Fitting steps from grid time ``t`` to ``end``:
+    [(regime, room, outdoor or None, rate °C/h)]."""
+    steps = []
     hours = STEP_SECONDS / 3600
-    t = span[0] - span[0] % STEP_SECONDS + STEP_SECONDS
-    while t + STEP_SECONDS <= span[1]:
+    while t + STEP_SECONDS <= end:
         t0, t = t, t + STEP_SECONDS
         a, b = history.at(t0), history.at(t)
         if (a is None or b is None or a.room_c is None or b.room_c is None
@@ -233,6 +243,16 @@ def fit(readings: Sequence[Reading], outdoor: Outdoor) -> RoomModel:
             continue
         steps.append((regime, a.room_c, outdoor.at(t0),
                       (b.room_c - a.room_c) / hours))
+    return steps
+
+
+def fit(readings: Sequence[Reading], outdoor: Outdoor) -> RoomModel:
+    """Fit the room model from a unit's readings and outdoor temperatures."""
+    history = _History(readings)
+    span = history.span
+    if span is None:
+        return RoomModel(False, "no_data")
+    steps = _steps(history, outdoor, span[0] - span[0] % STEP_SECONDS + STEP_SECONDS, span[1])
 
     with_outdoor = [s for s in steps if s[2] is not None]
     uses_outdoor = sum(1 for s in with_outdoor if s[0] == "passive") >= MIN_PASSIVE_STEPS
@@ -352,9 +372,22 @@ def held_out_day(readings: Sequence[Reading], now: datetime) -> date | None:
     return None
 
 
+def _moves(history: _History, outdoor: Outdoor, s: int, e: int) -> tuple[int, int]:
+    """(passive, active) fitting steps between s and e."""
+    steps = _steps(history, outdoor, s - s % STEP_SECONDS, e)
+    passive = sum(1 for st in steps if st[0] == "passive")
+    return passive, len(steps) - passive
+
+
+def _holding(r: Reading, room: float) -> bool:
+    """The unit is on and ``room`` is at its setpoint."""
+    return (bool(r.power) and r.setpoint_c is not None and r.mode in ("Cool", "Heat")
+            and abs(room - r.setpoint_c) <= DEADBAND_C)
+
+
 def validate(readings: Sequence[Reading], outdoor: Outdoor,
              now: datetime) -> tuple[RoomModel, Validation | None]:
-    """Train before the held-out day and predict it.
+    """Train before the held-out period and predict it.
 
     Returns the training model and the result, or (model, None) when no
     day can be held out or the earlier days are not enough to learn from.
@@ -362,7 +395,17 @@ def validate(readings: Sequence[Reading], outdoor: Outdoor,
     day = held_out_day(readings, now)
     if day is None:
         return RoomModel(False, "too_little_data"), None
+    everything = _History(readings)
+    first_ts = everything.span[0]
     s, e = _day_bounds(day)
+    days = 1
+    passive, active = _moves(everything, outdoor, s, e)
+    while (passive < MIN_HELD_PASSIVE or active < MIN_HELD_ACTIVE) and days < MAX_HELD_DAYS:
+        earlier = _day_bounds(day - timedelta(days=days))[0]
+        if earlier <= first_ts:
+            break
+        s, days = earlier, days + 1
+        passive, active = _moves(everything, outdoor, s, e)
     model = fit([r for r in readings if r.ts < s], outdoor)
     if not model.ready:
         return model, None
@@ -383,10 +426,15 @@ def validate(readings: Sequence[Reading], outdoor: Outdoor,
     errors = []
     for ts, value in predicted[1:]:
         actual = history.at(ts)
-        if actual is not None and actual.room_c is not None:
-            errors.append(abs(value - actual.room_c))
-    if not errors:
+        if actual is None or actual.room_c is None:
+            continue
+        if _holding(actual, actual.room_c) and _holding(actual, value):
+            continue   # both at the setpoint: says nothing about the model
+        errors.append(abs(value - actual.room_c))
+    few = passive < MIN_HELD_PASSIVE or active < MIN_HELD_ACTIVE or not errors
+    if not errors and not few:
         return model, None
-    mae = sum(errors) / len(errors)
-    return model, Validation(day.isoformat(), mae, max(errors), len(errors),
-                             mae <= MAX_MAE_C, predicted)
+    mae = sum(errors) / len(errors) if errors else 0.0
+    return model, Validation(day.isoformat(), mae, max(errors, default=0.0), len(errors),
+                             not few and mae <= MAX_MAE_C, predicted, days,
+                             "few_moves" if few else "")

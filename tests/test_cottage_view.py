@@ -566,6 +566,27 @@ class ServiceHttpTests(unittest.TestCase):
         self.assertIsNone(body["rooms"][1]["status"]["chosen_sensor"])
         self.assertEqual(self.post(server, "/api/cottage/room_sensor", {"room": "sauna"})[0], 400)
 
+    def test_manual_pause_ends_and_learning_restarts_from_the_web(self):
+        service = self.make_service()
+        server = self.serve(service)
+        status, cmd = self.post(server, "/api/cottage/clear_manual", {"room": "large"})
+        self.assertEqual((status, cmd["state"]), (200, "confirmed"))
+        self.assertEqual((cmd["action"], cmd["device_id"], cmd["value"]),
+                         ("villa_kuppis_cottage.clear_manual", "large-status", {"room": "large"}))
+        _, events = self.get(server, "/api/events")
+        self.assertEqual(events[0]["action"], "clear_manual")
+        self.assertEqual(self.post(server, "/api/cottage/clear_manual", {"room": "sauna"})[0], 400)
+
+        status, body = self.post(server, "/api/cottage/learning/restart", {"room": "small"})
+        self.assertEqual(status, 200)
+        self.assertEqual(service.cottage.learning_since("small").isoformat(), body["since"])
+        _, events = self.get(server, "/api/events")
+        self.assertEqual(events[0]["action"], "learning")
+        _, rooms = self.get(server, "/api/rooms")
+        small = next(u for u in rooms["units"] if u["id"] == "cottage:small")
+        self.assertEqual(small["since"], body["since"])
+        self.assertEqual(self.post(server, "/api/cottage/learning/restart", {"room": "x"})[0], 400)
+
     def test_heaters_without_integration_support_have_no_switch(self):
         service = self.make_service()
         server = self.serve(service)

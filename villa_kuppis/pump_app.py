@@ -17,6 +17,8 @@ fully offline) plus a small JSON API on top of PumpService:
 * POST /api/visit/end  end the active visit
 * POST /api/cottage/heater  {"device_id", "enabled"}: switch one cottage heater off or on
 * POST /api/cottage/room_sensor  {"room", "entity_id"}: a cottage room's temperature sensor (null: default)
+* POST /api/cottage/clear_manual  {"room"}: end a cottage room's manual pause
+* POST /api/cottage/learning/restart  {"room"}: learn the room again from now on
 * GET  /api/sites     connection health of each Home Assistant site
 * GET  /api/devices?site=home|cottage  Home Assistant devices by area (devices.py)
 * GET  /api/devices/history?site&key&hours  one device's recorded values
@@ -864,6 +866,8 @@ function changeText(action, requested) {
     case "target": return "Mökin tavoite → " + fmtTemp(parseFloat(requested));
     case "heater": return requested === "on" ? "Patteri käyttöön" : "Patteri pois käytöstä";
     case "room_sensor": return "Huoneanturi → " + requested;
+    case "learning": return "Oppiminen aloitettu alusta";
+    case "clear_manual": return "Käsiohjaus lopetettu, automaatio jatkuu";
     case "fan": return "Puhallus → " + fanName(requested);
     case "power": return requested ? "Laitteen päälle" : "Laitteen pois päältä";
     case "device": return requested;
@@ -2213,7 +2217,8 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
                              "source": identity["source"],
                              "version": os.environ.get("VK_VERSION", "")})
         elif parts.path in ("/api/command", "/api/prices/refresh", "/api/visit/end",
-                            "/api/cottage/heater", "/api/devices/command",
+                            "/api/cottage/heater", "/api/cottage/clear_manual",
+                            "/api/cottage/learning/restart", "/api/devices/command",
                             "/api/devices/layout", "/api/devices/lights_off",
                             "/api/devices/rules", "/api/devices/room_sensor"):
             self._json(405, {"error": "method_not_allowed",
@@ -2284,6 +2289,25 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
                                                             None, identity["actor"]))
                 except HeaterSwitchError as error:
                     self._json(400, {"error": "bad_body", "detail": str(error)})
+        elif parts.path == "/api/cottage/clear_manual":
+            cottage = self._cottage_or_error()
+            body = self._read_json_object() if cottage is not None else None
+            if body is not None:
+                try:
+                    self._json(200, cottage.clear_manual(body.get("room"), identity["actor"]))
+                except HeaterSwitchError as error:
+                    self._json(400, {"error": "bad_body", "detail": str(error)})
+        elif parts.path == "/api/cottage/learning/restart":
+            cottage = self._cottage_or_error()
+            body = self._read_json_object() if cottage is not None else None
+            if body is not None:
+                try:
+                    since = self.app.service.restart_cottage_learning(body.get("room"),
+                                                                     identity["actor"])
+                except ValueError:
+                    self._json(400, {"error": "bad_body", "detail": "unknown cottage room"})
+                    return
+                self._json(200, {"room": body.get("room"), "since": since.isoformat()})
         elif parts.path in ("/api/devices/command", "/api/devices/layout",
                             "/api/devices/lights_off", "/api/devices/rules",
                             "/api/devices/room_sensor"):

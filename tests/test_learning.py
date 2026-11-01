@@ -56,6 +56,26 @@ def simulate_room(a=0.08, b=0.3, cool=2.0, heat=None, mode="Cool",
     return rows, out
 
 
+def heated_room(days, heat=3.0, holding_from=None, slow_from=None, a=0.05):
+    """Readings of a heated room: 15 °C on most evenings, 5 °C otherwise.
+
+    From day ``holding_from`` the room only holds 5 °C; from day
+    ``slow_from`` the heaters heat at a fifth of ``heat``.
+    """
+    out = Outdoor(outdoor_curve(mean=0.0, swing=4.0, days=days))
+    rows, room = [], 8.0
+    for k in range(days * 288):
+        ts = START + k * 300
+        day, hour = k // 288, (k // 12) % 24
+        evening = 16 <= hour < 22 and day % 3 != 2
+        target = 15.0 if evening and (holding_from is None or day < holding_from) else 5.0
+        rate = heat / 5 if slow_from is not None and day >= slow_from else heat
+        free = room + a * (out.at(ts) - room) * 300 / 3600
+        room = min(target, free + rate * 300 / 3600) if free < target else free
+        rows.append(Reading(ts, round(room, 1), target, True, "Heat"))
+    return rows, out
+
+
 def after(days):
     return datetime.fromtimestamp(START + days * 86400 + 3600, timezone.utc)
 
@@ -151,6 +171,25 @@ class ValidationTests(unittest.TestCase):
         self.assertFalse(worse.passed)
         self.assertGreater(worse.mae_c, learning.MAX_MAE_C)
 
+    def test_a_period_that_only_holds_the_setpoint_does_not_pass(self):
+        # Stand-in days with evening heat-ups, then a week of just holding
+        # 5 °C: the holding days say nothing about the heaters' power.
+        readings, out = heated_room(days=18, holding_from=10)
+        _model, check = validate(readings, out, after(18))
+        self.assertFalse(check.passed)
+        self.assertEqual(check.reason, "few_moves")
+        self.assertEqual(check.days, learning.MAX_HELD_DAYS)
+
+    def test_a_wrong_heating_rate_fails_on_a_heat_up(self):
+        readings, out = heated_room(days=14, slow_from=13)
+        model, check = validate(readings, out, after(14))
+        self.assertGreater(model.heat_c_per_h, 2.0)
+        self.assertFalse(check.passed)
+        self.assertEqual(check.reason, "")
+        self.assertGreater(check.mae_c, learning.MAX_MAE_C)
+        same, _out = heated_room(days=14)
+        self.assertTrue(validate(same, out, after(14))[1].passed)
+
     def test_no_complete_day_means_no_check(self):
         readings, out = simulate_room(days=1)
         _model, check = validate(readings, out, after(1))
@@ -168,8 +207,12 @@ def cottage_rows(days=DAYS, a=0.05, heat=1.5):
         target = 15.0 if 16 <= hour < 22 and (k // 288) % 3 != 2 else 5.0
         free = room + a * (out.at(ts) - room) * 300 / 3600
         room = min(target, free + heat * 300 / 3600) if free < target else free
-        rows.append(("cottage", "large-temperature", ts, round(room, 1), None))
-        rows.append(("cottage", "large-status", ts, target, "follow"))
+        rows.append(("cottage", "large-temperature", ts, round(room, 1), None, None))
+        rows.append(("cottage", "large-status", ts, target, "follow", None))
+        # Driven high (target + 3) up to the target, low (5 °C) above it.
+        setpoint = target + 3.0 if room <= target else 5.0
+        rows.extend(("cottage", f"large-heater-{n}", ts, None, "heat", setpoint)
+                    for n in (1, 2, 3))
     return rows, out
 
 
@@ -192,26 +235,52 @@ class CottageLearningTests(unittest.TestCase):
         self.store = self.service.cottage._store
 
     def insert(self, rows):
+        rows = [r if len(r) == 6 else (*r, None) for r in rows]
         with self.store._lock, self.store._conn:
             self.store._conn.executemany(
-                "INSERT INTO site_reading (site_id, device_id, ts_utc, value, mode) "
-                "VALUES (?, ?, ?, ?, ?)", rows)
+                "INSERT INTO site_reading (site_id, device_id, ts_utc, value, mode, setpoint) "
+                "VALUES (?, ?, ?, ?, ?, ?)", rows)
 
-    def test_readings_join_the_room_temperature_and_the_target_in_force(self):
+    def heater(self, ts, n, mode, setpoint=None):
+        return ("cottage", f"large-heater-{n}", ts, None, mode, setpoint)
+
+    def test_readings_follow_the_heaters_and_the_target_in_force(self):
         t = START
         self.insert([("cottage", "large-temperature", t, 6.0, None),
+                     *(self.heater(t + 10 * n, n, "heat", 15.0) for n in (1, 2, 3)),
                      ("cottage", "large-status", t + 60, 12.0, "follow"),
+                     self.heater(t + 120, 3, "off"),
+                     self.heater(t + 180, 1, "off"),
+                     self.heater(t + 190, 2, "off"),
                      ("cottage", "large-status", t + 600, None, "manual"),
-                     ("cottage", "large-status", t + 3000, 5.0, "fallback")])
+                     ("cottage", "large-status", t + 2000, 5.0, "fallback")])
         start = datetime.fromtimestamp(START, timezone.utc)
         end = start + timedelta(seconds=4000)
         rows = self.service.cottage.learning_readings("large", start, end)
         self.assertEqual([(r.room_c, r.setpoint_c, r.power, r.mode) for r in rows], [
+            (6.0, None, None, None),          # heaters not reported yet
             (6.0, None, None, None),          # no target yet
-            (6.0, 12.0, True, "Heat"),
-            (6.0, None, None, None),          # manual: unknown control
-            (None, 5.0, True, "Heat")])       # the temperature is too old
+            (6.0, None, None, None),
+            (6.0, None, None, None),
+            (6.0, 12.0, True, "Heat"),        # every heater towards the target
+            (6.0, None, None, None),          # one heater off: partial power
+            (6.0, None, None, None),
+            (6.0, None, False, None),         # every heater off: no heating
+            (6.0, None, False, None),         # manual, but still all off
+            (None, None, None, None)])        # readings too old
         self.assertEqual(self.service.cottage.learning_readings("small", start, end), [])
+
+    def test_fresh_start_forgets_the_earlier_history(self):
+        rows, _out = cottage_rows(days=2)
+        self.insert(rows)
+        start = datetime.fromtimestamp(START, timezone.utc)
+        end = start + timedelta(days=2)
+        site = self.service.cottage
+        self.assertGreater(len(site.learning_readings("large", start, end)), 500)
+        site.restart_learning("large", "test")    # at self.now, after the rows
+        self.assertEqual(site.learning_readings("large", start, end), [])
+        self.assertEqual(site.learning_since("large"), self.now)
+        self.assertEqual(site._store.events(1)[0]["action"], "learning")
 
     def test_cottage_rooms_learn_their_heating_rates(self):
         rows, out = cottage_rows()

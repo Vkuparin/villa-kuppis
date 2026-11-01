@@ -113,6 +113,10 @@ def _iso(epoch: int) -> str:
     return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
 
 
+def _since_iso(value: datetime | None) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
 # --- validation ------------------------------------------------------------------
 
 def _round(value, digits):
@@ -1573,6 +1577,19 @@ class PumpService:
             self._models_cache[site] = (now, result)
             return result
 
+    def restart_cottage_learning(self, room, actor: str) -> datetime:
+        """Learn a cottage room again from now on; raises ValueError for an
+        unknown room or without a cottage."""
+        if self.cottage is None or not isinstance(room, str):
+            raise ValueError("unknown cottage room")
+        since = self.cottage.restart_learning(room, actor)
+        with self._models_lock:
+            self._models_cache.pop("cottage", None)
+            self._checked_cache = None
+        with self._room_rates_lock:
+            self._room_rates_cache = None
+        return since
+
     def cottage_heating_models(self) -> tuple[dict, learning.Outdoor]:
         """The cottage room models that passed their held-out day, and the
         outdoor forecast, for the heating optimizer (card F5.2); the check
@@ -1642,6 +1659,8 @@ class PumpService:
                 "model": model.public(),
                 "validation": None if check is None else check.public(),
                 "now": current, "predicted": predicted,
+                **({"since": _since_iso(self.cottage.learning_since(subject))}
+                   if site == "cottage" else {}),
             })
         return {
             "site": site, "updated": _iso(now_ts),
