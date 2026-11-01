@@ -187,6 +187,8 @@ class CottageTargetSender:
         now = self._now()
         overrides = self._overrides()
         factor = Decimal(str(app_settings.vat_factor(overrides, SITE)))
+        # The optimizer weighs the whole price per kWh; the thresholds stay on spot.
+        extra = app_settings.price_extra(overrides, SITE)
         today = now.astimezone(HELSINKI).date()
         periods = self._periods(today, factor) + self._periods(today + timedelta(days=1), factor)
         now_ts = int(now.timestamp())
@@ -202,7 +204,7 @@ class CottageTargetSender:
                                      row.price_c_kwh, row.reason) for row in fixed[room]]
                    for room in rooms}
             if self._models is not None:
-                self._optimize(out, overrides, ahead)
+                self._optimize(out, overrides, ahead, extra)
         visit = self._visits.active() if self._visits is not None else None
         if visit is None:
             self.visit_plan = None
@@ -215,7 +217,7 @@ class CottageTargetSender:
                 self._visits.mark_started(visit.visit_id, now)
                 plan = VisitPlan(now, "started", None)
         self.visit_plan = plan
-        learned = self._optimize_visit(out, visit, plan, overrides, periods, now)
+        learned = self._optimize_visit(out, visit, plan, overrides, periods, now, extra)
         for room, steps in out.items():
             if room in learned:
                 continue
@@ -229,7 +231,7 @@ class CottageTargetSender:
         return out
 
     def _optimize(self, out: dict[str, list[RoomTarget]], overrides: Mapping,
-                  ahead: Sequence[Period]) -> None:
+                  ahead: Sequence[Period], extra: float = 0.0) -> None:
         """Replace the economic plans of optimized rooms (card F5.2);
         ``ahead`` are the known periods from the current one on."""
         rooms = [room for room in out
@@ -240,7 +242,7 @@ class CottageTargetSender:
             values = app_settings.resolve(overrides, SITE, room)
             fixed = [target.target_c for target in out[room]]
             limits = heat_limits(values)
-            key = (ahead[0].ts_utc, len(ahead), limits, tuple(fixed))
+            key = (ahead[0].ts_utc, len(ahead), limits, tuple(fixed), extra)
             cached = self._optimized.get(room)
             if cached is None or cached[0] != key:
                 if models is None:
@@ -248,7 +250,7 @@ class CottageTargetSender:
                     temps = self._room_temps() if self._room_temps is not None else {}
                 model = models.get(room)
                 plan = None if model is None else optimize_heating(
-                    model, temps.get(room), [(p.ts_utc, float(p.price_c_kwh)) for p in ahead],
+                    model, temps.get(room), [(p.ts_utc, float(p.price_c_kwh) + extra) for p in ahead],
                     outdoor, limits, fixed)
                 cached = self._optimized[room] = (key, plan)
             plan = cached[1]
@@ -257,7 +259,8 @@ class CottageTargetSender:
                              for t, step in zip(out[room], plan.steps)]
 
     def _optimize_visit(self, out: dict[str, list[RoomTarget]], visit, plan: VisitPlan,
-                        overrides: Mapping, periods: Sequence[Period], now: datetime) -> set:
+                        overrides: Mapping, periods: Sequence[Period], now: datetime,
+                        extra: float = 0.0) -> set:
         """Heat-ups of learned rooms planned to reach the target at arrival
         (card F5.3); returns the rooms it set. The baseline is the fixed-lead
         visit plan, so the result never costs more than it."""
@@ -281,7 +284,7 @@ class CottageTargetSender:
                     for p, r in zip(ahead, fixed[room])]
             limits = heat_limits(values)
             key = ("visit", ahead[0].ts_utc, len(ahead), arrival, visit.target_c,
-                   limits, tuple(base))
+                   limits, tuple(base), extra)
             cached = self._optimized.get(("visit", room))
             if cached is None or cached[0] != key:
                 if models is None:
@@ -291,7 +294,7 @@ class CottageTargetSender:
                 if model is not None and model.heat_c_per_h:
                     model = replace(model, heat_c_per_h=model.heat_c_per_h * VISIT_HEAT_MARGIN)
                 result = None if model is None else optimize_heating(
-                    model, temps.get(room), [(p.ts_utc, float(p.price_c_kwh)) for p in ahead],
+                    model, temps.get(room), [(p.ts_utc, float(p.price_c_kwh) + extra) for p in ahead],
                     outdoor, limits, base, visit=(arrival, visit.target_c))
                 cached = self._optimized[("visit", room)] = (key, result)
             result = cached[1]

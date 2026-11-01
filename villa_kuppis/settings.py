@@ -62,12 +62,14 @@ class Definition:
     shown_if: tuple[str, tuple[object, ...]] | None = None
     # One value for every site and room (stored in the SHARED_SCOPE).
     shared: bool = False
+    # A whole-site setting: not offered per room.
+    site_only: bool = False
 
     def public(self) -> dict:
         shown_if = None if self.shown_if is None else {
             "key": self.shown_if[0], "values": list(self.shown_if[1])}
         return {"key": self.key, "help": self.help, "kinds": list(self.kinds), "label": self.label, "group": self.group,
-                "shown_if": shown_if, "shared": self.shared,
+                "shown_if": shown_if, "shared": self.shared, "site_only": self.site_only,
                 "type": self.type, "default": self.default,
                 "unit": self.unit, "min": self.minimum, "max": self.maximum,
                 "choices": [{"value": v, "label": l} for v, l in self.choices]}
@@ -108,6 +110,9 @@ DEFINITIONS: tuple[Definition, ...] = (
                False, shared=True, help="Lisää ALV sähkön pörssihintaan kodissa ja mökillä (yhteinen asetus). Vaikuttaa hintakäyrään, energiakustannuksiin ja halpa/kallis-rajojen vertailuun, joten rajat annetaan ALV:llisina."),
     Definition("vat_percent", "ALV-prosentti", "Pörssihinta", "number", 25.5,
                "%", 0, 100, shared=True, help="Sähkön ALV-prosentti, jota käytetään, kun ALV-kytkin on päällä. Yhteinen kodille ja mökille.", shown_if=("vat_enabled", (True,))),
+    Definition("price_extra_c_kwh", "Siirto, vero ja marginaali", "Pörssihinta", "number",
+               0.0, "c/kWh", 0, 100, site_only=True,
+               help="Mitä maksat pörssihinnan päälle jokaisesta kilowattitunnista ALV:n kanssa: siirtomaksu, sähkövero ja sähkönmyyjän marginaali. Luvut löytyvät sähkö- ja siirtolaskusta. Optimoitu ohjaus ja energiakustannukset käyttävät kokonaishintaa, jotta lämpöä tai viileää ei varata, kun siirto ja verot syövät hintaedun. Hintakäyrä ja hintarajat pysyvät pörssihinnassa."),
     Definition("heat_price_control", "Hintaohjaus", "Lämmitys", "choice", "optimized",
                choices=(("fixed", "Kiinteät rajat"), ("optimized", "Optimoitu")),
                help="Kiinteät rajat: tavoite tulee perustasosta ja hintarajoista. Optimoitu: lämpöä varataan halvoilla tunneilla ja kalliit tunnit mennään varatulla lämmöllä, niin että huone pysyy vähimmäislämpötilan ja suurimman varaavan lämpötilan välissä. Suunnitelma tehdään koko tunnetulle hintajaksolle huoneen opitun lämpenemis- ja jäähtymisnopeuden ja sääennusteen avulla, eikä se ole kiinteitä rajoja kalliimpi. Optimointi alkaa, kun huoneen nopeudet on opittu ja testipäivän ennuste on hyväksytty; siihen asti käytetään kiinteitä rajoja. Mökkikäynnin esilämmitys suunnitellaan opitulla nopeudella vain Optimoitu-tilassa; kiinteillä rajoilla esilämmitys alkaa kiinteällä ennakolla.",
@@ -121,17 +126,17 @@ DEFINITIONS: tuple[Definition, ...] = (
     Definition("heat_base_c", "Perustaso (lämmitys)", "Lämmitys", "number",
                5.0, "°C", 0, 30, help="Mökin huoneiden tavoitelämpötila, kun mikään hintaraja ei täyty tai hintaa ei ole tiedossa. Tavoite lähetetään mökin Home Assistantiin, kun Automaatio on päällä; muuten mökki pitää oman varalämpötilansa. Mökkikäynnin lämmitys ohittaa tämän.", kinds=("heat",)),
     Definition("heat_rule1_price_c_kwh", "Hintaraja 1: hinta alle", "Lämmitys",
-               "number", 8.0, "c/kWh", -50, 500, help="Kun pörssihinta on tämän alle, huone lämmitetään hintarajan 1 tavoitelämpötilaan. Jos molemmat hintarajat täyttyvät, korkeampi tavoite voittaa, eikä tavoite ole koskaan perustasoa alempi. Hintoihin lisätään ALV, jos ALV-kytkin on päällä.", kinds=("heat",)),
+               "number", 0.0, "c/kWh", -50, 500, help="Kun pörssihinta on tämän alle, huone lämmitetään hintarajan 1 tavoitelämpötilaan. Jos molemmat hintarajat täyttyvät, korkeampi tavoite voittaa, eikä tavoite ole koskaan perustasoa alempi. Hintoihin lisätään ALV, jos ALV-kytkin on päällä. Siirto ja verot maksetaan joka kilowattitunnista, joten tyhjän mökin lämmittäminen varastoon kannattaa yleensä vain hyvin halvalla.", kinds=("heat",)),
     Definition("heat_rule1_c", "Hintaraja 1: tavoitelämpötila", "Lämmitys",
                "number", 8.0, "°C", 0, 30, help="Tavoitelämpötila, kun hinta on hintarajan 1 alle.", kinds=("heat",)),
     Definition("heat_rule2_price_c_kwh", "Hintaraja 2: hinta alle", "Lämmitys",
-               "number", 5.0, "c/kWh", -50, 500, help="Kun pörssihinta on tämän alle, huone lämmitetään hintarajan 2 tavoitelämpötilaan. Jos molemmat hintarajat täyttyvät, korkeampi tavoite voittaa. Hintoihin lisätään ALV, jos ALV-kytkin on päällä.", kinds=("heat",)),
+               "number", -2.0, "c/kWh", -50, 500, help="Kun pörssihinta on tämän alle, huone lämmitetään hintarajan 2 tavoitelämpötilaan. Jos molemmat hintarajat täyttyvät, korkeampi tavoite voittaa. Hintoihin lisätään ALV, jos ALV-kytkin on päällä.", kinds=("heat",)),
     Definition("heat_rule2_c", "Hintaraja 2: tavoitelämpötila", "Lämmitys",
                "number", 12.0, "°C", 0, 30, help="Tavoitelämpötila, kun hinta on hintarajan 2 alle.", kinds=("heat",)),
     Definition("alert_pump", "Ilmoitus, kun pumppu ei toimi", "Ilmoitukset", "bool", True,
                help="Puhelimeen tulee ilmoitus, kun pumppu ei ole käytettävissä tai ilmoittaa laitevirheestä 30 minuutin ajan, ja toinen, kun pumppu toimii taas. Ilmoitus menee jokaiseen puhelimeen, jonka Home Assistant -sovellus on yhdistetty kodin Home Assistantiin.",
                kinds=("cool",)),
-    Definition("pump_relogin", "Kirjaudu MELCloud Homeen uudelleen", "Yhteys", "bool", True,
+    Definition("pump_relogin", "Kirjaudu MELCloud Homeen uudelleen", "Yhteys", "bool", True, site_only=True,
                help="Kun kaikki pumput ovat olleet 10 minuuttia poissa käytöstä mutta kodin Home Assistant vastaa, MELCloud Home -kirjautuminen on todennäköisesti vanhentunut. Villa Kuppis lataa silloin MELCloud Home -integraation uudelleen, jolloin se kirjautuu uudelleen tallennetuilla tunnuksilla. Enintään kerran tunnissa. Vaatii, että Villa Kuppisin käyttäjä on Home Assistantin ylläpitäjä.",
                kinds=("cool",)),
     Definition("alert_cold", "Ilmoitus kylmästä huoneesta", "Ilmoitukset", "bool", True,
@@ -144,7 +149,7 @@ DEFINITIONS: tuple[Definition, ...] = (
                "bool", True,
                help="Puhelimeen tulee ilmoitus, kun mökin huoneen lämpötila-anturilta ei ole saatu lukemaa tuntiin tai kun patteri ei ole ollut käytettävissä 30 minuuttiin, ja toinen, kun laite toimii taas. Ilmoitus menee jokaiseen puhelimeen, jonka Home Assistant -sovellus on yhdistetty kodin Home Assistantiin.",
                kinds=("heat",)),
-    Definition("alert_offline", "Ilmoitus, kun mökki ei vastaa", "Ilmoitukset", "bool", True,
+    Definition("alert_offline", "Ilmoitus, kun mökki ei vastaa", "Ilmoitukset", "bool", True, site_only=True,
                help="Puhelimeen tulee ilmoitus, kun mökin Home Assistant ei ole vastannut 30 minuuttiin, ja toinen, kun yhteys palaa. Ilmoitus menee jokaiseen puhelimeen, jonka Home Assistant -sovellus on yhdistetty kodin Home Assistantiin.",
                kinds=("heat",)),
 )
@@ -266,6 +271,11 @@ def vat_factor(overrides: Mapping[str, Mapping[str, object]], site: str) -> floa
     """Price multiplier for the site: 1 + VAT when VAT is switched on."""
     values = _values(resolve(overrides, site))
     return 1 + float(values["vat_percent"]) / 100 if values["vat_enabled"] else 1.0
+
+
+def price_extra(overrides: Mapping[str, Mapping[str, object]], site: str) -> float:
+    """c/kWh paid on top of the spot price (transfer, tax, margin, VAT included)."""
+    return float(_values(resolve(overrides, site))["price_extra_c_kwh"])
 
 
 class SettingsStore:

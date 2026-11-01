@@ -78,6 +78,14 @@ class MonitorTests(unittest.TestCase):
         self.monitor.check()
         return [title for title, _ in self.notifier.sent]
 
+    def test_test_notice_goes_through_the_same_notifier(self):
+        self.assertEqual(self.monitor.send_test("cottage"), 1)
+        title, message = self.notifier.sent[-1]
+        self.assertEqual(title, "Villa Kuppis: testi-ilmoitus")
+        self.assertIn("Mökki", message)
+        self.notifier.ok = False
+        self.assertEqual(self.monitor.send_test("home"), 0)
+
     def test_cold_room_alerts_once_and_is_over_a_degree_above_the_limit(self):
         self.assertEqual(self.check(), [])
         self.service.cottage.temps["large"] = 2.5

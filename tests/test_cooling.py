@@ -265,6 +265,28 @@ class CoolingTests(ServiceTestCase):
         self.assertIn(("unit-2", "power", True), self.brief(sent))
         self.assertTrue(self._unit(service, "unit-2")["power"])
 
+    def test_a_unit_started_in_heat_mode_is_switched_off_again(self):
+        service, clock = self.start()
+        sent = self.run_plan(service)             # room 27 > 25: unit-2 on
+        self.assertIn(("unit-2", "power", True), self.brief(sent))
+        # Its mode was changed to Heat while it was off; it comes up heating.
+        self.set_reading(service, "unit-2", "OperationMode", "Heat", "mode", "Heat")
+        clock.advance(60)
+        sent = self.run_plan(service)
+        self.assertIn(("unit-2", "power", False), self.brief(sent))
+        self.assertFalse(self._unit(service, "unit-2")["power"])
+        # Off in Heat: the automation leaves it alone from now on.
+        clock.advance(3600)
+        self.assertNotIn("unit-2", [s["unit"] for s in self.run_plan(service)])
+
+    def test_a_unit_the_household_runs_in_heat_mode_is_left_alone(self):
+        service, clock = self.start()
+        service.request("unit-2", "power", True, "Ville")
+        self.wait_for(lambda: self._unit(service, "unit-2")["power"])
+        self.set_reading(service, "unit-2", "OperationMode", "Heat", "mode", "Heat")
+        clock.advance(60)
+        self.assertNotIn(("unit-2", "power", False), self.brief(self.run_plan(service)))
+
     def test_away_uses_the_away_maximum_without_prices(self):
         service, _ = self.start(cool_power=False)
         service.set_away(True, "Ville")

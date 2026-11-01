@@ -20,6 +20,10 @@ One controller per unit then applies the current period (audit 2.1):
    switched on when the room is above the target. Every power change waits
    ``min_off_minutes`` from the unit's previous power change.
 4. A unit that is on gets the target as its setpoint when they differ.
+5. A unit the automation switched on within ``WRONG_MODE_WINDOW`` that
+   runs in another mode than Cool is switched off again, even in a manual
+   pause: its mode was changed while it was off, where Home Assistant
+   cannot see it, and it must not heat on the automation's behalf.
 
 Manual pause: when the household changes a unit's power, setpoint or mode
 (in this app, in MELCloud Home or by remote), the controller leaves the
@@ -62,6 +66,9 @@ from .storage import PriceStore
 STOP_BAND_C = 0.5    # a unit stops this far below its target
 SETPOINT_TOLERANCE_C = 0.05
 WATCHED_ACTIONS = ("power", "setpoint", "mode")
+# How long after its power-on a unit found in a mode other than Cool is
+# switched off again (the mode was changed while the unit was off).
+WRONG_MODE_WINDOW = timedelta(minutes=30)
 ACTOR = "Suunnitelma"
 SITE = "home"
 DEFAULT_INTERVAL = 60.0
@@ -465,13 +472,17 @@ class CoolingAutomation:
         else:
             models, (_observed, future), _ahead = self._service.learned_models(SITE)
             model = models.get(unit_id)
+            # The whole price per kWh weighs the energy; the thresholds
+            # (compared with spot) move with it so they mean the same hours.
+            extra = float(values["price_extra_c_kwh"])
             limits = optimizer.Limits(
                 float(values["cool_max_c"]), float(values["precool_c"]),
-                float(values["low_price_c_kwh"]), float(values["high_price_c_kwh"]),
+                float(values["low_price_c_kwh"]) + extra,
+                float(values["high_price_c_kwh"]) + extra,
                 bool(values["cool_power"]), need)
             result = None if model is None else optimizer.optimize(
                 model, float(state["room_temp"]), start_off,
-                [(r.ts_utc, float(r.price_c_kwh)) for r in rows[i:]],
+                [(r.ts_utc, float(r.price_c_kwh) + extra) for r in rows[i:]],
                 future, limits, [(r.off, r.target_c) for r in rows[i:]])
             self._optimized[unit_id] = (key, result)
         if result is not None and result.optimized:
@@ -545,6 +556,14 @@ class CoolingAutomation:
             row = self._load(unit_id)
             paused = self._observe(state, row, values, events, now)
             try:
+                if self._started_in_wrong_mode(state, events, now):
+                    logging.warning("%s came on in %s mode after the automation switched it "
+                                    "on; switching it off", state["name"], state["mode"])
+                    result = self._command(state, "power", False)
+                    if result["status"] == 202:
+                        row["power_changed_utc"] = now.isoformat()
+                    sent.append(result)
+                    continue
                 if paused:
                     continue
                 sent.extend(self._night(state, row, values, now))
@@ -584,6 +603,24 @@ class CoolingAutomation:
             row.update(night=0, saved_fan=None)
             return sent
         return []
+
+    @staticmethod
+    def _started_in_wrong_mode(state, events, now) -> bool:
+        """True when the automation switched the unit on lately and it runs
+        in another mode than Cool: someone changed the mode while the unit
+        was off, where Home Assistant cannot see it (heating review 15).
+        ``events`` is the event log, newest first."""
+        if not state["power"] or state["mode"] in (None, "Cool"):
+            return False
+        for event in events:
+            if event["unit"] != state["id"] or event["action"] not in WATCHED_ACTIONS:
+                continue
+            if (event["actor"] != ACTOR or event["action"] != "power"
+                    or event["requested"] is not True):
+                return False
+            when = _parse(event["ts"])
+            return when is not None and now - when <= WRONG_MODE_WINDOW
+        return False
 
     def _command(self, state, action, value) -> dict:
         status, body = self._service.request(state["id"], action, value, ACTOR)

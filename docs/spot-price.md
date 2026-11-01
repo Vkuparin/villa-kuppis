@@ -22,13 +22,15 @@ A base temperature and thresholds: "when the spot price is below X c/kWh, use T"
 
 The cottage gets the current period's target per room through its Home Assistant (`villa_kuppis/cottage_targets.py`): the period start is the revision, each write is valid for 45 minutes, and the room's status sensor confirms it. With `Automaatio` off nothing is sent and the cottage drops to its local safe setpoint when the last target expires. Without a price for the period the base applies.
 
-Example for the cottage:
+Defaults for the cottage (since app 0.4.35; before, 8 °C below 8 c/kWh and 12 °C below 5 c/kWh). Transfer, tax and margin are paid on every kWh, so with them added, holding the base was cheapest on every recorded day; the defaults store heat only at negative spot prices:
 
 | Rule | Target |
 | --- | --- |
 | Base | 5 °C |
-| Spot price below 8 c/kWh | 8 °C |
-| Spot price below 5 c/kWh | 12 °C |
+| Spot price below 0 c/kWh | 8 °C |
+| Spot price below −2 c/kWh | 12 °C |
+
+`Siirto, vero ja marginaali` (c/kWh, per site, default 0) is what is paid on top of the spot price per kWh, VAT included. The optimizers (heating and cooling) and the energy costs use spot + VAT + this; the price curve and the thresholds stay on the spot price (with VAT when that is on).
 
 ## Mode 2: optimized heating (Hintaohjaus: Optimoitu)
 

@@ -227,6 +227,30 @@ class AppTestCase(unittest.TestCase):
                          {"unit": unit, "action": action, "value": value})
 
 
+class AlertTestApiTests(AppTestCase):
+    def test_test_notice_needs_alerts_and_a_site(self):
+        server, _ = self._start_app(FakeClient([_unit_payload("u1", "Yksikkö", mode="Cool")]))
+        url = self._url(server, "/api/alerts/test")
+        status, body = http_json("POST", url, {"site": "home"})
+        self.assertEqual((status, body["error"]), (409, "no_alerts"))
+        status, body = http_json("POST", url, {"site": "sauna"})
+        self.assertEqual(status, 400)
+        self.assertEqual(http_json("GET", url)[0], 405)
+
+    def test_test_notice_reports_the_phones_reached(self):
+        server, _ = self._start_app(FakeClient([_unit_payload("u1", "Yksikkö", mode="Cool")]))
+        sent = []
+
+        class Alerts:
+            def send_test(self, site):
+                sent.append(site)
+                return 2
+        server.service.alerts = Alerts()
+        status, body = http_json("POST", self._url(server, "/api/alerts/test"), {"site": "cottage"})
+        self.assertEqual((status, body), (200, {"sent": 2}))
+        self.assertEqual(sent, ["cottage"])
+
+
 class PageTests(AppTestCase):
     def test_history_selection_ignores_late_previous_response(self):
         from villa_kuppis.pump_app import render_page

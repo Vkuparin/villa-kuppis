@@ -19,7 +19,7 @@ from pathlib import Path
 from unittest import IsolatedAsyncioTestCase
 
 from tests.common import elering_payload
-from tests.test_cottage_targets import DAY, PATTERN, FakeCottageHA
+from tests.test_cottage_targets import DAY, PATTERN, FakeCottageHA, with_rules
 from tests.test_ha_gateway import TOKEN, Clock, eventually
 from villa_kuppis.cottage import CottageSite
 from villa_kuppis.ha_gateway import BindingStore, HomeAssistantGateway
@@ -58,7 +58,7 @@ class SiteTargetTests(IsolatedAsyncioTestCase):
         self.automation = True
         self.site = CottageSite(self.data, self.gateway, lambda: self.bindings.bindings("cottage"),
                                 now=self.clock)
-        self.site.configure_targets(prices_db=self.data / "prices.db", overrides=lambda: {},
+        self.site.configure_targets(prices_db=self.data / "prices.db", overrides=lambda: with_rules({}),
                                     automation_on=lambda: self.automation)
 
     async def asyncTearDown(self):

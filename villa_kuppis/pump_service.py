@@ -40,7 +40,7 @@ from aiomelcloudhome.models.ata import ATAFanSpeed, ATAOperationMode
 from . import learning, weather
 from .cooling import CoolingAutomation
 from .service import SpotPriceService
-from .settings import SettingsStore, vat_factor
+from .settings import SettingsStore, price_extra, vat_factor
 from .pump_probe import (
     _default_client_factory,
     _operation_message,
@@ -735,11 +735,12 @@ class PumpStore:
         return len(rows)
 
     def energy_daily(self, unit_id: str, prices_db, start, end,
-                     factor: float = 1.0) -> list[dict]:
+                     factor: float = 1.0, extra: float = 0.0) -> list[dict]:
         """Energy and cost per Helsinki day; [] when no energy is stored.
 
         Each energy row covers the hour starting at its timestamp and is
-        priced with the mean of the 15-minute spot prices in that hour.
+        priced with the mean of the 15-minute spot prices in that hour
+        (times ``factor`` for VAT) plus ``extra`` c/kWh (transfer, tax, margin).
         cost_eur is None when no hour of the day has a price; cost_complete
         is False when some hours lack one (cost then covers priced hours).
         """
@@ -760,7 +761,7 @@ class PumpStore:
                 for ts, raw in conn.execute(
                         "SELECT ts_utc, price_raw_eur_mwh FROM price_interval "
                         "WHERE ts_utc >= ? AND ts_utc < ?", (s, e + 3600)):
-                    prices[ts] = float(Decimal(raw) / Decimal(10)) * factor
+                    prices[ts] = float(Decimal(raw) / Decimal(10)) * factor + extra
             finally:
                 conn.close()
         days: dict[str, dict] = {}
@@ -1412,13 +1413,14 @@ class PumpService:
         unit_rows = ([] if cottage is not None
                      else self.store.pump_history(unit, start, end, max_points))
         outdoor = self.store.outdoor_series(site, start, end, max_points)
-        factor = vat_factor(SettingsStore(self.store.path).overrides(), site)
+        overrides = SettingsStore(self.store.path).overrides()
+        factor = vat_factor(overrides, site)
         price = self.store.price_series(self._prices_db, start, end,
                                         max_points, factor)
         plan = self.store.plan_series(unit, start, end, max_points)
         commands = self.store.command_marks(unit, start, end)
         energy = self.store.energy_daily(unit, self._prices_db, start, end,
-                                         factor)
+                                         factor, price_extra(overrides, site))
         forecast = self.store.forecast_rows(
             site, max(start, now - timedelta(hours=1)), end)
         payload = {
@@ -1576,6 +1578,19 @@ class PumpService:
             result = (models, (outdoor, future), ahead)
             self._models_cache[site] = (now, result)
             return result
+
+    def test_alert(self, site) -> tuple[int, dict]:
+        """Send a test phone notice (settings page, Ilmoitukset)."""
+        if site not in ("home", "cottage"):
+            return 400, {"error": "bad_body", "detail": "site must be home or cottage"}
+        if self.alerts is None:
+            return 409, {"error": "no_alerts",
+                         "detail": "Ilmoitukset lähetetään kodin Home Assistantin kautta, eikä sitä ole otettu käyttöön."}
+        sent = self.alerts.send_test(site)
+        if not sent:
+            return 502, {"error": "not_sent",
+                         "detail": "Yksikään puhelin ei saanut ilmoitusta. Tarkista, että Home Assistant -sovellus on yhdistetty kodin Home Assistantiin."}
+        return 200, {"sent": sent}
 
     def restart_cottage_learning(self, room, actor: str) -> datetime:
         """Learn a cottage room again from now on; raises ValueError for an

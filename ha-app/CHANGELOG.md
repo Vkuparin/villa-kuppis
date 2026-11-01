@@ -1,5 +1,13 @@
 # Muutokset
 
+## 0.4.35
+
+- Uusi asetus Siirto, vero ja marginaali (c/kWh) Pörssihinta-ryhmässä, erikseen kodille ja mökille: mitä maksat pörssihinnan päälle jokaisesta kilowattitunnista. Optimoitu ohjaus ja energiakustannukset käyttävät kokonaishintaa. Hintakäyrä ja hintarajat pysyvät pörssihinnassa.
+- Mökin hintarajojen oletukset lämmittävät varastoon vain negatiivisella pörssihinnalla (alle 0 snt: 8 °C, alle −2 snt: 12 °C). Itse asetetut rajat pysyvät ennallaan.
+- Ilmoitukset-asetusten lopussa on Lähetä testi-ilmoitus -painike.
+- Jos automaatio käynnistää lämpöpumpun ja se lähtee muuhun kuin jäähdytystilaan (tilaa on vaihdettu pumpun ollessa pois), automaatio sammuttaa sen heti.
+- Huoneen asetuksissa ei enää näytetä asetuksia, jotka koskevat koko kohdetta.
+
 ## 0.4.34
 
 - Mökin huone ei enää pääse jäätymään pois kytketyn patterin tai käsiohjauksen takia: kun huone on alle turvalämmön (5 °C) tai sen lämpötilaa ei saada, pois kytketyt ja käsin pois käännetyt patterit pitävät turvalämmön. Vaatii mökin integraation 0.6.0 (aja install.sh mökin Home Assistantissa).

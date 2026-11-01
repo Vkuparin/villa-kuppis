@@ -129,12 +129,13 @@ SCRIPT = r"""
     var group = null;
     // A value set at this very level needs no label; only inherited ones do.
     var level = scope.indexOf("room:") === 0 ? "room" : "site";
-    var kind = null;
-    data.scopes.forEach(function (s) { if (s.id === scope) kind = s.kind; });
+    var kind = null, site = null, alertRow = null;
+    data.scopes.forEach(function (s) { if (s.id === scope) { kind = s.kind; site = s.site; } });
     data.definitions.forEach(function (d, i) {
       // Settings of the other site's control kind do nothing, so they are hidden,
       // as are settings that depend on a switch or choice that is off.
       if (d.kinds.indexOf(kind) < 0) return;
+      if (d.site_only && level === "room") return;
       if (d.shown_if && d.shown_if.values.indexOf(eff[d.shown_if.key].value) < 0) return;
       if (d.group !== group) {
         group = d.group;
@@ -192,7 +193,32 @@ SCRIPT = r"""
       }
       row.appendChild(help);
       $body.appendChild(row);
+      if (d.group === "Ilmoitukset") alertRow = row;
     });
+    if (alertRow && level === "site") alertRow.after(testRow(site));
+  }
+  function testRow(site) {
+    var row = make("div", { className: "set-row" });
+    var hint = "Tarkista, että ilmoitukset tulevat puhelimeen.";
+    var note = make("span", { className: "set-label detail", textContent: hint });
+    note.setAttribute("role", "status");
+    var btn = make("button", { type: "button", textContent: "Lähetä testi-ilmoitus" });
+    btn.addEventListener("click", function () {
+      btn.disabled = true;
+      note.textContent = "Lähetetään…";
+      fetch("api/alerts/test", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ site: site }) })
+        .then(function (r) { return r.json().then(function (j) { return [r.ok, j]; }); })
+        .then(function (res) {
+          note.textContent = res[0] ? "Testi-ilmoitus lähti " + res[1].sent + " puhelimeen."
+            : res[1].detail || "Lähetys epäonnistui.";
+        })
+        .catch(function () { note.textContent = "Lähetys epäonnistui."; })
+        .then(function () { btn.disabled = false; });
+    });
+    row.appendChild(note); row.appendChild(btn);
+    return row;
   }
   function load(keepScope) {
     return fetch("api/settings", { cache: "no-store" })

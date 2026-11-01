@@ -1010,6 +1010,9 @@ class StoreHistoryTests(unittest.TestCase):
         self.assertAlmostEqual(days[0]["cost_eur"], 0.02)
         self.assertFalse(days[0]["cost_complete"])
         self.assertIsNone(days[1]["cost_eur"])
+        # Transfer, tax and margin are added to every kWh.
+        days = self.store.energy_daily("u1", prices_path, base, end, extra=8.0)
+        self.assertAlmostEqual(days[0]["cost_eur"], 0.18)
         # Without any prices.db the energy still shows, cost unknown.
         days = self.store.energy_daily("u1", Path(self.tmp) / "none.db",
                                        base, end)

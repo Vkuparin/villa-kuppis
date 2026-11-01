@@ -30,6 +30,18 @@ DAY = date(2026, 11, 20)
 PATTERN = [20, 60, 90, 150]
 EXPECTED = {20: 12.0, 60: 8.0, 90: 5.0, 150: 5.0}   # default cottage thresholds
 
+# The thresholds these price fixtures were written for (the defaults until
+# 0.4.35, when the defaults became heat only at negative prices).
+RULES = {"heat_rule1_price_c_kwh": 8.0, "heat_rule2_price_c_kwh": 5.0}
+
+
+def with_rules(overrides):
+    """``overrides`` with RULES under the cottage site unless set there."""
+    out = dict(overrides)
+    out["site:cottage"] = {**RULES, **overrides.get("site:cottage", {})}
+    return out
+
+
 
 class FakeCottageHA(FakeHA):
     """Adds the cottage integration's set_target service."""
@@ -98,7 +110,7 @@ class TargetTests(IsolatedAsyncioTestCase):
         self.overrides = {}
         self.sender = CottageTargetSender(
             self.gateway, {"large": "large-status", "small": "small-status"},
-            prices_db=data / "prices.db", overrides=lambda: self.overrides,
+            prices_db=data / "prices.db", overrides=lambda: with_rules(self.overrides),
             automation_on=lambda: self.automation, now=self.clock)
 
     async def asyncTearDown(self):
@@ -290,7 +302,7 @@ class TargetTests(IsolatedAsyncioTestCase):
 class PureTests(unittest.TestCase):
     def test_current_targets_pick_the_period_containing_now(self):
         periods = [Period(900 * k, Decimal(p)) for k, p in enumerate(("2", "6", "9"))]
-        targets = current_targets({}, periods, ["large"], 900 + 899)
+        targets = current_targets(with_rules({}), periods, ["large"], 900 + 899)
         self.assertEqual(targets["large"].target_c, 8.0)
         self.assertEqual(targets["large"].period_ts, 900)
         self.assertEqual(targets["large"].reason, "threshold")
@@ -320,7 +332,7 @@ class OptimizedTargetTests(unittest.TestCase):
             return {"large": model}, Outdoor([])
         self.sender = CottageTargetSender(
             None, {"large": "large-status", "small": "small-status"},
-            prices_db=data / "prices.db", overrides=lambda: self.overrides,
+            prices_db=data / "prices.db", overrides=lambda: with_rules(self.overrides),
             automation_on=lambda: True, now=lambda: self.now,
             models=models, room_temps=lambda: self.temps)
 
@@ -348,6 +360,21 @@ class OptimizedTargetTests(unittest.TestCase):
         self.overrides = {}
         self.temps = {}
         self.assertEqual(self.sender.targets()["large"].reason, "threshold")
+
+    def test_optimizer_weighs_the_whole_price_per_kwh(self):
+        from unittest import mock
+        from villa_kuppis import cottage_targets
+        seen = []
+
+        def fake(model, start, prices, outdoor, limits, fixed, visit=None):
+            seen.append(prices[0][1])
+            return None
+        with mock.patch.object(cottage_targets, "optimize_heating", fake):
+            spot = self.sender.targets()["large"].price_c_kwh
+            self.overrides = {"site:cottage": {"price_extra_c_kwh": 8.18}}
+            self.sender.targets()
+        self.assertAlmostEqual(seen[0], float(spot))
+        self.assertAlmostEqual(seen[1], float(spot) + 8.18)
 
     def test_optimized_floor_is_never_below_the_base_level(self):
         self.overrides = {"site:cottage": {"heat_base_c": 9.0}}

@@ -111,11 +111,19 @@ class StoreTests(unittest.TestCase):
         self.assertEqual([p.temperature_c for p in plan],
                          [Decimal("25.0"), Decimal("25.0")])
 
-    def test_cottage_defaults_heat(self):
-        plan = plan_day(_periods([4, 6, 9]),
+    def test_cottage_defaults_heat_only_at_negative_prices(self):
+        # Transfer and tax are paid on every kWh, so storing heat in an
+        # empty cottage pays only when the spot price is very low.
+        plan = plan_day(_periods([-3, -1, 4, 9]),
                         S.plan_settings({}, "cottage", ["sauna"]))["sauna"]
         self.assertEqual([p.temperature_c for p in plan],
-                         [Decimal("12.0"), Decimal("8.0"), Decimal("5.0")])
+                         [Decimal("12.0"), Decimal("8.0"), Decimal("5.0"), Decimal("5.0")])
+
+    def test_price_extra_is_per_site_and_not_offered_per_room(self):
+        over = {"site:cottage": {"price_extra_c_kwh": 8.18}}
+        self.assertEqual(S.price_extra(over, "cottage"), 8.18)
+        self.assertEqual(S.price_extra(over, "home"), 0.0)
+        self.assertTrue(S.BY_KEY["price_extra_c_kwh"].public()["site_only"])
 
     def test_cottage_heating_texts_match_what_is_built(self):
         # The thresholds drive the cottage; the storage band only the optimizer.

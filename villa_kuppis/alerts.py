@@ -72,12 +72,13 @@ class HomeAssistantNotifier:
         self._gateway = gateway
         self._phones: list[str] | None = None
 
-    def send(self, title: str, message: str) -> bool:
+    def send(self, title: str, message: str) -> int:
+        """Send to every phone; the number of phones reached (0: none)."""
         try:
             phones = [s for s in self._gateway.services("notify") if s.startswith(PHONE_PREFIX)]
         except Exception as error:
             log.warning("Alert not sent: Home Assistant unreachable (%s)", type(error).__name__)
-            return False
+            return 0
         if phones != self._phones:
             self._phones = phones
             if phones:
@@ -93,7 +94,7 @@ class HomeAssistantNotifier:
                 log.warning("Alert to %s failed: %s", phone, type(error).__name__)
         if sent:
             log.info("Alert sent: %s", title)
-        return sent > 0
+        return sent
 
 
 class AlertMonitor:
@@ -111,6 +112,13 @@ class AlertMonitor:
         self._open: dict[str, Problem] = {}
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+
+    def send_test(self, site: str) -> int:
+        """A test notice from the settings page; the number of phones reached."""
+        label = app_settings.SITE_LABELS.get(site, site)
+        return int(self._notifier.send(
+            "Villa Kuppis: testi-ilmoitus",
+            f"Ilmoitukset tulevat perille. Lähetetty {label}-sivun asetuksista."))
 
     # -- checks --
 

@@ -19,6 +19,7 @@ fully offline) plus a small JSON API on top of PumpService:
 * POST /api/cottage/room_sensor  {"room", "entity_id"}: a cottage room's temperature sensor (null: default)
 * POST /api/cottage/clear_manual  {"room"}: end a cottage room's manual pause
 * POST /api/cottage/learning/restart  {"room"}: learn the room again from now on
+* POST /api/alerts/test  {"site"}: send a test phone notice
 * GET  /api/sites     connection health of each Home Assistant site
 * GET  /api/devices?site=home|cottage  Home Assistant devices by area (devices.py)
 * GET  /api/devices/history?site&key&hours  one device's recorded values
@@ -2218,7 +2219,8 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
                              "version": os.environ.get("VK_VERSION", "")})
         elif parts.path in ("/api/command", "/api/prices/refresh", "/api/visit/end",
                             "/api/cottage/heater", "/api/cottage/clear_manual",
-                            "/api/cottage/learning/restart", "/api/devices/command",
+                            "/api/cottage/learning/restart", "/api/alerts/test",
+                            "/api/devices/command",
                             "/api/devices/layout", "/api/devices/lights_off",
                             "/api/devices/rules", "/api/devices/room_sensor"):
             self._json(405, {"error": "method_not_allowed",
@@ -2308,6 +2310,10 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
                     self._json(400, {"error": "bad_body", "detail": "unknown cottage room"})
                     return
                 self._json(200, {"room": body.get("room"), "since": since.isoformat()})
+        elif parts.path == "/api/alerts/test":
+            body = self._read_json_object()
+            if body is not None:
+                self._json(*self.app.service.test_alert(body.get("site")))
         elif parts.path in ("/api/devices/command", "/api/devices/layout",
                             "/api/devices/lights_off", "/api/devices/rules",
                             "/api/devices/room_sensor"):
