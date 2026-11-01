@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.37
+
+- Mökin oma hälytys: Villa Kuppis kertoo mökin Home Assistantille viiden minuutin välein olevansa käynnissä. Jos viestejä ei tule tuntiin (kotipalvelin tai yhteys on poikki), mökin Home Assistant lähettää itse ilmoituksen "Villa Kuppis ei vastaa" ja ilmoittaa alle 3 °C:n huoneesta. Vaatii mökin integraation 0.7.0 (aja install.sh mökin Home Assistantissa) ja että puhelimen Home Assistant -sovellus on yhdistetty myös mökin Home Assistantiin.
+
 ## 0.4.36
 
 - Historian energiataulukko näyttää kulutuksen ja kustannuksen. Lämpöpumppujen kilowattitunnit tulevat MELCloud Home -integraation kuukausilaskureista tunneittain. Mökin huoneiden luvut ovat arvio: patterin nimessä oleva teho kertaa aika, jonka patteri on lämmittänyt. Kustannus lasketaan pörssihinnasta, ALV:stä ja Siirto, vero ja marginaali -asetuksesta. Taulukon lopussa on yhteissumma ja keskihinta.
