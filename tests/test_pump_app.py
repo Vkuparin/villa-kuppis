@@ -251,6 +251,22 @@ class AlertTestApiTests(AppTestCase):
         self.assertEqual(sent, ["cottage"])
 
 
+class WallViewTests(AppTestCase):
+    def test_wall_view_is_a_read_only_page_linked_from_the_settings(self):
+        import urllib.request
+        from villa_kuppis.pump_app import render_page
+        from villa_kuppis.wall_ui import PAGE
+        server, _ = self._start_app(FakeClient([_unit_payload("u1", "Yksikkö", mode="Cool")]))
+        with urllib.request.urlopen(self._url(server, "/wall"), timeout=5) as response:
+            self.assertEqual(response.status, 200)
+            self.assertIn("seinänäkymä", response.read().decode())
+        self.assertEqual(http_json("POST", self._url(server, "/wall"), {})[0], 405)
+        self.assertIn('href="wall"', render_page(False))
+        # It only reads: every fetch is a GET of the API.
+        self.assertNotIn("method:", PAGE)
+        self.assertNotIn("POST", PAGE)
+
+
 class PageTests(AppTestCase):
     def test_history_selection_ignores_late_previous_response(self):
         from villa_kuppis.pump_app import render_page

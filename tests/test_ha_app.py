@@ -100,6 +100,14 @@ class AppModeServerTests(unittest.TestCase):
         _, page = self.request(INGRESS, "/", headers={
             "Host": "home-haos.example.ts.net", "X-Remote-User-Id": "abc"})
         self.assertNotIn(b"<base", page)
+        # The tablet wall view the same way.
+        status, page = self.request(PROXY, "/wall", headers=proxy)
+        self.assertEqual(status, 200)
+        self.assertIn(b'<base href="/villa-kuppis/">', page)
+        self.assertIn("seinänäkymä".encode(), page)
+        _, page = self.request(INGRESS, "/wall", headers={
+            "Host": "home-haos.example.ts.net", "X-Remote-User-Id": "abc"})
+        self.assertNotIn(b"<base", page)
 
     def test_other_clients_are_refused_even_with_trusted_headers(self):
         for headers in ({"Host": AUTHORITY, "Tailscale-User-Login": "ville@example.com"},

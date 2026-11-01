@@ -78,6 +78,7 @@ from . import settings as app_settings
 from . import cottage as cottage_ui
 from . import overview_ui
 from . import devices_ui
+from . import wall_ui
 from .devices import DeviceError, FakeDeviceSource
 from .cottage import CottageSite, FakeSiteGateway, HeaterSwitchError
 from .visit import VisitError
@@ -2148,6 +2149,11 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
                     if self.client_address[0] in self.app.trusted_proxies
                     else self.app.page_html)
             self._send(200, html.encode("utf-8"), "text/html; charset=utf-8")
+        elif parts.path == "/wall":
+            html = (self.app.proxy_wall_html
+                    if self.client_address[0] in self.app.trusted_proxies
+                    else wall_ui.PAGE)
+            self._send(200, html.encode("utf-8"), "text/html; charset=utf-8")
         elif parts.path in _STATIC_FILES:
             name, ctype, cache = _STATIC_FILES[parts.path]
             self._send(200, (_STATIC_DIR / name).read_bytes(), ctype, cache)
@@ -2329,7 +2335,7 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
                             "/api/devices/lights_off", "/api/devices/rules",
                             "/api/devices/room_sensor"):
             self._post_devices(parts.path.rpartition("/")[2], identity)
-        elif parts.path in ("/", "/api/view", "/api/events", "/api/history",
+        elif parts.path in ("/", "/wall", "/api/view", "/api/events", "/api/history",
                             "/api/identity", "/api/plan", "/api/rooms",
                             "/api/cottage", "/api/sites", "/api/overview",
                             "/api/devices", "/api/devices/history"):
@@ -2517,6 +2523,9 @@ class PumpAppServer(ThreadingHTTPServer):
         self.proxy_page_html = (
             self.page_html.replace("<head>", f'<head>\n<base href="{public_path}/">', 1)
             if public_path else self.page_html)
+        self.proxy_wall_html = (
+            wall_ui.PAGE.replace("<head>", f'<head>\n<base href="{public_path}/">', 1)
+            if public_path else wall_ui.PAGE)
         self.settings = app_settings.SettingsStore(service.store.path)
         super().__init__((host, port), _PumpAppHandler)
 

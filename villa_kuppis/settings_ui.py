@@ -37,6 +37,10 @@ SECTION_HTML = r"""
         <option value="orange">Oranssi</option>
       </select>
     </div>
+    <div class="set-row">
+      <span class="set-label" title="Iso, vain luettava näkymä kodista, mökistä ja tulevista hinnoista seinälle kiinnitettävään tablettiin. Pitää näytön päällä ja päivittyy minuutin välein.">Seinänäkymä tabletille</span>
+      <a class="set-link" href="wall">Avaa</a>
+    </div>
   </section>
 """
 
@@ -44,6 +48,10 @@ STYLE = r"""
 section.settings h3 { margin: 1.3rem 0 .2rem; font-size: .72rem; font-weight: 600; letter-spacing: .07em;
                       text-transform: uppercase; color: var(--text3); }
 #set-body { max-width: 46rem; }
+a.set-link { display: inline-flex; align-items: center; min-height: 44px; padding: 0 .8rem;
+             border: 1px solid var(--line3); border-radius: 10px; background: var(--surface);
+             color: var(--text); text-decoration: none; font-size: .95rem; }
+a.set-link:hover { border-color: var(--ctl); }
 .set-row { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .8rem;
            padding: .5rem 0; border-bottom: 1px solid var(--line2); max-width: 46rem; }
 .set-label { flex: 1 1 14rem; cursor: help; }
