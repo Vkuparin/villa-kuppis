@@ -295,6 +295,10 @@ class ViewTests(unittest.IsolatedAsyncioTestCase):
         await eventually(lambda: (self.gateway._raw[entity_id]["state"],
                                   self.gateway._raw[entity_id]["last_updated"]) == key)
 
+    async def test_room_values_for_the_planner(self):
+        self.assertEqual(self.site.room_temperatures(), {"large": 18.4, "small": 7.2})
+        self.assertEqual(self.site.room_humidity(), {"large": 41.0})
+
     async def test_live_view_shows_room_readings_and_status(self):
         large = self.room("large")
         self.assertEqual(large["state"], "ok")

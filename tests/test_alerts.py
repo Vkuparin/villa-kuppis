@@ -26,6 +26,11 @@ class FakeCottage:
         self.heaters = {"large": [], "small": []}
         self.notices = []                 # due visit notices
         self.marked = set()
+        self.air = {"large": {}, "small": {}}   # room -> {"humidity": %, "co2": ppm}
+        self.visit = None
+
+    def active_visit(self):
+        return self.visit
 
     def visit_notices(self):
         return list(self.notices)
@@ -42,7 +47,9 @@ class FakeCottage:
                 "rooms": [{"id": r, "name": names[r],
                            "temperature": None if t is None else {
                                "value": t, "status": self.temp_status.get(r, "ok")},
-                           "heaters": self.heaters[r]}
+                           "heaters": self.heaters[r],
+                           **{role: {"value": v, "status": "ok"}
+                              for role, v in self.air[r].items()}}
                           for r, t in self.temps.items()]}
 
 
@@ -207,6 +214,44 @@ class MonitorTests(unittest.TestCase):
         self.notifier.ok = True
         self.check(1)
         self.assertIn((2, "warm"), self.service.cottage.marked)
+
+    def test_damp_room_alerts_after_a_day_and_clears_five_points_under(self):
+        self.service.cottage.air["large"]["humidity"] = 86.0
+        self.assertEqual(self.check(), [])
+        self.assertEqual(self.check(60 * 24 - 1), [])
+        self.assertEqual(self.check(1), ["Mökki on kostea"])
+        self.assertIn("yli 80 % (nyt 86 %)", self.notifier.sent[0][1])
+        self.service.cottage.air["large"] = {}           # no reading: stays open
+        self.assertEqual(len(self.check(1)), 1)
+        self.service.cottage.air["large"]["humidity"] = 77.0
+        self.assertEqual(len(self.check(1)), 1)
+        self.service.cottage.air["large"]["humidity"] = 74.0
+        self.assertEqual(self.check(1)[1:], ["Mökki: kosteus on laskenut"])
+
+    def test_humidity_limit_comes_from_the_settings(self):
+        self.settings.set("site:cottage", "humidity_limit_pct", 90.0, "test")
+        self.service.cottage.air["small"]["humidity"] = 86.0
+        self.check()
+        self.assertEqual(self.check(60 * 24), [])
+
+    def test_air_reminder_only_while_someone_is_at_the_cottage(self):
+        from types import SimpleNamespace
+        self.service.cottage.air["large"]["co2"] = 1400
+        self.assertEqual(self.check(), [])
+        self.assertEqual(self.check(20), [])                     # no visit
+        self.service.cottage.visit = SimpleNamespace(arrival=self.now + 30 * MINUTE)
+        self.assertEqual(self.check(20), [])                     # not arrived yet
+        self.check(10)
+        self.assertEqual(self.check(9), [])
+        self.assertEqual(self.check(1), ["Tuuleta: Mökki"])
+        self.assertIn("1400 ppm", self.notifier.sent[0][1])
+        self.service.cottage.air["large"]["co2"] = 1100
+        self.assertEqual(len(self.check(30)), 1)                 # not yet fresh
+        self.service.cottage.air["large"]["co2"] = 900
+        self.assertEqual(len(self.check(1)), 1)                  # over: no notice
+        self.service.cottage.air["large"]["co2"] = 1300
+        self.check(1)
+        self.assertEqual(self.check(10)[1:], ["Tuuleta: Mökki"])
 
     def test_notice_that_was_not_sent_is_retried(self):
         self.notifier.ok = False

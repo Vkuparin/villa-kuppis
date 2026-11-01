@@ -58,6 +58,8 @@ DOMAIN = "villa_kuppis_cottage"
 VALID_MINUTES = 45          # three periods: a missed write or two is not a fallback
 RETRY_SECONDS = 60.0        # resend an unacknowledged target after this
 ACTOR = "Suunnitelma"
+HUMIDITY_RAISE_C = 2.0      # a damp room is kept this much above the base level
+HUMIDITY_CLEAR = 5.0        # until it is this many %-points below the limit
 # Automaatio off: the integration clamps this to its safe setpoint and the
 # short validity ends in fallback a minute later.
 RELEASE_TARGET = 0.0
@@ -146,6 +148,7 @@ class CottageTargetSender:
                  now: Callable[[], datetime], visits: VisitStore | None = None,
                  models: Callable[[], tuple] | None = None,
                  room_temps: Callable[[], Mapping[str, float]] | None = None,
+                 room_humidity: Callable[[], Mapping[str, float]] | None = None,
                  valid_minutes: float = VALID_MINUTES,
                  retry_seconds: float = RETRY_SECONDS):
         self._gateway = gateway
@@ -157,9 +160,11 @@ class CottageTargetSender:
         self._visits = visits
         self.visit_plan: VisitPlan | None = None
         # models() -> ({room: validated RoomModel}, outdoor forecast);
-        # room_temps() -> {room: °C now}.
+        # room_temps() -> {room: °C now}; room_humidity() -> {room: % now}.
         self._models = models
         self._room_temps = room_temps
+        self._room_humidity = room_humidity
+        self.damp: set[str] = set()              # rooms the humidity guard heats
         self._optimized: dict[str, tuple] = {}   # room -> (key, HeatPlan or None)
         self._valid_minutes = valid_minutes
         self._retry = timedelta(seconds=retry_seconds)
@@ -205,6 +210,7 @@ class CottageTargetSender:
                    for room in rooms}
             if self._models is not None:
                 self._optimize(out, overrides, ahead, extra)
+        self._humidity_guard(out, overrides)
         visit = self._visits.active() if self._visits is not None else None
         if visit is not None and visit.departure is not None and now >= visit.departure:
             self._visits.end(visit.departure)      # the departure time has come
@@ -239,6 +245,30 @@ class CottageTargetSender:
                 out[room] = [economic[room][i] if t.period_ts >= departure and t.reason == "visit"
                              else t for i, t in enumerate(steps)]
         return out
+
+    def _humidity_guard(self, out: dict[str, list[RoomTarget]], overrides: Mapping) -> None:
+        """Setting humidity_heat: a room over the humidity limit is kept at
+        least HUMIDITY_RAISE_C above its base level until the humidity is
+        HUMIDITY_CLEAR %-points below the limit. A missing reading keeps
+        the room as it was."""
+        values = app_settings.resolve(overrides, SITE)
+        if self._room_humidity is None or not values["humidity_heat"]["value"]:
+            self.damp.clear()
+            return
+        limit = values["humidity_limit_pct"]["value"]
+        humidity = self._room_humidity()
+        for room in out:
+            value = humidity.get(room)
+            if value is not None and value > limit:
+                self.damp.add(room)
+            elif value is not None and value < limit - HUMIDITY_CLEAR:
+                self.damp.discard(room)
+        for room in self.damp & set(out):
+            floor = app_settings.resolve(overrides, SITE, room)["heat_base_c"]["value"] \
+                + HUMIDITY_RAISE_C
+            out[room] = [t if t.target_c >= floor
+                         else RoomTarget(room, t.period_ts, floor, t.price_c_kwh, "humidity")
+                         for t in out[room]]
 
     def _optimize(self, out: dict[str, list[RoomTarget]], overrides: Mapping,
                   ahead: Sequence[Period], extra: float = 0.0) -> None:

@@ -76,7 +76,7 @@ DEFAULT_SAMPLE_INTERVAL = 15.0
 DEFAULT_TARGET_INTERVAL = 60.0     # price targets are sent at most this often
 VISITS_DB = "visits.db"
 PLAN_REASONS = {"base": "Perustaso", "threshold": "Hintaraja", "noprice": "Ei hintaa",
-                "optimized": "Optimoitu", "visit": "Vierailu"}
+                "optimized": "Optimoitu", "visit": "Vierailu", "humidity": "Kosteusvahti"}
 VISIT_ERRORS = (
     ("arrival time needs", "Saapumisajalla on oltava aikavyöhyke."),
     ("arrival time must be in the future", "Saapumisajan on oltava tulevaisuudessa."),
@@ -627,7 +627,8 @@ class CottageSite:
         """
         self._targets_cfg = {"prices_db": Path(prices_db), "overrides": overrides,
                              "automation_on": automation_on, "models": models,
-                             "room_temps": self.room_temperatures}
+                             "room_temps": self.room_temperatures,
+                             "room_humidity": self.room_humidity}
         self._after_tick = after_tick
 
     def _target_loop(self) -> None:
@@ -940,13 +941,20 @@ class CottageSite:
 
     def room_temperatures(self) -> dict[str, float]:
         """Each room's current temperature sensor value, when it is ok."""
+        return self._room_values("temperature")
+
+    def room_humidity(self) -> dict[str, float]:
+        """Each room's current relative humidity (%), when it is ok."""
+        return self._room_values("humidity")
+
+    def _room_values(self, role: str) -> dict[str, float]:
         snapshot = self._gateway.snapshot()
         out = {}
         for binding in sorted(self._bindings(), key=lambda b: b.device_id):
             state = snapshot.get(binding.device_id) or {}
             if (binding.room in ROOMS and binding.room not in out
-                    and self._role(binding, state) == "temperature"
-                    and reading_status("temperature", state, self._now()) == "ok"):
+                    and self._role(binding, state) == role
+                    and reading_status(role, state, self._now()) == "ok"):
                 value = _num(state.get("value"))
                 if value is not None:
                     out[binding.room] = value

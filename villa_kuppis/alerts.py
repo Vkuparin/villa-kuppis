@@ -25,6 +25,10 @@ runs the pumps' session reloader (``ha_pumps.SessionReloader``, setting
 It also reads the pumps' hourly energy (``ha_pumps.EnergyRecorder``) once
 an hour.
 
+A cottage room that has been over the humidity limit for a day gets a
+notice (``alert_humidity``), and during a visit a room over 1200 ppm CO2
+gets a reminder to air it (``alert_co2``, no notice when it is over).
+
 Cottage visit notices are sent once per visit (``CottageSite.visit_notices``):
 the rooms are warm (``alert_visit_warm``), a room will not be warm by the
 arrival (``alert_visit_late``), and a visit without a departure time is still
@@ -49,6 +53,11 @@ PUMP_AFTER = 1800.0
 SENSOR_AFTER = 3600.0
 HEATER_AFTER = 1800.0
 COLD_CLEAR_MARGIN = 1.0
+HUMIDITY_AFTER = 86400.0       # a damp day, not a damp hour
+HUMIDITY_CLEAR_MARGIN = 5.0    # %-points below the limit
+CO2_LIMIT = 1200
+CO2_CLEAR = 1000
+CO2_AFTER = 600.0
 VISIT_SETTINGS = {"warm": "alert_visit_warm", "late": "alert_visit_late",
                   "left": "alert_visit_left"}
 PHONE_PREFIX = "mobile_app_"
@@ -70,7 +79,7 @@ class Problem:
     site: str
     room: str | None
     start: tuple[str, str]     # title, message when it starts
-    end: tuple[str, str]       # title, message when it is over
+    end: tuple[str, str] | None   # title, message when it is over (None: no notice)
     after: float = 0.0         # seconds it must last before the notice
 
 
@@ -120,6 +129,7 @@ class AlertMonitor:
         self._interval = interval
         self._since: dict[str, datetime] = {}
         self._open: dict[str, Problem] = {}
+        self._pending: dict[str, Problem] = {}   # last seen, for a reading that goes stale
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -161,7 +171,7 @@ class AlertMonitor:
             # Old readings prove nothing: a cold room or a device problem
             # stays open, unreported.
             return out + [p for k, p in self._open.items()
-                          if k.startswith(("cold:", "device:"))]
+                          if k.startswith(("cold:", "device:", "humid:"))]
         for room in view["rooms"]:
             label = room_label(room["name"])
             sensor = room.get("temperature")
@@ -199,6 +209,53 @@ class AlertMonitor:
                                     f"Lämpötila on {_deg(value)}, alle hälytysrajan {_deg(limit)}."),
                                    (f"{room_label(room['name'])} on taas lämpimämpi",
                                     f"Lämpötila on noussut yli {_deg(limit + COLD_CLEAR_MARGIN)}.")))
+        site = app_settings.resolve(overrides, "cottage")
+        at_cottage = self._visit_on(cottage)
+        for room in view["rooms"]:
+            out += self._air_problems(room, site["humidity_limit_pct"]["value"], at_cottage)
+        return out
+
+    def _visit_on(self, cottage) -> bool:
+        """Someone is at the cottage: a visit is on and its arrival has come."""
+        active = getattr(cottage, "active_visit", None)
+        visit = active() if active is not None else None
+        return visit is not None and self._now() >= visit.arrival
+
+    def _air_problems(self, room, humidity_limit: float, at_cottage: bool) -> list[Problem]:
+        """A damp room (a day over the limit) and, during a visit, stale air."""
+        out = []
+        label = room_label(room["name"])
+        for role, key, over, clear in (
+                ("humidity", f"humid:{room['id']}", humidity_limit,
+                 humidity_limit - HUMIDITY_CLEAR_MARGIN),
+                ("co2", f"co2:{room['id']}", CO2_LIMIT, CO2_CLEAR)):
+            if role == "co2" and not at_cottage:
+                continue
+            sensor = room.get(role)
+            value = sensor.get("value") if sensor and sensor.get("status", "ok") == "ok" else None
+            known = key in self._since or key in self._open
+            if value is None:
+                if known:    # an old reading neither starts nor ends it
+                    out.append(self._open.get(key) or self._pending[key])
+                continue
+            if not (value > over or (known and value >= clear)):
+                continue
+            if role == "humidity":
+                problem = Problem(
+                    key, "alert_humidity", "cottage", room["id"],
+                    (f"{label} on kostea",
+                     f"Ilmankosteus on ollut vuorokauden yli {over:g} % (nyt {value:g} %). "
+                     "Jatkuva kosteus on homeriski: lämmitä tai tuuleta."),
+                    (f"{label}: kosteus on laskenut",
+                     f"Ilmankosteus on laskenut alle {clear:g} %."), HUMIDITY_AFTER)
+            else:
+                problem = Problem(
+                    key, "alert_co2", "cottage", room["id"],
+                    (f"Tuuleta: {label}",
+                     f"Hiilidioksidia on {value:.0f} ppm. Raikkaassa sisäilmassa sitä on alle "
+                     f"{CO2_CLEAR} ppm."), None, CO2_AFTER)
+            self._pending[key] = problem
+            out.append(problem)
         return out
 
     def check(self) -> None:
@@ -231,7 +288,7 @@ class AlertMonitor:
                 self._open[key] = problem
         for key in [k for k in self._open if k not in current]:
             problem = self._open[key]
-            if not enabled(problem) or self._notifier.send(*problem.end):
+            if not enabled(problem) or problem.end is None or self._notifier.send(*problem.end):
                 del self._open[key]
 
     def _visit_notices(self, overrides) -> None:

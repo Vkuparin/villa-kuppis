@@ -265,6 +265,25 @@ class TargetTests(IsolatedAsyncioTestCase):
         self.assertNotEqual(self.sender.last["large"].reason, "visit")
         self.assertIsNone(self.sender.visit_plan)
 
+    async def test_humidity_guard_heats_a_damp_room_until_it_dries(self):
+        humidity = {"large": 85.0, "small": 60.0}
+        self.sender._room_humidity = lambda: dict(humidity)
+        lowest = lambda room="large": min(t.target_c for t in self.sender.plans()[room])
+        plain = [t.target_c for t in self.sender.plans()["large"]]
+        self.assertEqual(min(plain), 5.0)                     # off by default
+        self.overrides = {"site:cottage": {"humidity_heat": True}}
+        plans = self.sender.plans()
+        self.assertEqual([t.target_c for t in plans["large"]], [max(v, 7.0) for v in plain])
+        self.assertEqual({t.reason for t in plans["large"] if t.target_c == 7.0}, {"humidity"})
+        self.assertEqual(lowest("small"), 5.0)
+        humidity["large"] = 78.0          # under the limit, but not 5 points under
+        self.assertEqual(lowest(), 7.0)
+        del humidity["large"]             # no reading: as it was
+        self.assertEqual(lowest(), 7.0)
+        humidity["large"] = 74.0
+        self.assertEqual(lowest(), 5.0)
+        self.assertEqual(self.sender.damp, set())
+
     async def test_plan_goes_with_the_target_to_an_integration_that_keeps_it(self):
         self.ha.schedules = True
         for room in ("large", "small"):
