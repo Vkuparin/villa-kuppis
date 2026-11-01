@@ -1,5 +1,15 @@
 # Muutokset
 
+## 0.4.34
+
+- Mökin huone ei enää pääse jäätymään pois kytketyn patterin tai käsiohjauksen takia: kun huone on alle turvalämmön (5 °C) tai sen lämpötilaa ei saada, pois kytketyt ja käsin pois käännetyt patterit pitävät turvalämmön. Vaatii mökin integraation 0.6.0 (aja install.sh mökin Home Assistantissa).
+- Mökin huoneen kortissa on Palauta automaatio -painike, kun huone on käsiohjauksessa.
+- Huoneen oppiminen laskee lämmitykseksi vain ajan, jolloin patterit oikeasti lämmittävät, ja alkaa alusta, kun huoneen anturi tai patteri vaihtuu. Opittujen nopeuksien kortissa on Aloita oppiminen alusta -painike: käytä sitä, kun patterit on siirretty mökille.
+- Opitun mallin testi vaatii, että huone on testijaksolla lämmennyt pattereilla ja jäähtynyt ilman niitä. Pelkkä tavoitteen pitäminen ei enää riitä hyväksyntään.
+- Automaation kytkeminen pois vapauttaa mökin huoneet myös Villa Kuppisin uudelleenkäynnistyksen jälkeen.
+- Optimoitu lämmitys ei laske huonetta perustason alle. Mökkikäynnin esilämmitys käyttää opittua mallia vain Optimoitu-tilassa ja varaa lämpenemiseen lisäaikaa.
+- Uusi ilmoitus, kun mökin lämpötila-anturilta ei ole saatu lukemaa tuntiin tai patteri ei ole vastannut 30 minuuttiin. Kylmähälytys ei käytä vanhentunutta lukemaa.
+
 ## 0.4.33
 
 - Mökin patterit pitävät oman historiansa, kun huoneeseen tulee uusi patteri tai patterien järjestys Home Assistantissa muuttuu. Aiemmin patterit numeroitiin uudelleen ja asetushistoria saattoi siirtyä väärän patterin nimelle.
