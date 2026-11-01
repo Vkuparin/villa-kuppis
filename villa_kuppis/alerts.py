@@ -24,6 +24,11 @@ runs the pumps' session reloader (``ha_pumps.SessionReloader``, setting
 ``pump_relogin``), so a pump alert comes only when the reload did not help.
 It also reads the pumps' hourly energy (``ha_pumps.EnergyRecorder``) once
 an hour.
+
+Cottage visit notices are sent once per visit (``CottageSite.visit_notices``):
+the rooms are warm (``alert_visit_warm``), a room will not be warm by the
+arrival (``alert_visit_late``), and a visit without a departure time is still
+on three days after the arrival (``alert_visit_left``).
 """
 
 from __future__ import annotations
@@ -44,6 +49,8 @@ PUMP_AFTER = 1800.0
 SENSOR_AFTER = 3600.0
 HEATER_AFTER = 1800.0
 COLD_CLEAR_MARGIN = 1.0
+VISIT_SETTINGS = {"warm": "alert_visit_warm", "late": "alert_visit_late",
+                  "left": "alert_visit_left"}
 PHONE_PREFIX = "mobile_app_"
 
 
@@ -204,6 +211,10 @@ class AlertMonitor:
         units = self._service.view()["units"]
         if self._reloader is not None:
             self._reloader.check(units, app_settings.resolve(overrides, "home")["pump_relogin"]["value"])
+        try:
+            self._visit_notices(overrides)
+        except Exception as error:
+            log.warning("Visit notices failed: %s", type(error).__name__)
         if self._energy is not None:
             try:
                 self._energy.check(self._service.store)
@@ -222,6 +233,20 @@ class AlertMonitor:
             problem = self._open[key]
             if not enabled(problem) or self._notifier.send(*problem.end):
                 del self._open[key]
+
+    def _visit_notices(self, overrides) -> None:
+        """Notices about the cottage visit, each once per visit."""
+        cottage = getattr(self._service, "cottage", None)
+        if cottage is None:
+            return
+        values = app_settings.resolve(overrides, "cottage")
+        for visit_id, kind, title, message in cottage.visit_notices():
+            if cottage.visit_notice_sent(visit_id, kind):
+                continue
+            if not values[VISIT_SETTINGS[kind]]["value"]:
+                cottage.mark_visit_notice(visit_id, kind)   # off now: not later either
+            elif self._notifier.send(title, message):
+                cottage.mark_visit_notice(visit_id, kind)
 
     # -- thread --
 

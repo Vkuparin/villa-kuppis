@@ -245,6 +245,26 @@ class TargetTests(IsolatedAsyncioTestCase):
         await self.settle(self.sender.tick())
         self.assertNotEqual(self.sender.last["large"].reason, "visit")
 
+    async def test_visit_ends_by_itself_at_the_departure(self):
+        from villa_kuppis.visit import VisitStore
+        visits = VisitStore(Path(self.tmp.name) / "visits.db")
+        self.addCleanup(visits.close)
+        self.sender._visits = visits
+        arrival = self.clock() + timedelta(hours=4)
+        departure = arrival + timedelta(hours=3)
+        visits.start(arrival, 21.0, ["large"], "Ville", self.clock(), departure)
+        await self.settle(self.sender.tick())
+        steps = self.sender.schedules["large"]
+        visit_steps = [s.period_ts for s in steps if s.reason == "visit"]
+        self.assertTrue(visit_steps)
+        self.assertLess(max(visit_steps), departure.timestamp())
+        self.assertGreater(steps[-1].period_ts, departure.timestamp())   # plan goes past it
+        self.clock.now = departure
+        await self.settle(self.sender.tick())
+        self.assertIsNone(visits.active())
+        self.assertNotEqual(self.sender.last["large"].reason, "visit")
+        self.assertIsNone(self.sender.visit_plan)
+
     async def test_plan_goes_with_the_target_to_an_integration_that_keeps_it(self):
         self.ha.schedules = True
         for room in ("large", "small"):

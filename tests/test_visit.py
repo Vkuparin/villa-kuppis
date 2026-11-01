@@ -115,6 +115,46 @@ class VisitStoreTests(unittest.TestCase):
                 with self.assertRaises(VisitError):
                     self.store.start(arrival, target, rooms, "Ville", NOW)
 
+    def test_departure_is_stored_and_checked(self):
+        departure = ARRIVAL + timedelta(days=2)
+        visit = self.store.start(ARRIVAL, 21.0, ["large"], "Ville", NOW, departure)
+        self.assertEqual(visit.departure, departure)
+        self.assertIsNone(self.store.start(ARRIVAL, 21.0, ["large"], "Ville", NOW).departure)
+        for bad in (ARRIVAL, ARRIVAL - timedelta(hours=1), ARRIVAL + timedelta(days=31),
+                    departure.replace(tzinfo=None)):
+            with self.subTest(departure=bad), self.assertRaises(VisitError):
+                self.store.start(ARRIVAL, 21.0, ["large"], "Ville", NOW, bad)
+
+    def test_notices_are_remembered_per_visit(self):
+        first = self.store.start(ARRIVAL, 21.0, ["large"], "Ville", NOW)
+        self.assertFalse(self.store.notice_sent(first.visit_id, "warm"))
+        self.store.mark_notice(first.visit_id, "warm", NOW)
+        self.store.mark_notice(first.visit_id, "warm", NOW + timedelta(hours=1))
+        self.assertTrue(self.store.notice_sent(first.visit_id, "warm"))
+        self.assertFalse(self.store.notice_sent(first.visit_id, "late"))
+        second = self.store.start(ARRIVAL, 21.0, ["large"], "Ville", NOW)
+        self.assertFalse(self.store.notice_sent(second.visit_id, "warm"))
+
+    def test_visits_stored_before_departures_still_load(self):
+        import sqlite3
+        path = Path(self.tmp.name) / "old.db"
+        conn = sqlite3.connect(path)
+        conn.executescript(
+            "CREATE TABLE cottage_visit (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "arrival_utc TEXT NOT NULL, target_c REAL NOT NULL, rooms_json TEXT NOT NULL, "
+            "created_by TEXT NOT NULL, created_at_utc TEXT NOT NULL, heat_start_utc TEXT, "
+            "ended_at_utc TEXT);")
+        conn.execute("INSERT INTO cottage_visit (arrival_utc, target_c, rooms_json, created_by, "
+                     "created_at_utc) VALUES (?, 21.0, '[\"large\"]', 'Ville', ?)",
+                     (ARRIVAL.isoformat(), NOW.isoformat()))
+        conn.commit()
+        conn.close()
+        store = VisitStore(path)
+        self.addCleanup(store.close)
+        visit = store.active()
+        self.assertEqual(visit.arrival, ARRIVAL)
+        self.assertIsNone(visit.departure)
+
 
 class SimulatedVisitTests(unittest.TestCase):
     def run_visit(self, outdoor: float) -> tuple[float, datetime]:

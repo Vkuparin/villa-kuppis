@@ -184,9 +184,12 @@ class VisitApiTests(unittest.TestCase):
     def test_visit_flow_in_the_demo(self):
         self.assertEqual(self.call("/api/visit"), (200, {"visit": None, "plan": None}))
         status, body = self.call("/api/visit", {"arrival": self.arrival(3), "target": 21,
-                                                "rooms": ["large", "small"]})
+                                                "rooms": ["large", "small"],
+                                                "departure": self.arrival(51)})
         self.assertEqual(status, 200)
         self.assertEqual(body["visit"]["target"], 21.0)
+        self.assertTrue(body["visit"]["departure"])
+        self.assertIn("progress", body)
         self.assertTrue(body["visit"]["created_by"])
         self.assertEqual(body["plan"]["reason"], "started")   # under 12 h away: heat now
         # The demo cottage acknowledges the visit target once the tick runs.
@@ -213,7 +216,10 @@ class VisitApiTests(unittest.TestCase):
                 ({"target": 40}, "5–25"),
                 ({"target": "kuuma"}, "luku"),
                 ({"rooms": []}, "vähintään yksi"),
-                ({"rooms": ["sauna"]}, "Tuntematon")):
+                ({"rooms": ["sauna"]}, "Tuntematon"),
+                ({"departure": self.arrival(4)}, "saapumisen jälkeen"),
+                ({"departure": self.arrival(24 * 40)}, "30 päivän"),
+                ({"departure": "huomenna"}, "Lähtöaika")):
             status, body = self.call("/api/visit", {**good, **change})
             self.assertEqual(status, 400, change)
             self.assertIn(text, body["detail"])

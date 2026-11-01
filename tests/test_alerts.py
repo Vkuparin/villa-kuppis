@@ -24,6 +24,17 @@ class FakeCottage:
         self.temps = {"large": 6.0, "small": 6.0}
         self.temp_status = {}             # room -> reading status other than ok
         self.heaters = {"large": [], "small": []}
+        self.notices = []                 # due visit notices
+        self.marked = set()
+
+    def visit_notices(self):
+        return list(self.notices)
+
+    def visit_notice_sent(self, visit_id, kind):
+        return (visit_id, kind) in self.marked
+
+    def mark_visit_notice(self, visit_id, kind):
+        self.marked.add((visit_id, kind))
 
     def view(self):
         names = {"large": "Mökki", "small": "Kammari"}
@@ -180,6 +191,22 @@ class MonitorTests(unittest.TestCase):
         self.service.cottage.connection = "ok"
         self.service.cottage.temps["large"] = 6.0
         self.assertEqual(len(self.check(1)), 2)
+
+    def test_visit_notices_go_once_each_and_follow_their_switches(self):
+        self.service.cottage.notices = [(1, "warm", "Mökki on lämmin", "Mökki 21 °C.")]
+        self.assertEqual(self.check(), ["Mökki on lämmin"])
+        self.assertEqual(self.check(1), ["Mökki on lämmin"])     # not again
+        self.settings.set("site:cottage", "alert_visit_late", False, "test")
+        self.service.cottage.notices = [(1, "late", "Mökki ei ehdi lämmetä ajoissa", "...")]
+        self.assertEqual(len(self.check(1)), 1)
+        self.assertIn((1, "late"), self.service.cottage.marked)   # switched off: dropped
+        self.notifier.ok = False
+        self.service.cottage.notices = [(2, "warm", "Mökki on lämmin", "")]
+        self.check(1)
+        self.assertNotIn((2, "warm"), self.service.cottage.marked)   # retried later
+        self.notifier.ok = True
+        self.check(1)
+        self.assertIn((2, "warm"), self.service.cottage.marked)
 
     def test_notice_that_was_not_sent_is_retried(self):
         self.notifier.ok = False

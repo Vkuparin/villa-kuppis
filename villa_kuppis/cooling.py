@@ -391,6 +391,15 @@ class CoolingAutomation:
             conn.close()
         return bool(row[0]) if row else False
 
+    def away_actor(self) -> str | None:
+        """Who last switched away mode (None when never)."""
+        conn = self._connect()
+        try:
+            row = conn.execute("SELECT actor FROM away_state WHERE id = 1").fetchone()
+        finally:
+            conn.close()
+        return row[0] if row else None
+
     def set_away(self, away: bool, actor: str = ACTOR) -> bool:
         """Turn away mode on or off and apply it at once when automation runs."""
         conn = self._connect()

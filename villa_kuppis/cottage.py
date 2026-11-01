@@ -53,6 +53,7 @@ from .ha_gateway import (DEFAULT_ENTITY_STALE_AFTER, Binding, BindingError,
                          BindingStore, HomeAssistantGateway)
 from .pump_service import (DB_FILENAME, HISTORY_INTERVAL_SECONDS, _iso,
                            _to_epoch)
+from .prices import HELSINKI
 from .visit import MAX_TARGET, MIN_TARGET, VisitError, VisitPlan, VisitStore
 
 SITE_ID = "cottage"
@@ -82,7 +83,11 @@ VISIT_ERRORS = (
     ("arrival time must be within", "Saapumisaika saa olla enintään 14 päivän päässä."),
     ("target must be", f"Tavoitteen on oltava {MIN_TARGET:g}–{MAX_TARGET:g} °C."),
     ("choose at least one room", "Valitse vähintään yksi huone."),
+    ("departure must be", "Lähdön on oltava saapumisen jälkeen ja enintään 30 päivän päästä siitä."),
 )
+VISIT_REACHED_MARGIN = 0.5     # a room counts as warm this close below the target
+VISIT_LEFT_AFTER = timedelta(hours=72)   # reminder of a visit without departure
+VISIT_AWAY_ACTOR = "Mökkivierailu"
 # Worst first: the state shown for a room is its worst reading.
 _STATUS_ORDER = ("missing", "unavailable", "stale", "unknown", "ok")
 _CONNECTION = {"ok": "ok", "stale": "stale", "auth_failed": "auth_failed"}
@@ -117,6 +122,11 @@ def _heater_state(row: tuple | None, ts: int, room_c: float | None,
     if target is not None and setpoint >= target - learning.DEADBAND_C:
         return "on"
     return None
+
+
+def _deg(value: float) -> str:
+    text = f"{value:.1f}".removesuffix(".0")
+    return text.replace(".", ",") + " °C"
 
 
 _WATTS_RE = re.compile(r"(\d{3,4})\s*w(?![a-z])", re.IGNORECASE)
@@ -607,15 +617,18 @@ class CottageSite:
 
     def configure_targets(self, *, prices_db, overrides: Callable[[], dict],
                           automation_on: Callable[[], bool],
-                          models: Callable[[], tuple] | None = None) -> None:
+                          models: Callable[[], tuple] | None = None,
+                          after_tick: Callable[[], None] | None = None) -> None:
         """Enable the price target sender; call before ``start``.
 
         ``models`` returns the validated room models and the outdoor
-        forecast for the heating optimizer (card F5.2).
+        forecast for the heating optimizer (card F5.2); ``after_tick`` runs
+        after each target tick (the home away mode during a visit).
         """
         self._targets_cfg = {"prices_db": Path(prices_db), "overrides": overrides,
                              "automation_on": automation_on, "models": models,
                              "room_temps": self.room_temperatures}
+        self._after_tick = after_tick
 
     def _target_loop(self) -> None:
         while not self._stop.wait(self._target_interval):
@@ -623,6 +636,12 @@ class CottageSite:
                 self.tick_targets()
             except Exception as error:
                 logging.error("Cottage target tick failed: %s", type(error).__name__)
+            after = getattr(self, "_after_tick", None)
+            if after is not None:
+                try:
+                    after()
+                except Exception as error:
+                    logging.error("After the cottage target tick: %s", type(error).__name__)
 
     def _ensure_sender(self) -> CottageTargetSender | None:
         """The sender for the rooms whose status sensor is bound (rebuilt when that changes)."""
@@ -765,6 +784,67 @@ class CottageSite:
                                   "clear_manual", None, "auto", ROOMS[room])
         return cmd
 
+    def active_visit(self):
+        return self._visits.active()
+
+    def visit_notice_sent(self, visit_id: int, kind: str) -> bool:
+        return self._visits.notice_sent(visit_id, kind)
+
+    def mark_visit_notice(self, visit_id: int, kind: str) -> None:
+        self._visits.mark_notice(visit_id, kind, self._now())
+
+    def _warming(self, room_id: str, now: datetime) -> dict | None:
+        """The room's fresh temperature and how fast it rose over the last
+        hour (°C/h, None with under 30 minutes of readings)."""
+        snapshot = self._gateway.snapshot()
+        for binding in sorted(self._bindings(), key=lambda b: b.device_id):
+            state = snapshot.get(binding.device_id) or {}
+            if binding.room != room_id or self._role(binding, state) != "temperature":
+                continue
+            value = _num(state.get("value"))
+            if reading_status("temperature", state, now) != "ok" or value is None:
+                return {"value": value, "fresh": False, "rate": None}
+            # Rows are stored on change, so the end point is the reading now.
+            rows = [(ts, v) for ts, v in self._store.series(
+                SITE_ID, binding.device_id, "value", now - timedelta(minutes=75), now, 100)
+                if v is not None]
+            span = now.timestamp() - rows[0][0] if rows else 0
+            rate = (value - rows[0][1]) * 3600 / span if span >= 1800 else None
+            return {"value": value, "fresh": True, "rate": rate}
+        return None
+
+    def _progress(self, visit, now: datetime) -> dict:
+        """Each visit room on its way to the target, once the heat-up has
+        begun: reached, the estimated time it gets there (eta) and late,
+        when it will not make the arrival or has not made it."""
+        plan = self._sender.visit_plan if self._sender is not None else None
+        start = visit.heat_start or (plan.start if plan is not None and plan.reason == "started" else None)
+        if start is None or now < start:
+            return {}
+        out = {}
+        for room in visit.rooms:
+            info = self._warming(room, now)
+            if info is None:
+                continue
+            item = {**info, "reached": False, "eta": None, "late": False}
+            goal = visit.target_c - VISIT_REACHED_MARGIN
+            if info["fresh"] and info["value"] >= goal:
+                item["reached"] = True
+            elif info["fresh"]:
+                rate = info["rate"]
+                if rate is not None and rate > 0.1:
+                    eta = now + timedelta(hours=(goal - info["value"]) / rate)
+                    item["eta"] = eta.isoformat()
+                    item["late"] = eta > visit.arrival + timedelta(minutes=15)
+                elif now - start >= timedelta(hours=1):
+                    item["late"] = True        # an hour of heating and no rise
+                if now >= visit.arrival:
+                    item["late"] = True
+            if info["rate"] is not None:
+                item["rate"] = round(info["rate"], 2)
+            out[room] = item
+        return out
+
     def visit_view(self) -> dict:
         visit = self._visits.active()
         if visit is None:
@@ -775,11 +855,43 @@ class CottageSite:
         return {
             "visit": {"arrival": visit.arrival.isoformat(), "target": visit.target_c,
                       "rooms": list(visit.rooms), "created_by": visit.created_by,
-                      "heat_start": visit.heat_start.isoformat() if visit.heat_start else None},
+                      "heat_start": visit.heat_start.isoformat() if visit.heat_start else None,
+                      "departure": visit.departure.isoformat() if visit.departure else None},
             "plan": ({"start": plan.start.isoformat(), "reason": plan.reason}
-                     if plan is not None else None)}
+                     if plan is not None else None),
+            "progress": self._progress(visit, self._now())}
 
-    def start_visit(self, arrival, target, rooms, actor: str) -> dict:
+    def visit_notices(self) -> list[tuple[int, str, str, str]]:
+        """Due phone notices of the active visit: (visit id, kind, title,
+        message), kind warm | late | left. The caller sends each once."""
+        visit = self._visits.active()
+        if visit is None:
+            return []
+        now = self._now()
+        out = []
+        progress = self._progress(visit, now)
+        names = lambda rooms: ", ".join(ROOMS.get(r, r) for r in rooms)
+        if progress and len(progress) == len(visit.rooms) and all(
+                p["reached"] for p in progress.values()):
+            out.append((visit.visit_id, "warm", "Mökki on lämmin",
+                        ", ".join(f"{ROOMS.get(r, r)} {_deg(p['value'])}" for r, p in progress.items())
+                        + f". Tavoite {_deg(visit.target_c)}."))
+        late = [r for r, p in progress.items() if p["late"] and not p["reached"]]
+        if late:
+            out.append((visit.visit_id, "late", "Mökki ei ehdi lämmetä ajoissa",
+                        f"{names(late)}: " + ", ".join(
+                            _deg(progress[r]["value"]) if progress[r]["fresh"] else "ei lukemaa"
+                            for r in late)
+                        + f". Tavoite {_deg(visit.target_c)} saapumiseen "
+                        + visit.arrival.astimezone(HELSINKI).strftime("%-d.%-m. klo %H.%M")
+                        + " mennessä ei ehkä toteudu."))
+        if visit.departure is None and now >= visit.arrival + VISIT_LEFT_AFTER:
+            out.append((visit.visit_id, "left", "Mökkivierailu on yhä päällä",
+                        f"Huoneet pidetään {_deg(visit.target_c)} lämmössä. Lopeta vierailu "
+                        "Villa Kuppisissa, jos olet jo lähtenyt mökiltä."))
+        return out
+
+    def start_visit(self, arrival, target, rooms, actor: str, departure=None) -> dict:
         """Start a visit from request values; raises ``VisitError`` (Finnish message)."""
         if not isinstance(arrival, str):
             raise VisitError("Saapumisaika puuttuu.")
@@ -787,6 +899,14 @@ class CottageSite:
             arrival_dt = datetime.fromisoformat(arrival)
         except ValueError:
             raise VisitError("Saapumisaika ei ole kelvollinen.") from None
+        departure_dt = None
+        if departure not in (None, ""):
+            try:
+                departure_dt = datetime.fromisoformat(departure) if isinstance(departure, str) else None
+            except ValueError:
+                departure_dt = None
+            if departure_dt is None:
+                raise VisitError("Lähtöaika ei ole kelvollinen.")
         if isinstance(target, bool) or not isinstance(target, (int, float)) \
                 or not math.isfinite(target):
             raise VisitError("Tavoitteen on oltava luku.")
@@ -795,7 +915,7 @@ class CottageSite:
             raise VisitError("Tuntematon huone.")
         try:
             self._visits.start(arrival_dt, float(target), [r for r in ROOMS if r in rooms],
-                               actor, self._now())
+                               actor, self._now(), departure_dt)
         except VisitError as error:
             message = str(error)
             raise VisitError(next((fi for key, fi in VISIT_ERRORS if message.startswith(key)),
@@ -1282,6 +1402,8 @@ SECTION_HTML = r"""
       <div class="visit-form">
         <label title="Milloin saavut mökille (Suomen aika). Ei oletusta.">Saapuminen
           <input type="datetime-local" id="visit-arrival"></label>
+        <label title="Milloin lähdet mökiltä (Suomen aika). Valinnainen: vierailu päättyy silloin itsestään. Tyhjänä vierailu jatkuu, kunnes lopetat sen.">Lähtö
+          <input type="datetime-local" id="visit-departure"></label>
         <label title="Huoneiden tavoitelämpötila vierailun ajaksi. Oletus 21 °C, sallittu 5–25 °C.">Tavoite (°C)
           <input type="number" id="visit-target" value="21" min="5" max="25" step="0.5"></label>
         <fieldset title="Huoneet, jotka lämmitetään vierailua varten. Oletuksena molemmat.">
@@ -1348,6 +1470,7 @@ section.cottage[hidden] { display: none; }
 .visit-form input[type=checkbox] { width: 1.2rem; height: 1.2rem; accent-color: var(--accent); }
 #visit-state { margin-bottom: .6rem; }
 #visit-state .visit-line { margin: .15rem 0; }
+#visit-state .visit-line.late { color: var(--warn); }
 #visit-state button { margin-top: .4rem; }
 .cottage-rooms .value.old { color: var(--text3); text-decoration: line-through; }
 @media (max-width: 560px) {
@@ -1623,6 +1746,9 @@ function vkHeaterSwitch(heater, onChange) {
   var $vState = document.getElementById("visit-state");
   var $vMsg = document.getElementById("visit-msg");
   var $vArrival = document.getElementById("visit-arrival");
+  var $vDeparture = document.getElementById("visit-departure");
+  var clock = new Intl.DateTimeFormat("fi-FI", { timeZone: "Europe/Helsinki",
+    hour: "2-digit", minute: "2-digit" });
   var VISIT = null;
   var stamp = new Intl.DateTimeFormat("fi-FI", { timeZone: "Europe/Helsinki", weekday: "short",
     day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -1669,17 +1795,35 @@ function vkHeaterSwitch(heater, onChange) {
         (started ? "Lämmitys alkoi " : "Lämmitys alkaa ") + stamp.format(new Date(plan.start)),
         HEAT_HELP + " " + (PLAN_HELP[plan.reason] || "")));
     }
-    $vState.appendChild(el("p", "visit-line", "Saapuminen " + stamp.format(new Date(v.arrival))));
+    $vState.appendChild(el("p", "visit-line", "Saapuminen " + stamp.format(new Date(v.arrival)) +
+      (v.departure ? " · lähtö " + stamp.format(new Date(v.departure)) : ""),
+      v.departure ? "Vierailu päättyy lähtöaikana itsestään." : "Vierailu jatkuu, kunnes lopetat sen."));
     $vState.appendChild(el("p", "visit-line", "Tavoite " + temp(v.target) + " · " +
       v.rooms.map(function (r) { return ROOM_NAMES[r] || r; }).join(", "),
       "Vierailun aloittanut: " + v.created_by));
     var heating = v.heat_start !== null || (plan && plan.reason === "started");
+    var progress = VISIT.progress || {};
     v.rooms.forEach(function (r) {
+      var p = progress[r];
+      if (p) {
+        var text = ROOM_NAMES[r] + ": " + (p.fresh ? temp(p.value) : "lukema vanhentunut");
+        if (p.reached) text += " · Tavoite saavutettu";
+        else {
+          if (p.rate !== null && p.rate !== undefined && p.rate > 0)
+            text += " · lämpenee " + num.format(p.rate) + " °C/h";
+          if (p.eta && !p.late) text += " · tavoitteessa n. klo " + clock.format(new Date(p.eta));
+          if (p.late) text += " · ei ehdi ajoissa";
+        }
+        $vState.appendChild(el("p", "visit-line" + (p.late && !p.reached ? " late" : ""), text,
+          "Tavoite katsotaan saavutetuksi, kun huoneanturin tuore lukema on enintään 0,5 °C alle tavoitteen. " +
+          "Arvio perustuu viimeisen tunnin lämpenemiseen."));
+        return;
+      }
       var info = roomReached(r, v.target);
       if (!heating || !info) return;
-      var text = ROOM_NAMES[r] + ": " + (info.fresh ? temp(info.value) : "lukema vanhentunut");
-      if (info.reached) text += " · Tavoite saavutettu";
-      $vState.appendChild(el("p", "visit-line", text,
+      var line = ROOM_NAMES[r] + ": " + (info.fresh ? temp(info.value) : "lukema vanhentunut");
+      if (info.reached) line += " · Tavoite saavutettu";
+      $vState.appendChild(el("p", "visit-line", line,
         "Tavoite katsotaan saavutetuksi vasta, kun huoneanturin tuore lukema on enintään 0,5 °C alle tavoitteen."));
     });
     var end = el("button", "", "Lopeta vierailu", "Lopettaa vierailun; huoneet palaavat hintaohjaukseen.");
@@ -1703,8 +1847,9 @@ function vkHeaterSwitch(heater, onChange) {
     if (!arrival) { $vMsg.textContent = "Valitse saapumisaika."; return; }
     var rooms = ["large", "small"].filter(function (r) {
       return document.getElementById("visit-" + r).checked; });
+    var departure = $vDeparture.value ? helsinkiToIso($vDeparture.value) : null;
     visitCall("api/visit", { arrival: arrival, target: parseFloat(document.getElementById("visit-target").value),
-      rooms: rooms });
+      rooms: rooms, departure: departure });
   });
   function loadVisit() {
     fetch("api/visit").then(function (r) { return r.json(); })

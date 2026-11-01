@@ -40,7 +40,7 @@ from aiomelcloudhome.models.ata import ATAFanSpeed, ATAOperationMode
 from . import learning, weather
 from .cooling import CoolingAutomation
 from .service import SpotPriceService
-from .settings import SettingsStore, price_extra, vat_factor
+from .settings import SettingsStore, price_extra, resolve, vat_factor
 from .pump_probe import (
     _default_client_factory,
     _operation_message,
@@ -1192,7 +1192,8 @@ class PumpService:
             self.cottage.configure_targets(
                 prices_db=self._prices_db, overrides=settings_store.overrides,
                 automation_on=self.cottage_automation_on,
-                models=self.cottage_heating_models)
+                models=self.cottage_heating_models,
+                after_tick=self.sync_visit_away)
         # Other Home Assistant devices by area (devices.py): ``device_sources``
         # gets the cottage site and returns {site: gateway}.
         from .cottage import ROOMS as COTTAGE_ROOMS
@@ -1591,6 +1592,24 @@ class PumpService:
             result = (models, (outdoor, future), ahead)
             self._models_cache[site] = (now, result)
             return result
+
+    def sync_visit_away(self) -> None:
+        """Home away mode during a cottage visit (setting visit_home_away):
+        on once the arrival time comes, off when the visit ends, unless
+        someone switched it since."""
+        if self.cottage is None:
+            return
+        from .cottage import VISIT_AWAY_ACTOR
+        visit = self.cottage.active_visit()
+        if visit is not None:
+            values = resolve(SettingsStore(self.store.path).overrides(), "cottage")
+            if (values["visit_home_away"]["value"] and self._now() >= visit.arrival
+                    and not self.cottage.visit_notice_sent(visit.visit_id, "home_away")):
+                self.cottage.mark_visit_notice(visit.visit_id, "home_away")
+                if not self.automation.away():
+                    self.automation.set_away(True, VISIT_AWAY_ACTOR)
+        elif self.automation.away() and self.automation.away_actor() == VISIT_AWAY_ACTOR:
+            self.automation.set_away(False, VISIT_AWAY_ACTOR)
 
     def test_alert(self, site) -> tuple[int, dict]:
         """Send a test phone notice (settings page, Ilmoitukset)."""

@@ -125,6 +125,13 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(S.price_extra(over, "home"), 0.0)
         self.assertTrue(S.BY_KEY["price_extra_c_kwh"].public()["site_only"])
 
+    def test_each_group_is_one_block_on_the_settings_page(self):
+        # The page starts a new heading whenever the group changes.
+        for kind in ("heat", "cool"):
+            groups = [d.group for d in S.DEFINITIONS if kind in d.kinds]
+            blocks = [g for i, g in enumerate(groups) if i == 0 or g != groups[i - 1]]
+            self.assertEqual(len(blocks), len(set(blocks)), kind)
+
     def test_cottage_heating_texts_match_what_is_built(self):
         # The thresholds drive the cottage; the storage band only the optimizer.
         for key in ("heat_base_c", "heat_rule1_price_c_kwh", "heat_rule1_c",

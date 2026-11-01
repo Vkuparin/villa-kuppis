@@ -206,6 +206,9 @@ class CottageTargetSender:
             if self._models is not None:
                 self._optimize(out, overrides, ahead, extra)
         visit = self._visits.active() if self._visits is not None else None
+        if visit is not None and visit.departure is not None and now >= visit.departure:
+            self._visits.end(visit.departure)      # the departure time has come
+            visit = None
         if visit is None:
             self.visit_plan = None
             return out
@@ -217,6 +220,7 @@ class CottageTargetSender:
                 self._visits.mark_started(visit.visit_id, now)
                 plan = VisitPlan(now, "started", None)
         self.visit_plan = plan
+        economic = {room: list(steps) for room, steps in out.items()}
         learned = self._optimize_visit(out, visit, plan, overrides, periods, now, extra)
         for room, steps in out.items():
             if room in learned:
@@ -228,6 +232,12 @@ class CottageTargetSender:
                 value = visit_target(visit, room, at, plan)
                 if value is not None:
                     steps[i] = RoomTarget(room, target.period_ts, value, target.price_c_kwh, "visit")
+        if visit.departure is not None:
+            # The schedule the cottage keeps goes back to the economic plan at departure.
+            departure = visit.departure.timestamp()
+            for room, steps in out.items():
+                out[room] = [economic[room][i] if t.period_ts >= departure and t.reason == "visit"
+                             else t for i, t in enumerate(steps)]
         return out
 
     def _optimize(self, out: dict[str, list[RoomTarget]], overrides: Mapping,

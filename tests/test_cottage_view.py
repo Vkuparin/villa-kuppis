@@ -696,3 +696,155 @@ class RoleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VisitProgressTests(unittest.TestCase):
+    """The visit card's progress lines and the phone notices built from them."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.clock = [datetime(2026, 11, 20, 6, 0, tzinfo=timezone.utc)]
+        now = lambda: self.clock[0]
+        self.gateway = cottage.FakeSiteGateway(now=now)
+        self.site = CottageSite(self.tmp.name, self.gateway, self.gateway.bindings, now=now)
+        self.gateway.start()
+        self.addCleanup(self.site.stop)
+        self.arrival = self.clock[0] + timedelta(hours=10)
+
+    def start(self, rooms=("large", "small"), departure=None, started=True):
+        self.site.start_visit(self.arrival.isoformat(), 21, list(rooms), "Ville",
+                              departure.isoformat() if departure else None)
+        visit = self.site.active_visit()
+        if started:
+            self.site._visits.mark_started(visit.visit_id, self.clock[0])
+        return visit
+
+    def warming(self, **rooms):
+        """Room -> (value, rate) with fresh readings."""
+        self.site._warming = lambda room, now: (
+            {"value": rooms[room][0], "fresh": True, "rate": rooms[room][1]}
+            if room in rooms else None)
+
+    def kinds(self):
+        return [kind for _, kind, _, _ in self.site.visit_notices()]
+
+    def test_nothing_shows_before_the_heat_up(self):
+        self.start(started=False)
+        self.warming(large=(8.0, None), small=(8.0, None))
+        self.assertEqual(self.site.visit_view()["progress"], {})
+        self.assertEqual(self.kinds(), [])
+
+    def test_warm_notice_once_every_room_is_near_the_target(self):
+        self.start()
+        self.warming(large=(20.6, 1.0), small=(15.0, 2.0))
+        progress = self.site.visit_view()["progress"]
+        self.assertTrue(progress["large"]["reached"])
+        self.assertFalse(progress["small"]["reached"])
+        self.assertFalse(progress["small"]["late"])          # 2 °C/h makes it in time
+        self.assertEqual(datetime.fromisoformat(progress["small"]["eta"]),
+                         self.clock[0] + timedelta(hours=2.75))
+        self.assertEqual(self.kinds(), [])
+        self.warming(large=(20.6, 1.0), small=(21.0, 0.5))
+        notices = self.site.visit_notices()
+        self.assertEqual([n[1] for n in notices], ["warm"])
+        self.assertEqual(notices[0][2], "Mökki on lämmin")
+        self.assertEqual(notices[0][3], "Mökki 20,6 °C, Kammari 21 °C. Tavoite 21 °C.")
+
+    def test_a_slow_room_gets_a_late_notice(self):
+        self.start()
+        self.warming(large=(20.6, 1.0), small=(10.0, 0.5))   # 21 h to go, arrival in 10 h
+        self.assertTrue(self.site.visit_view()["progress"]["small"]["late"])
+        notices = self.site.visit_notices()
+        self.assertEqual([n[1] for n in notices], ["late"])
+        self.assertTrue(notices[0][3].startswith("Kammari: 10 °C. Tavoite 21 °C saapumiseen 20.11."))
+
+    def test_no_rise_in_an_hour_or_short_at_arrival_is_late(self):
+        self.start(rooms=("large",))
+        self.warming(large=(9.0, None))
+        self.clock[0] += timedelta(minutes=59)
+        self.assertFalse(self.site.visit_view()["progress"]["large"]["late"])
+        self.clock[0] += timedelta(minutes=2)
+        self.assertTrue(self.site.visit_view()["progress"]["large"]["late"])
+        self.warming(large=(19.0, 3.0))
+        self.assertFalse(self.site.visit_view()["progress"]["large"]["late"])
+        self.clock[0] = self.arrival
+        self.assertTrue(self.site.visit_view()["progress"]["large"]["late"])
+
+    def test_a_forgotten_visit_without_departure_gets_a_reminder(self):
+        self.start(rooms=("large",))
+        self.warming(large=(21.0, 0.0))
+        self.clock[0] = self.arrival + timedelta(hours=71)
+        self.assertNotIn("left", self.kinds())
+        self.clock[0] = self.arrival + timedelta(hours=72)
+        self.assertIn("left", self.kinds())
+
+    def test_a_visit_with_a_departure_gets_no_reminder(self):
+        self.start(rooms=("large",), departure=self.arrival + timedelta(days=5))
+        self.warming(large=(21.0, 0.0))
+        self.clock[0] = self.arrival + timedelta(days=4)
+        self.assertNotIn("left", self.kinds())
+
+    def test_warming_rate_comes_from_the_recorded_readings(self):
+        self.start(rooms=("large",))
+        values = []
+        for _ in range(7):                       # an hour of readings, every 10 minutes
+            self.site.sample()
+            values.append(self.gateway.snapshot()["large-temperature"]["value"])
+            self.clock[0] += timedelta(minutes=10)
+        self.clock[0] -= timedelta(minutes=10)
+        info = self.site._warming("large", self.clock[0])
+        self.assertTrue(info["fresh"])
+        self.assertEqual(info["value"], values[-1])
+        self.assertAlmostEqual(info["rate"], values[-1] - values[0], places=6)
+
+
+class VisitAwayTests(unittest.TestCase):
+    """Setting visit_home_away: the home is away while the cottage visit is on."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.clock = [datetime(2026, 11, 20, 6, 0, tzinfo=timezone.utc)]
+        now = lambda: self.clock[0]
+        def factory(data):
+            gateway = cottage.FakeSiteGateway(now=now)
+            return CottageSite(data, gateway, gateway.bindings, now=now, sample_interval=3600)
+        self.service = PumpService(
+            self.tmp.name, client=FakeClient([_unit_payload("u1", "Yksikkö", mode="Cool")]),
+            now=now, poll_interval=0.05, stale_after=60, readback_delay=0.01,
+            cottage_factory=factory)
+        self.addCleanup(self.service.close)
+        self.arrival = self.clock[0] + timedelta(hours=10)
+        self.service.cottage.start_visit(self.arrival.isoformat(), 21, ["large"], "Ville")
+
+    def test_off_by_default(self):
+        self.clock[0] = self.arrival
+        self.service.sync_visit_away()
+        self.assertFalse(self.service.automation.away())
+
+    def test_away_from_the_arrival_until_the_visit_ends(self):
+        from villa_kuppis.settings import SettingsStore
+        SettingsStore(self.service.store.path).set("site:cottage", "visit_home_away", True, "test")
+        self.service.sync_visit_away()
+        self.assertFalse(self.service.automation.away())          # not arrived yet
+        self.clock[0] = self.arrival
+        self.service.sync_visit_away()
+        self.assertTrue(self.service.automation.away())
+        self.service.automation.set_away(False, "Ville")          # a person's choice stays
+        self.service.sync_visit_away()
+        self.assertFalse(self.service.automation.away())
+        self.service.automation.set_away(True, "Ville")
+        self.service.cottage.end_visit()
+        self.service.sync_visit_away()
+        self.assertTrue(self.service.automation.away())           # switched by a person
+
+    def test_visit_end_clears_the_away_it_set(self):
+        from villa_kuppis.settings import SettingsStore
+        SettingsStore(self.service.store.path).set("site:cottage", "visit_home_away", True, "test")
+        self.clock[0] = self.arrival
+        self.service.sync_visit_away()
+        self.assertTrue(self.service.automation.away())
+        self.service.cottage.end_visit()
+        self.service.sync_visit_away()
+        self.assertFalse(self.service.automation.away())
