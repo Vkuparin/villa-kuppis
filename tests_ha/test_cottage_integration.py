@@ -210,12 +210,16 @@ async def test_switched_off_heater_is_kept_off(hass, calls, hass_storage, freeze
     await set_target(hass, "large", 18, revision=1)
     set_heater(hass, "climate.mill_1", 21.0)
     set_heater(hass, "climate.mill_2", 21.0)
+    hass.states.async_set("sensor.alpstuga_large", "12.0", {"unit_of_measurement": "°C"})
     freezer.tick(timedelta(minutes=2))   # past the per-heater command interval
+    calls.clear()
     await hass.services.async_call(DOMAIN, "set_heater_enabled",
                                    {"entity_id": "climate.mill_2", "enabled": False},
                                    blocking=True)
     await hass.async_block_till_done()
     assert [(c.data["entity_id"], c.data["hvac_mode"]) for c in modes] == [("climate.mill_2", "off")]
+    # The safe setpoint first, so a heater that ignores off holds only that.
+    assert ("climate.mill_2", 7.0) in sent(calls)
     assert status(hass).attributes["disabled_heaters"] == ["climate.mill_2"]
     assert status(hass, "small").attributes["disabled_heaters"] == []
     assert status(hass).attributes["mode"] == "follow"
@@ -224,6 +228,48 @@ async def test_switched_off_heater_is_kept_off(hass, calls, hass_storage, freeze
         await hass.services.async_call(DOMAIN, "set_heater_enabled",
                                        {"entity_id": "climate.sauna", "enabled": False},
                                        blocking=True)
+
+
+async def test_switched_off_heater_still_keeps_a_cold_room_from_freezing(hass, calls, freezer):
+    modes = async_mock_service(hass, "climate", "set_hvac_mode")
+    set_heater(hass, "climate.mill_4", 7.0, mode="off")
+    hass_storage_disabled = {"entity_id": "climate.mill_4", "enabled": False}
+    await setup(hass)
+    await set_target(hass, "small", 7, revision=1)
+    await hass.services.async_call(DOMAIN, "set_heater_enabled", hass_storage_disabled,
+                                   blocking=True)
+    await hass.async_block_till_done()
+    assert status(hass, "small").attributes["room_temperature"] == 6.5   # below 7 °C
+    assert ("climate.mill_4", "heat") in [(c.data["entity_id"], c.data["hvac_mode"]) for c in modes]
+    assert "frost guard" in status(hass, "small").attributes["reason"]
+
+
+async def test_far_future_revision_does_not_lock_out_targets(hass, calls, hass_storage):
+    future = dt_util.utcnow() + timedelta(days=10)
+    hass_storage[DOMAIN] = {"version": 1, "minor_version": 1, "key": DOMAIN, "data": {
+        "targets": {"large": {"value": 10.0, "revision": int(future.timestamp()),
+                              "valid_until": future.isoformat(), "schedule": []}}}}
+    await setup(hass)
+    now = int(dt_util.utcnow().timestamp())
+    await set_target(hass, "large", 18, revision=now)
+    assert status(hass).attributes["revision"] == now
+    with pytest.raises(ServiceValidationError):
+        await set_target(hass, "large", 18, revision=now - 900)
+
+
+async def test_refused_heater_command_does_not_stop_the_others(hass, calls, caplog):
+    from homeassistant.exceptions import HomeAssistantError
+    accepted = []
+
+    async def handler(call):
+        if call.data["entity_id"] == "climate.mill_1":
+            raise HomeAssistantError("value out of range")
+        accepted.append(call.data["entity_id"])
+    hass.services.async_register("climate", "set_temperature", handler)
+    await setup(hass)
+    await set_target(hass, "large", 18, revision=1)
+    assert accepted == ["climate.mill_2"]
+    assert "set_temperature climate.mill_1 21.0 failed: value out of range" in caplog.text
 
 
 async def test_switched_off_heaters_are_restored_after_a_restart(hass, calls, hass_storage):

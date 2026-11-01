@@ -18,6 +18,7 @@ and keeps the targets and switched-off heaters across restarts.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta
 import logging
 
@@ -51,6 +52,11 @@ STORAGE_VERSION = 1
 UNAVAILABLE = ("unavailable", "unknown")
 SCHEDULE_STEP = timedelta(minutes=15)   # the last step's length
 SCHEDULE_MAX = timedelta(hours=48)
+COMMAND_TIMEOUT = 15.0                  # seconds for one heater command
+# Revisions are Villa Kuppis's period start times (epoch seconds). A stored
+# revision this far ahead of the cottage clock came from a wrong clock and
+# must not lock out every later target.
+REVISION_FUTURE_LIMIT = 86400
 
 _DEFAULTS = control.Settings()
 
@@ -296,10 +302,11 @@ class CottageController:
     async def async_set_target(self, call: ServiceCall) -> None:
         room = self._room(call.data["room"])
         revision = call.data["revision"]
-        if room.target is not None and revision < room.target.revision:
+        now = dt_util.utcnow()
+        if (room.target is not None and revision < room.target.revision
+                and room.target.revision <= now.timestamp() + REVISION_FUTURE_LIMIT):
             raise ServiceValidationError(
                 f"Revision {revision} is older than the stored revision {room.target.revision}")
-        now = dt_util.utcnow()
         valid_until = now + timedelta(minutes=call.data["valid_minutes"])
         schedule = tuple(sorted((dt_util.as_utc(step["start"]), step["target"])
                                 for step in call.data["schedule"]))
@@ -353,11 +360,15 @@ class CottageController:
             data = {"entity_id": cmd.entity_id}
             data["hvac_mode" if cmd.service == "set_hvac_mode" else ATTR_TEMPERATURE] = cmd.value
             try:
-                await self.hass.services.async_call("climate", cmd.service, data,
-                                                    blocking=False, context=self.context)
+                # Blocking, in order: a refused write is seen here (and in the
+                # status after repeated tries), and a safe setpoint lands
+                # before the off that follows it.
+                async with asyncio.timeout(COMMAND_TIMEOUT):
+                    await self.hass.services.async_call("climate", cmd.service, data,
+                                                        blocking=True, context=self.context)
             except Exception as err:   # one heater must not stop the others
-                _LOGGER.warning("%s: %s %s failed: %s", room.name, cmd.service,
-                                cmd.entity_id, err)
+                _LOGGER.warning("%s: %s %s %s failed: %s", room.name, cmd.service,
+                                cmd.entity_id, cmd.value, err or type(err).__name__)
 
     async def async_evaluate_all(self, *_args) -> None:
         for room in self.rooms.values():

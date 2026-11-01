@@ -325,6 +325,92 @@ class SwitchedOffHeaterTests(unittest.TestCase):
                 self.assertEqual(heater.setpoint, SETTINGS.safe_setpoint)
 
 
+class FrostGuardTests(unittest.TestCase):
+    def test_switched_off_only_heater_still_keeps_the_room_from_freezing(self):
+        heater = SimHeater("climate.kammari", 1000, setpoint=5.0)
+        sim = Sim(Room([heater], temp=8.0, outdoor=-10.0), target=5.0)
+        heater.enabled = False
+        sim.run(30)
+        self.assertEqual(heater.mode, "off")     # warm enough: the switch is obeyed
+        sim.run(12 * 60)
+        self.assertEqual(heater.mode, "heat")
+        self.assertEqual(heater.setpoint, SETTINGS.safe_setpoint)
+        self.assertGreater(min(sim.temps_since(START + timedelta(hours=6))), 3.0)
+        self.assertIn("frost guard", sim.decisions[-1][1].reason)
+        self.assertNotIn("manual", sim.modes_since(START))
+        sim.room.temp = 15.0                     # warmed by something else
+        sim.run(10)
+        self.assertEqual(heater.mode, "off")
+
+    def test_switched_off_heater_holds_the_safe_setpoint_without_a_room_reading(self):
+        heater = SimHeater("climate.kammari", 1000, setpoint=5.0)
+        sim = Sim(Room([heater], temp=12.0), target=8.0)
+        heater.enabled = False
+        sim.run(10)
+        self.assertEqual(heater.mode, "off")
+        sim.sensor_override = control.Sensor(None, None)
+        sim.run(10)
+        self.assertEqual(sim.decisions[-1][1].mode, "thermostat")
+        self.assertEqual((heater.mode, heater.setpoint), ("heat", SETTINGS.safe_setpoint))
+
+    def test_manual_hold_does_not_let_the_room_freeze(self):
+        heater = SimHeater("climate.kammari", 1000, setpoint=5.0)
+        sim = Sim(Room([heater], temp=7.0, outdoor=-15.0), target=6.0)
+        sim.run(30)
+        heater.mode = "off"                      # turned off from Google Home
+        sim.run(4 * 60 - 40)
+        self.assertEqual(sim.decisions[-1][1].mode, "manual")
+        self.assertEqual(heater.mode, "heat")
+        self.assertEqual(heater.setpoint, SETTINGS.safe_setpoint)
+        self.assertIn("frost guard", sim.decisions[-1][1].reason)
+        self.assertGreater(min(sim.temps_since(START + timedelta(hours=2))), 3.0)
+
+    def test_frost_guard_never_turns_a_persons_setpoint_down(self):
+        heater = SimHeater("climate.kammari", 1000, setpoint=5.0)
+        sim = Sim(Room([heater], temp=3.0, outdoor=-15.0), target=5.0)
+        sim.run(5)
+        heater.setpoint = 21.0                   # someone arrives and turns it up
+        mark = len(sim.commands)
+        sim.run(30)
+        self.assertEqual(sim.decisions[-1][1].mode, "manual")
+        self.assertEqual(heater.setpoint, 21.0)
+        self.assertEqual(sim.commands[mark:], [])
+
+
+class DeviceFitTests(unittest.TestCase):
+    def test_heater_rounding_the_setpoint_is_not_a_manual_change(self):
+        sim = Sim(large_room(temp=6.0), target=7.5)
+        original = sim.room.apply
+
+        def whole_degrees(commands):
+            original([replace(c, value=float(round(c.value)))
+                      if c.service == "set_temperature" else c for c in commands])
+        sim.room.apply = whole_degrees
+        sim.run(3 * 60)
+        self.assertNotIn("manual", sim.modes_since(START))
+        self.assertLessEqual(sim.max_commands_per_hour(), 9)
+
+    def test_switching_off_lowers_the_setpoint_before_off(self):
+        sim = Sim(large_room(temp=6.0), target=18.0)
+        heater = sim.room.heaters[0]
+        sim.run(10)
+        self.assertEqual(heater.setpoint, 21.0)
+        heater.enabled = False
+        mark = len(sim.commands)
+        sim.run(5)
+        sent = [(c.service, c.value) for _, c in sim.commands[mark:]
+                if c.entity_id == heater.entity_id]
+        self.assertEqual(sent[:2], [("set_temperature", SETTINGS.safe_setpoint),
+                                    ("set_hvac_mode", "off")])
+
+    def test_status_names_a_heater_that_keeps_ignoring_commands(self):
+        sim = Sim(large_room(temp=10.0), target=18.0)
+        sim.room.heaters[0].ignore_commands = True
+        sim.run(30)
+        self.assertIn("climate.mill_1 does not take 21 °C", sim.decisions[-1][1].reason)
+        self.assertNotIn("mill_2", sim.decisions[-1][1].reason)
+
+
 class SetpointTests(unittest.TestCase):
     def test_clamp_and_round_to_the_heater_step(self):
         h = control.Heater("climate.x", True, "heat", 10.0, 5.0, 35.0, 0.5)
