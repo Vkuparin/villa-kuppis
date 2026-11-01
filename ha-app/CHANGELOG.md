@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.33
+
+- Mökin patterit pitävät oman historiansa, kun huoneeseen tulee uusi patteri tai patterien järjestys Home Assistantissa muuttuu. Aiemmin patterit numeroitiin uudelleen ja asetushistoria saattoi siirtyä väärän patterin nimelle.
+
 ## 0.4.32
 
 - Kodin huoneet nimetään Home Assistantin alueiden mukaan: lämpöpumpun huone on sen alueen nimi (esim. Makuuhuone-pumppu näkyy nyt Iso huone -huoneena). Kun alueen nimeää uudelleen tai pumpun siirtää toiselle alueelle Home Assistantissa, nimi vaihtuu heti. Huoneiden historia ja asetukset säilyvät.

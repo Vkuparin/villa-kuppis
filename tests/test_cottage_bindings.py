@@ -102,10 +102,35 @@ class FollowPublishedTest(unittest.TestCase):
             "large-heater-1": "climate.mill_iso_huone_2",
             "large-heater-2": "climate.mill_iso_huone_1",
         })
-        # The two heaters swap device ids without a unique-entity conflict.
+        # A new order keeps each heater on its device id (and its history).
         publish(self.gateway, "large", {**real, "heaters": list(reversed(real["heaters"]))})
+        self.assertFalse(self.site.follow_published())
+        self.assertEqual(self.bound()["large-heater-1"], "climate.mill_iso_huone_2")
+
+    def test_a_new_heater_in_the_area_does_not_renumber_the_others(self):
+        # Cottage 2026-11-01: two Mills joined Mökki and sort before the first one.
+        publish(self.gateway, "large", {"heaters": ["climate.mokki_mokki_500w_patteri"]})
         self.site.follow_published()
-        self.assertEqual(self.bound()["large-heater-1"], "climate.mill_iso_huone_1")
+        publish(self.gateway, "large", {"heaters": [
+            "climate.mokki_jarvenpuoli_1050w_patteri", "climate.mokki_mokki_500w_patteri",
+            "climate.mokki_tienpuoli_1050w_patteri"]})
+        self.assertTrue(self.site.follow_published())
+        self.assertEqual(self.bound(), {
+            "large-status": "sensor.villa_kuppis_large_target",
+            "large-heater-1": "climate.mokki_mokki_500w_patteri",
+            "large-heater-2": "climate.mokki_jarvenpuoli_1050w_patteri",
+            "large-heater-3": "climate.mokki_tienpuoli_1050w_patteri",
+        })
+        # One leaves the area: the others keep their numbers, the gap is reused.
+        publish(self.gateway, "large", {"heaters": [
+            "climate.mokki_mokki_500w_patteri", "climate.mokki_tienpuoli_1050w_patteri"]})
+        self.site.follow_published()
+        publish(self.gateway, "large", {"heaters": [
+            "climate.kammari_x", "climate.mokki_mokki_500w_patteri",
+            "climate.mokki_tienpuoli_1050w_patteri"]})
+        self.site.follow_published()
+        self.assertEqual(self.bound()["large-heater-2"], "climate.kammari_x")
+        self.assertEqual(self.bound()["large-heater-3"], "climate.mokki_tienpuoli_1050w_patteri")
 
     def test_rooms_without_published_devices_are_left_alone(self):
         self.store.bind("cottage", "small-temperature", "sensor.manual_small", "sensor",

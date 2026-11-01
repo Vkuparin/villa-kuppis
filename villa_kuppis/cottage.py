@@ -146,8 +146,15 @@ def status_entity(room: str) -> str:
     return f"sensor.villa_kuppis_{room}_target"
 
 
-def published_bindings(room: str, devices, label_of: Callable[[str], str]) -> list:
-    """The bindings a room status sensor's ``devices`` attribute asks for."""
+def published_bindings(room: str, devices, label_of: Callable[[str], str],
+                       bound_heaters: dict | None = None) -> list:
+    """The bindings a room status sensor's ``devices`` attribute asks for.
+
+    ``bound_heaters`` maps heater entities already bound in the room to
+    their device ids: those keep their id (and so their history) when the
+    cottage lists the room's heaters in another order, for example after a
+    new heater joins the area. New heaters take the lowest free number.
+    """
     out = [Binding(SITE_ID, f"{room}-status", status_entity(room), "sensor",
                    f"{ROOMS[room]}: tila", room)]
     if not isinstance(devices, dict):
@@ -158,10 +165,23 @@ def published_bindings(room: str, devices, label_of: Callable[[str], str]) -> li
             out.append(Binding(SITE_ID, f"{room}-{role}", entity_id, "sensor",
                                label_of(entity_id), room))
     heaters = devices.get("heaters")
-    for index, entity_id in enumerate(heaters if isinstance(heaters, list) else [], start=1):
-        if isinstance(entity_id, str) and entity_id.startswith("climate."):
-            out.append(Binding(SITE_ID, f"{room}-heater-{index}", entity_id, "climate",
-                               label_of(entity_id), room))
+    heaters = [e for e in (heaters if isinstance(heaters, list) else [])
+               if isinstance(e, str) and e.startswith("climate.")]
+    heaters = list(dict.fromkeys(heaters))
+    kept = {e: d for e, d in (bound_heaters or {}).items()
+            if e in heaters and d.startswith(f"{room}-heater-")}
+    used = set(kept.values())
+    index = 0
+    for entity_id in heaters:
+        device_id = kept.get(entity_id)
+        if device_id is None:
+            index += 1
+            while f"{room}-heater-{index}" in used:
+                index += 1
+            device_id = f"{room}-heater-{index}"
+            used.add(device_id)
+        out.append(Binding(SITE_ID, device_id, entity_id, "climate",
+                           label_of(entity_id), room))
     return out
 
 
@@ -700,8 +720,11 @@ class CottageSite:
             attrs = attributes(status_entity(room))
             if attrs is None or "devices" not in attrs:
                 continue   # an older integration or not connected: keep what is bound
-            wanted = {b.device_id: b for b in published_bindings(room, attrs["devices"], label_of)}
             ours = [d for d, b in current.items() if b.room == room]
+            bound_heaters = {current[d].entity_id: d for d in ours
+                             if current[d].kind == "climate"}
+            wanted = {b.device_id: b for b in published_bindings(
+                room, attrs["devices"], label_of, bound_heaters)}
             # Unbind first, so an entity can move between device ids.
             for device_id in ours:
                 if device_id not in wanted or current[device_id].entity_id != wanted[device_id].entity_id:
