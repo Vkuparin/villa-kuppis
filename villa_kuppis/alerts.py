@@ -8,8 +8,14 @@ problem starts, and another when it is over:
   ``cold_alert_c``); it is over 1 °C above the limit, so a reading at the
   limit does not flap;
 * the cottage Home Assistant unreachable for 30 minutes (``alert_offline``);
+* a cottage room without a fresh temperature reading for an hour, or a
+  cottage heater unavailable for 30 minutes (``alert_device``);
 * a home pump unavailable or reporting a device error for 30 minutes
   (``alert_pump``, also per pump).
+
+A stale room reading is not used for the cold alert: an old value proves
+nothing, so an open cold alert stays open and a new one waits for a fresh
+reading.
 
 Each alert has its own switch setting, named above. Open problems live in
 memory, so a problem that persists over a restart is reported again. A
@@ -33,6 +39,8 @@ log = logging.getLogger(__name__)
 CHECK_INTERVAL = 60.0
 OFFLINE_AFTER = 1800.0
 PUMP_AFTER = 1800.0
+SENSOR_AFTER = 3600.0
+HEATER_AFTER = 1800.0
 COLD_CLEAR_MARGIN = 1.0
 PHONE_PREFIX = "mobile_app_"
 
@@ -132,11 +140,36 @@ class AlertMonitor:
                                 "mökin Home Assistantiin 30 minuuttiin."),
                                ("Mökki vastaa taas", "Yhteys mökin Home Assistantiin toimii taas."),
                                OFFLINE_AFTER))
-            # Old readings prove nothing: a cold room stays open, unreported.
-            return out + [p for k, p in self._open.items() if k.startswith("cold:")]
+            # Old readings prove nothing: a cold room or a device problem
+            # stays open, unreported.
+            return out + [p for k, p in self._open.items()
+                          if k.startswith(("cold:", "device:"))]
         for room in view["rooms"]:
+            label = room_label(room["name"])
+            sensor = room.get("temperature")
+            fresh = sensor is not None and sensor.get("status", "ok") == "ok"
+            if sensor is not None and not fresh:
+                out.append(Problem(f"device:sensor:{room['id']}", "alert_device", "cottage",
+                                   room["id"],
+                                   (f"{label}: lämpötila-anturi ei toimi",
+                                    "Huoneen lämpötilaa ei ole saatu tuntiin. Patterit pitävät "
+                                    "tavoitteen omalla termostaatillaan."),
+                                   (f"{label}: lämpötila-anturi toimii taas",
+                                    "Huoneen lämpötila saadaan taas."), SENSOR_AFTER))
+            for heater in room.get("heaters") or ():
+                if heater.get("available", True) and heater.get("status") not in (
+                        "missing", "unavailable"):
+                    continue
+                name = heater.get("label") or heater.get("device_id")
+                out.append(Problem(f"device:heater:{heater.get('device_id')}", "alert_device",
+                                   "cottage", room["id"],
+                                   (f"{label}: patteri {name} ei vastaa",
+                                    "Patteri ei ole ollut käytettävissä 30 minuuttiin. "
+                                    "Tarkista sen virta ja verkko."),
+                                   (f"{label}: patteri {name} vastaa taas",
+                                    "Patteri on taas käytettävissä."), HEATER_AFTER))
             key = f"cold:{room['id']}"
-            value = (room.get("temperature") or {}).get("value")
+            value = sensor.get("value") if fresh else None
             if value is None:
                 if key in self._open:
                     out.append(self._open[key])

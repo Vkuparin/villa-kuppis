@@ -22,12 +22,16 @@ class FakeCottage:
     def __init__(self):
         self.connection = "ok"
         self.temps = {"large": 6.0, "small": 6.0}
+        self.temp_status = {}             # room -> reading status other than ok
+        self.heaters = {"large": [], "small": []}
 
     def view(self):
         names = {"large": "Mökki", "small": "Kammari"}
         return {"site": {"connection": self.connection},
                 "rooms": [{"id": r, "name": names[r],
-                           "temperature": None if t is None else {"value": t}}
+                           "temperature": None if t is None else {
+                               "value": t, "status": self.temp_status.get(r, "ok")},
+                           "heaters": self.heaters[r]}
                           for r, t in self.temps.items()]}
 
 
@@ -101,6 +105,38 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(self.check(1)[2:], ["Mökki vastaa taas"])
         self.service.cottage.temps["large"] = None   # sensor gone: still open
         self.assertEqual(len(self.check(1)), 3)
+
+    def test_stale_reading_neither_raises_nor_clears_a_cold_alert(self):
+        self.service.cottage.temp_status["large"] = "stale"
+        self.service.cottage.temps["large"] = 1.0
+        self.assertEqual(self.check(), [])
+        self.service.cottage.temp_status.clear()
+        self.assertEqual(self.check(1), ["Mökki on kylmä"])
+        self.service.cottage.temp_status["large"] = "stale"
+        self.service.cottage.temps["large"] = 9.0
+        self.assertEqual(len(self.check(1)), 1)
+
+    def test_missing_room_reading_alerts_after_an_hour(self):
+        self.service.cottage.temp_status["small"] = "unavailable"
+        self.check()
+        self.assertEqual(self.check(59), [])
+        self.assertEqual(self.check(1), ["Mökki: Kammari: lämpötila-anturi ei toimi"])
+        self.service.cottage.temp_status.clear()
+        self.assertEqual(self.check(1)[1:], ["Mökki: Kammari: lämpötila-anturi toimii taas"])
+
+    def test_unavailable_heater_alerts_after_30_minutes_with_its_own_switch(self):
+        heater = {"device_id": "small-heater-1", "label": "Kammari 1000W patteri",
+                  "available": False, "status": "unavailable"}
+        self.service.cottage.heaters["small"] = [heater]
+        self.check()
+        self.assertEqual(self.check(29), [])
+        self.assertEqual(self.check(1), ["Mökki: Kammari: patteri Kammari 1000W patteri ei vastaa"])
+        self.service.cottage.heaters["small"] = [{**heater, "available": True, "status": "ok"}]
+        self.assertEqual(self.check(1)[1:],
+                         ["Mökki: Kammari: patteri Kammari 1000W patteri vastaa taas"])
+        self.settings.set("site:cottage", "alert_device", False, "test")
+        self.service.cottage.heaters["small"] = [heater]
+        self.assertEqual(len(self.check(40)), 2)
 
     def test_pump_problem_is_reported_after_30_minutes(self):
         self.service.units = [unit(power=None, mode=None, in_error=True)]
