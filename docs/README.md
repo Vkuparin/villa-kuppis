@@ -1,6 +1,6 @@
 # Villa Kuppis design documents
 
-Implementation began on 19 October 2026. On 20 October 2026 the design moved to one Home Assistant per site on two always-on mini-PCs. Since 25 October 2026 Villa Kuppis runs as a Home Assistant app in the home VM with the pumps through Home Assistant; the first Windows install is shut down and archived.
+Implementation began on 19 October 2026. On 20 October 2026 the design moved to one Home Assistant per site on two always-on mini-PCs. Since 25 October 2026 Villa Kuppis runs as a Home Assistant app in the home VM with the pumps through Home Assistant; the first Windows install is shut down and archived. The cottage's real devices were commissioned on its Home Assistant on 1 November 2026, before the move. What changed in each app release: [ha-app/CHANGELOG.md](../ha-app/CHANGELOG.md).
 
 | Document | Purpose |
 | --- | --- |

@@ -72,7 +72,7 @@ One controller per unit decides each minute (audit 2026-10-20, section 2.1):
 
 **Settings migration (2026-10-25):** the old `Ohjaustapa`, `Esijäähdytys käytössä`, `Optimoitu jäähdytys`, `Sammuta kalliilla hinnalla` and `Ohjaa pumpun käyntiä lämpötilan mukaan` overrides are replaced once, at start, by `Hintaohjaus` and the power switch: precooling off becomes price control off and keeps only the old temperature switch; otherwise optimizer off becomes fixed thresholds, and either old power switch keeps power control on.
 
-**Home away:** a separate button (`Poissa kotoa`) switches home to an away setting. The default is to cool only above 28 °C, with no precooling. Pressing it again restores normal cooling. It is independent of the cottage visit.
+**Home away:** a separate button (`Poissa kotoa`) switches home to an away setting. The default is to cool only above 28 °C, with no precooling. Pressing it again restores normal cooling. It is independent of the cottage visit unless the cottage setting `Koti Poissa-tilaan vierailun ajaksi` is on: then away starts at the visit's arrival and ends with the visit, unless someone switched it in between.
 
 **Night mode:** in chosen rooms (bedrooms), the fan runs on its quietest setting during set night hours, even if cooling takes longer. Default hours: 22:00–07:00.
 
@@ -85,8 +85,11 @@ The owner enters an arrival time and a target temperature, e.g. Friday 18:00 and
 - If arrival is beyond the published prices, it plans with the prices it has and recalculates when the next day's prices arrive.
 - The 12-hour lead is only an assumption: in a hard frost the heaters may not reach the target at all, and the app must not show a visit as on time unless the room temperature shows it.
 - Villa Kuppis sends the room targets to the cottage Home Assistant as they change, including after each recalculation.
-- The end-visit button returns the cottage to maintenance heating.
-- A notification warns if the plan cannot reach the target in time.
+- The end-visit button, or the optional departure time, returns the cottage to maintenance heating. The plan sent to the cottage already goes back to maintenance at the departure, so it holds even if Villa Kuppis is unreachable then.
+- From the heat-up start the visit card shows each room's warming rate over the last hour and its estimated time at the target (0.5 °C below counts as reached).
+- Phone notices, once per visit and each with its own switch: every room is warm; a room will not be warm by the arrival (by its warming rate, no rise after an hour of heating, or not warm at arrival); a visit without a departure is still on three days after the arrival.
+
+**Humidity guard:** a room over `Kosteusraja` (default 80 %) for a day gets a notice. With `Lämmitä kosteaa huonetta` on, a damp room is kept at least 2 °C above its base level until it is 5 points under the limit (plan reason `Kosteusvahti`). During a visit, after the arrival, a room over 1200 ppm CO2 for 10 minutes gets a reminder to air it.
 
 ## Learned room rates
 

@@ -4,7 +4,7 @@ Release goals and product decisions live here. Canonical cards and statuses live
 
 ## Current release
 
-No release is published yet. After publication, record the actual release link and validation evidence here.
+Villa Kuppis is published as a Home Assistant app from `main` (`scripts/release-ha-app.sh`); the running version and what each release changed are in [ha-app/CHANGELOG.md](../ha-app/CHANGELOG.md). It has run at home since 25 October 2026 (app 0.4.0). As of 1 November 2026 the app is at 0.4.37 and the cottage integration at 0.7.0. The task releases below (0.1.0–0.4.0) are feature groups, not app versions. Most of 0.3.0 and 0.4.0 is done offline; the live checks wait for the cottage move (see the H and F cards).
 
 ## Delivery sequence
 
@@ -38,6 +38,11 @@ No release is published yet. After publication, record the actual release link a
 - 2026-10-20: Hardware bought (not yet arrived): HP MP9 G4 mini-PC (Core i3-8100T, 8 GB, 256 GB NVMe) for the cottage with HAOS; HP OmniBook laptop (Ryzen AI 5 340, 16 GB, 512 GB NVMe) as the home server with Debian and Home Assistant in Docker.
 - 2026-10-20 (evening): Both sites run Debian 13 as the host and Home Assistant OS as a KVM virtual machine on a wired bridge with its own LAN address (owner's server plan). This replaces Home Assistant Container at home and bare-metal HAOS at the cottage, keeps HAOS apps such as the Matter Server, and lets each host keep a 5 TB USB drive at `/srv/archive` for Villa Kuppis and Home Assistant backups. Villa Kuppis reaches the cottage VM through a Tailscale subnet route for its single address on `cottage-server`.
 - 2026-10-20: Cooling in the heating season: `Esijäähdytys käytössä` can be turned off so the target stays at the maximum and cooling does not compete with radiators. Optional power management by room temperature starts a unit above the maximum and stops it 0.5 °C below, only in cooling mode and never changing a mode.
+- 2026-10-25: Villa Kuppis runs as a Home Assistant app in home-haos (owner's choice), replacing the Docker Compose install on the host, which stays as a fallback. The akvaario Windows copy is archived.
+- 2026-10-25: Cottage with Automaatio off: no optimization, the heaters hold the fallback setpoint, 5 °C in both rooms.
+- 2026-10-26: The home heat pumps only cool; they never heat in winter. Home is heated by ground-source heat run by the housing community, which Villa Kuppis cannot control (2026-11-01).
+- 2026-11-01: Cottage heat is priced with the whole price per kWh: a per-site `Siirto, vero ja marginaali` setting is added to spot and VAT for the optimizer and the cost figures; thresholds stay on spot. Default cottage heat rules store heat only at negative prices.
+- 2026-11-01: Owner: build all agreed improvements, but keep the everyday UI lean: extras live in Asetukset or appear only when relevant.
 - 2026-10-25: Home cooling simplified (audit 2.1–2.2, owner's go-ahead): one controller per unit with a manual pause replaces the four power mechanisms; the settings `Ohjaustapa` (the site decides: home cools, cottage heats), `Esijäähdytys käytössä` + `Optimoitu jäähdytys` (now `Hintaohjaus: Pois / Kiinteät rajat / Optimoitu`) and the two power switches (now `Automaatio saa käynnistää ja sammuttaa pumpun`) are merged, and dependent settings are hidden while their switch is off. Stored overrides migrate once.
 
 ## Decisions still needed
