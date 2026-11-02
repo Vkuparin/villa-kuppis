@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from tests.test_ha_gateway import TOKEN, Clock, FakeHA, climate_attrs, eventually
-from villa_kuppis import cottage, sites
+from villa_kuppis import cottage, learning, sites
 from villa_kuppis.cottage import (ACTOR_CONTROLLER, ACTOR_MANUAL, CottageSite,
                                   CottageStore, FakeSiteGateway, parse_sites,
                                   role_of)
@@ -225,6 +225,34 @@ class StoreTests(unittest.TestCase):
                 datetime.fromtimestamp(t + 5 * 3600, timezone.utc),
                 datetime.fromtimestamp(t + 8 * 3600, timezone.utc))
             self.assertAlmostEqual(sum(k for _, k in rows), 1200 / 3600, places=3)
+            store.close()
+
+    def test_holding_a_cold_room_takes_what_the_heat_loss_needs(self):
+        self.assertAlmostEqual(cottage.hold_share(5.0, -5.0), 0.25)      # 10 °C over outdoor
+        self.assertEqual(cottage.hold_share(5.0, 8.0), 0.0)              # warm outside
+        self.assertIsNone(cottage.hold_share(5.0, None))
+        learned = learning.RoomModel(True, loss_per_h=0.1, uses_outdoor=True, heat_c_per_h=4.0)
+        self.assertAlmostEqual(cottage.hold_share(5.0, -5.0, learned), 0.25)   # 1 °C/h of 4
+        self.assertEqual(cottage.heating_share(6.0, 5.0, 0.25), 1.0)     # driven high
+        self.assertAlmostEqual(cottage.heating_share(5.5, 5.0, 0.25), 0.625)
+        self.assertEqual(cottage.heating_share(4.0, 5.0, 0.25), 0.0)
+        with tempfile.TemporaryDirectory() as temp:
+            store = CottageStore(Path(temp) / "pumps.db")
+            t = 1_700_002_800 - 1_700_002_800 % 3600
+            for k in range(0, 24 * 3600, 300):     # an empty cottage at 5 °C for a day
+                store.record("cottage", "temp", t + k, value=5.2)
+                for heater in ("h1", "h2", "h3"):
+                    store.record("cottage", heater, t + k, mode="heat", setpoint=5.0)
+            heaters = {"h1": 1.05, "h2": 1.05, "h3": 0.5}
+            day = (datetime.fromtimestamp(t, timezone.utc),
+                   datetime.fromtimestamp(t + 24 * 3600, timezone.utc))
+            unknown = sum(k for _, k in store.energy_estimate("cottage", "temp", heaters, *day))
+            self.assertAlmostEqual(unknown, 2.6 * 0.4 * 24, places=1)  # no outdoor: as before
+            hold = lambda ts, room_c: cottage.hold_share(room_c, -5.0)
+            known = sum(k for _, k in store.energy_estimate("cottage", "temp", heaters, *day, hold))
+            # Holding 10.2 °C over the outdoor takes about a quarter of 2.6 kW, and
+            # set 0.2 °C under the room a little less: some 13 kWh a day, not 25.
+            self.assertAlmostEqual(known, 2.6 * 0.255 * 0.8 * 24, places=1)
             store.close()
 
 

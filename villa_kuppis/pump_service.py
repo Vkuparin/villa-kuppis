@@ -1428,7 +1428,8 @@ class PumpService:
         commands = self.store.command_marks(unit, start, end)
         if cottage_room is not None:
             # The heaters report no power: estimated from their rated power.
-            energy = price_energy(self.cottage.energy(cottage_room, start, end),
+            energy = price_energy(self.cottage.energy(cottage_room, start, end,
+                                                      self._cottage_hold(cottage_room, start, end)),
                                   self._prices_db, start, end, factor,
                                   price_extra(overrides, "cottage"))
         else:
@@ -1636,6 +1637,22 @@ class PumpService:
         with self._room_rates_lock:
             self._room_rates_cache = None
         return since
+
+    def _cottage_hold(self, room: str, start, end):
+        """(ts, room °C) -> share of full power that holds the room, from the
+        cottage outdoor readings and the room's checked model (if any)."""
+        from .cottage import hold_share
+        outdoor = learning.Outdoor(self.store.outdoor_rows(
+            "cottage", start - timedelta(hours=2), end + timedelta(hours=2)))
+        try:
+            model = self.cottage_heating_models()[0].get(room)
+        except Exception as error:      # the estimate never breaks the history view
+            logging.warning("Cottage model for the energy estimate: %s", type(error).__name__)
+            model = None
+        def hold(ts: int, room_c: float) -> float | None:
+            out = outdoor.at(ts)
+            return hold_share(room_c, out if out is not None else outdoor.last_before(ts), model)
+        return hold
 
     def cottage_heating_models(self) -> tuple[dict, learning.Outdoor]:
         """The cottage room models that passed their held-out day, and the

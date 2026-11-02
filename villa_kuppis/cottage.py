@@ -149,11 +149,34 @@ def rated_kw(*names: str | None) -> float | None:
     return None
 
 
-def heating_share(setpoint: float, room_c: float) -> float:
+# A room heater is sized to hold about this much over the outdoor temperature
+# at full power (rule of thumb), so holding a room takes (room - outdoor) / 40
+# of it until the room's own rates are learned.
+HEATER_DESIGN_DELTA_C = 40.0
+
+
+def hold_share(room_c: float, outdoor_c: float | None, model=None) -> float | None:
+    """Share of full power that holds the room where it is: the learned heat
+    loss over the learned heating rate, else the sizing rule above; None
+    without an outdoor reading."""
+    if outdoor_c is None:
+        return None
+    if model is not None and getattr(model, "heat_c_per_h", None):
+        share = -model.passive_rate(room_c, outdoor_c) / model.heat_c_per_h
+    else:
+        share = (room_c - outdoor_c) / HEATER_DESIGN_DELTA_C
+    return min(1.0, max(0.0, share))
+
+
+def heating_share(setpoint: float, room_c: float, hold: float | None = None) -> float:
     """Estimated share of full power a heater in heat mode uses: all of it
     when set a degree or more above the room (the controller's high drive),
-    none a degree or more below, and in between while it holds the room."""
-    return min(1.0, max(0.0, (setpoint - room_c + 1.0) / 2.0))
+    none a degree or more below, and ``hold`` (half when unknown) when set
+    to the room, in between linearly."""
+    base = 0.5 if hold is None else hold
+    d = setpoint - room_c
+    share = base + (1.0 - base) * d if d >= 0 else base * (1.0 + d)
+    return min(1.0, max(0.0, share))
 
 
 # --- site configuration ------------------------------------------------------------
@@ -400,10 +423,12 @@ class CottageStore:
         return out
 
     def energy_estimate(self, site_id: str, temperature: str, heaters: dict[str, float],
-                        start, end) -> list[tuple[int, float]]:
+                        start, end, hold: Callable[[int, float], float | None] | None = None
+                        ) -> list[tuple[int, float]]:
         """Estimated (hour start, kWh) of a room's heaters: each heater's
         rated power (``heaters``: device id -> kW) times ``heating_share`` of
-        its setpoint against the room reading, while both are fresh."""
+        its setpoint against the room reading, while both are fresh.
+        ``hold(ts, room_c)`` gives the share that holds the room then."""
         if not heaters:
             return []
         s, e = _to_epoch(start), _to_epoch(end)
@@ -423,11 +448,12 @@ class CottageStore:
             if room is None or room[1] is None or t - room[0] > learning.MAX_READING_AGE:
                 return 0.0
             total = 0.0
+            base = hold(t, room[1]) if hold is not None else None
             for device, kw in heaters.items():
                 row = last.get(device)
                 if (row is not None and t - row[0] <= learning.MAX_READING_AGE
                         and row[1] == "heat" and row[2] is not None):
-                    total += kw * heating_share(row[2], room[1])
+                    total += kw * heating_share(row[2], room[1], base)
             return total
 
         def add(a: int, b: int, kw: float) -> None:
@@ -1067,9 +1093,11 @@ class CottageSite:
         return self._store.learning_readings(SITE_ID, found["temperature"],
                                              found["status"], start, end, heaters)
 
-    def energy(self, room_id: str, start, end) -> list[tuple[int, float]]:
+    def energy(self, room_id: str, start, end,
+               hold: Callable[[int, float], float | None] | None = None) -> list[tuple[int, float]]:
         """Estimated (hour start, kWh) of the room's heaters whose rated power
-        is in their name; [] without a temperature sensor or such heaters."""
+        is in their name; [] without a temperature sensor or such heaters.
+        ``hold`` as in ``CottageStore.energy_estimate``."""
         temperature, heaters = None, {}
         for binding in sorted(self._bindings(), key=lambda b: b.device_id):
             if binding.room != room_id:
@@ -1083,7 +1111,7 @@ class CottageSite:
                     heaters[binding.device_id] = kw
         if temperature is None:
             return []
-        return self._store.energy_estimate(SITE_ID, temperature, heaters, start, end)
+        return self._store.energy_estimate(SITE_ID, temperature, heaters, start, end, hold)
 
     def learning_since(self, room_id: str) -> datetime | None:
         """Where the room's learning history starts: when its temperature
