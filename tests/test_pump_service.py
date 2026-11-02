@@ -451,27 +451,29 @@ class PollBackoffTests(ServiceTestCase):
     def test_poll_loop_backs_off_on_failures_and_resets_on_success(self):
         import asyncio
         real_sleep = asyncio.sleep
-        delays = []
+        calls = []
 
         async def fake_sleep(seconds, *args):
-            # Only this service's poll loop: other services may still be
-            # stopping in the same process and sleep too.
-            if sys._getframe(1).f_code.co_name == "_poll_loop":
-                delays.append(seconds)
+            # Poll loops only, by owner: services of other tests may still
+            # run in the same process and sleep too.
+            frame = sys._getframe(1)
+            if frame.f_code.co_name == "_poll_loop":
+                calls.append((frame.f_locals.get("self"), seconds))
             await real_sleep(0.01)
 
         client = FlakyFake(make_unit_payloads())
         with mock.patch.object(asyncio, "sleep", fake_sleep):
             service, _ = self._start(client, poll_interval=60.0)
-            self.wait_for(lambda: len(delays) >= 1)
-            self.assertEqual(delays[0], 60.0)
+            delays = lambda: [s for owner, s in calls if owner is service.gateway]
+            self.wait_for(lambda: len(delays()) >= 1)
+            self.assertEqual(delays()[0], 60.0)
             client.broken = True
-            self.wait_for(lambda: len(delays) >= 5)
-            failed = [d for d in delays[1:] if d != 60.0]
+            self.wait_for(lambda: len(delays()) >= 5)
+            failed = [d for d in delays()[1:] if d != 60.0]
             self.assertEqual(failed[:4], [120.0, 240.0, 480.0, 900.0])
             client.broken = False
-            self.wait_for(lambda: delays[-1] == 60.0 and len(delays) >= 7)
-            self.assertEqual(delays[-1], 60.0)
+            self.wait_for(lambda: delays()[-1] == 60.0 and len(delays()) >= 7)
+            self.assertEqual(delays()[-1], 60.0)
 
 
 class RequestTests(ServiceTestCase):
