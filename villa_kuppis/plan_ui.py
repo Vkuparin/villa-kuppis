@@ -100,13 +100,11 @@ SCRIPT = r"""
     var o = u.optimizer;
     if (u.price_control === "off") return "Hintaohjaus pois: tavoite on aina enimmäislämpötila.";
     if (!o) return "Kiinteät hintarajat (optimointi pois tai huoneen jäähdytysnopeutta ei ole vielä opittu).";
-    if (!o.optimized) return "Optimoija käytössä: kiinteät hintarajat ovat nyt yhtä edulliset, joten niitä noudatetaan.";
-    var text = "Optimoitu opituilla nopeuksilla";
-    if (o.fixed_cost_c > 0) {
-      var pct = Math.round(100 * (o.fixed_cost_c - o.cost_c) / o.fixed_cost_c);
-      text += ": arvioitu säästö " + pct + " % kiinteisiin hintarajoihin verrattuna";
-    }
-    return text + ".";
+    var pct = o.fixed_cost_c > 0 ? Math.round(100 * (o.fixed_cost_c - o.cost_c) / o.fixed_cost_c) : null;
+    if (!o.optimized || pct === 0)
+      return "Optimoitu suunnitelma on nyt sama kuin kiinteillä hintarajoilla.";
+    return "Optimoitu opituilla nopeuksilla" + (pct === null ? "." :
+      ": arvioitu säästö " + pct + " % kiinteisiin hintarajoihin verrattuna.");
   }
   // Colder targets are deeper blue: the plan reads at a glance.
   function shade(target) {

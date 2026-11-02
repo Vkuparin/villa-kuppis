@@ -1674,7 +1674,7 @@ $cards.addEventListener("change", (e) => {
 const $auto = document.getElementById("auto-btn");
 const AUTO_TITLES = {
   home: "Kodin hinta- ja lämpötilaohjattu automaatio. Pois päältä se ei lähetä pumpuille komentoja; pumput jäävät siihen tilaan, jossa ne ovat.",
-  cottage: "Mökin hintaohjattu lämmitys. Pois päältä mökille ei lähetetä tavoitteita, ja patterit pitävät varalämpötilan." };
+  cottage: "Mökin hintaohjattu lämmitys. Pois päältä mökille ei lähetetä tavoitteita, ja patterit pitävät turvalämmön." };
 let autoState = null;
 function showAutomation(state) {
   autoState = state;

@@ -556,7 +556,7 @@ SCRIPT = r"""
     else when = t.type === "arrive" ? "joku tulee kotiin" : "viimeinen lähtee";
     var s = "Kun " + when + ": " + r.actions.map(actionText).join(", ");
     if (r.only) s += " (vain klo " + r.only.start + "–" + r.only.end + ")";
-    if (r.max_price !== undefined && r.max_price !== null) s += ", jos hinta enintään " + String(r.max_price).replace(".", ",") + " c/kWh";
+    if (r.max_price !== undefined && r.max_price !== null) s += ", jos hinta enintään " + String(r.max_price).replace(".", ",") + " snt/kWh";
     return s;
   }
   function periodsText(list) {
@@ -745,7 +745,7 @@ SCRIPT = r"""
         var price = el("input"); price.type = "number"; price.step = "any";
         price.value = r.max_price !== undefined && r.max_price !== null ? r.max_price : "";
         price.placeholder = "ei rajaa";
-        fs.appendChild(field("Hinta enintään (c/kWh)", price, "Toiminnot tehdään vain, kun sähkön hinta on enintään tämä. Tyhjä: ei rajaa."));
+        fs.appendChild(field("Hinta enintään (snt/kWh)", price, "Toiminnot tehdään vain, kun sähkön hinta on enintään tämä. Tyhjä: ei rajaa."));
         body.appendChild(fs);
         var acts = el("fieldset");
         acts.appendChild(el("legend", "", "Toiminnot"));

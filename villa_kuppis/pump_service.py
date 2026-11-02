@@ -1690,7 +1690,6 @@ class PumpService:
                 future)
 
     def _compute_room_rates(self, site: str, now: datetime) -> dict:
-        from .cottage import room_label as cottage_room_label
         start = now - timedelta(days=learning.LEARN_DAYS)
         models, (outdoor, future), ahead = self.learned_models(site)
         now_ts = _to_epoch(now)
@@ -1730,7 +1729,7 @@ class PumpService:
             units.append({
                 "id": subject if site == "home" else f"{site}:{subject}",
                 "site": site,
-                "name": name if site == "home" else cottage_room_label(name),
+                "name": name,      # shown on its own site's page only
                 "hours": (round((readings[-1].ts - readings[0].ts) / 3600)
                           if readings else 0),
                 "model": model.public(),

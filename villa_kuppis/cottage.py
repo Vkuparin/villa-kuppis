@@ -1917,7 +1917,7 @@ function vkHeaterSwitch(heater, onChange) {
     data.rooms.forEach(function (room) { $rooms.appendChild(card(room)); });
     if (typeof setExtraHistUnits === "function")
       setExtraHistUnits(data.rooms.map(function (r) {
-        return { id: "cottage:" + r.id, name: r.name === "Mökki" ? r.name : "Mökki: " + r.name }; }));
+        return { id: "cottage:" + r.id, name: r.name }; }));     // the Mökki page only
   }
   // --- visit card (card F4.3): the form is built once so refreshes never reset it ---
   var $vState = document.getElementById("visit-state");

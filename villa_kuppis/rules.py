@@ -118,7 +118,7 @@ def validate(rule) -> dict:
             out["only"] = {"start": _hhmm(only.get("start"), "Vain alkaen"),
                            "end": _hhmm(only.get("end"), "Vain asti")}
         if rule.get("max_price") is not None:
-            out["max_price"] = _num(rule["max_price"], "Hintaraja (c/kWh)", -100, 1000)
+            out["max_price"] = _num(rule["max_price"], "Hintaraja (snt/kWh)", -100, 1000)
         actions = rule.get("actions")
         if not isinstance(actions, list) or not 1 <= len(actions) <= MAX_ACTIONS:
             raise RuleError(f"Lisää 1–{MAX_ACTIONS} toimintoa.")
