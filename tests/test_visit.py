@@ -105,7 +105,7 @@ class VisitStoreTests(unittest.TestCase):
 
     def test_invalid_visits_are_refused(self):
         for arrival, target, rooms in [
-            (NOW - timedelta(hours=1), 21.0, ["large"]),
+            (NOW - timedelta(hours=25), 21.0, ["large"]),
             (NOW + timedelta(days=20), 21.0, ["large"]),
             (ARRIVAL, 30.0, ["large"]),
             (ARRIVAL, 21.0, []),
@@ -134,6 +134,47 @@ class VisitStoreTests(unittest.TestCase):
         self.assertFalse(self.store.notice_sent(first.visit_id, "late"))
         second = self.store.start(ARRIVAL, 21.0, ["large"], "Ville", NOW)
         self.assertFalse(self.store.notice_sent(second.visit_id, "warm"))
+
+    def test_a_visit_started_on_site_may_have_arrived(self):
+        visit = self.store.start(NOW - timedelta(hours=2), 21.0, ["large"], "Ville", NOW)
+        self.assertEqual(visit.arrival, NOW - timedelta(hours=2))
+        with self.assertRaises(VisitError):     # a departure already past
+            self.store.start(NOW - timedelta(hours=2), 21.0, ["large"], "Ville", NOW,
+                             NOW - timedelta(hours=1))
+
+    def test_update_changes_the_active_visit(self):
+        visit = self.store.start(ARRIVAL, 21.0, ["large"], "Ville", NOW)
+        self.store.mark_started(visit.visit_id, NOW)
+        self.store.mark_notice(visit.visit_id, "late", NOW)
+        self.store.mark_notice(visit.visit_id, "home_away", NOW)
+        later = NOW + timedelta(days=3)          # on site, after the arrival
+        departure = later + timedelta(hours=5)
+        updated = self.store.update(later, departure=departure)
+        self.assertEqual((updated.visit_id, updated.departure, updated.heat_start),
+                         (visit.visit_id, departure, NOW))
+        self.assertTrue(self.store.notice_sent(visit.visit_id, "late"))
+        updated = self.store.update(later, target_c=22.0, rooms=["large", "small"])
+        self.assertEqual((updated.target_c, updated.rooms), (22.0, ("large", "small")))
+        self.assertFalse(self.store.notice_sent(visit.visit_id, "late"))   # a new goal
+        self.assertTrue(self.store.notice_sent(visit.visit_id, "home_away"))
+        self.assertIsNone(self.store.update(later, departure=None).departure)
+        for bad in ({"departure": later - timedelta(minutes=1)}, {"target_c": 40.0},
+                    {"rooms": []}, {"arrival": ARRIVAL.replace(tzinfo=None)}):
+            with self.subTest(bad=bad), self.assertRaises(VisitError):
+                self.store.update(later, **bad)
+
+    def test_a_new_arrival_plans_the_heat_up_again(self):
+        visit = self.store.start(ARRIVAL, 21.0, ["large"], "Ville", NOW)
+        self.store.mark_started(visit.visit_id, NOW)
+        moved = self.store.update(NOW, arrival=ARRIVAL + timedelta(days=1))
+        self.assertEqual(moved.arrival, ARRIVAL + timedelta(days=1))
+        self.assertIsNone(moved.heat_start)
+        with self.assertRaises(VisitError):
+            self.store.update(NOW, arrival=NOW - timedelta(days=2))
+
+    def test_update_needs_an_active_visit(self):
+        with self.assertRaises(VisitError):
+            self.store.update(NOW, target_c=20.0)
 
     def test_visits_stored_before_departures_still_load(self):
         import sqlite3

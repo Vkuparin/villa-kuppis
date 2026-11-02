@@ -14,6 +14,7 @@ fully offline) plus a small JSON API on top of PumpService:
 * GET  /api/rooms     learned room rates and the FMI forecast (card F5.1)
 * GET  /api/cottage   cottage rooms, readings and connection (card H2.3, read-only)
 * GET/POST /api/visit  cottage visit: state and plan; start {"arrival", "target", "rooms"} (card F4.3)
+* POST /api/visit/update  change the active visit (arrival, departure, target, rooms)
 * POST /api/visit/end  end the active visit
 * POST /api/cottage/heater  {"device_id", "enabled"}: switch one cottage heater off or on
 * POST /api/cottage/room_sensor  {"room", "entity_id"}: a cottage room's temperature sensor (null: default)
@@ -2235,6 +2236,7 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
                              "source": identity["source"],
                              "version": os.environ.get("VK_VERSION", "")})
         elif parts.path in ("/api/command", "/api/prices/refresh", "/api/visit/end",
+                            "/api/visit/update",
                             "/api/cottage/heater", "/api/cottage/clear_manual",
                             "/api/cottage/learning/restart", "/api/alerts/test",
                             "/api/devices/command",
@@ -2293,6 +2295,14 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             self._json(status, payload)
         elif parts.path == "/api/visit":
             self._post_visit(identity)
+        elif parts.path == "/api/visit/update":
+            cottage = self._cottage_or_error()
+            body = self._read_json_object() if cottage is not None else None
+            if body is not None:
+                try:
+                    self._json(200, cottage.update_visit(body))
+                except VisitError as error:
+                    self._json(400, {"error": "bad_body", "detail": str(error)})
         elif parts.path == "/api/visit/end":
             cottage = self._cottage_or_error()
             if cottage is not None:

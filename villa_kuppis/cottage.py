@@ -80,7 +80,9 @@ PLAN_REASONS = {"base": "Perustaso", "threshold": "Hintaraja", "noprice": "Ei hi
                 "optimized": "Optimoitu", "visit": "Vierailu", "humidity": "Kosteusvahti"}
 VISIT_ERRORS = (
     ("arrival time needs", "Saapumisajalla on oltava aikavyöhyke."),
-    ("arrival time must be in the future", "Saapumisajan on oltava tulevaisuudessa."),
+    ("arrival time must be at most a day ago", "Saapumisaika voi olla enintään vuorokauden takana."),
+    ("departure must be in the future", "Lähtöajan on oltava tulevaisuudessa."),
+    ("no active visit", "Vierailua ei ole käynnissä."),
     ("arrival time must be within", "Saapumisaika saa olla enintään 14 päivän päässä."),
     ("target must be", f"Tavoitteen on oltava {MIN_TARGET:g}–{MAX_TARGET:g} °C."),
     ("choose at least one room", "Valitse vähintään yksi huone."),
@@ -851,6 +853,8 @@ class CottageSite:
         start = visit.heat_start or (plan.start if plan is not None and plan.reason == "started" else None)
         if start is None or now < start:
             return {}
+        # A visit started on site has nobody to warn about being late.
+        planned = start < visit.arrival
         out = {}
         for room in visit.rooms:
             info = self._warming(room, now, since=start)
@@ -860,7 +864,7 @@ class CottageSite:
             goal = visit.target_c - VISIT_REACHED_MARGIN
             if info["fresh"] and info["value"] >= goal:
                 item["reached"] = True
-            elif info["fresh"]:
+            elif info["fresh"] and planned:
                 rate = info["rate"]
                 if rate is not None and rate > 0.1:
                     eta = now + timedelta(hours=(goal - info["value"]) / rate)
@@ -922,42 +926,95 @@ class CottageSite:
                         "Villa Kuppisissa, jos olet jo lähtenyt mökiltä."))
         return out
 
-    def start_visit(self, arrival, target, rooms, actor: str, departure=None) -> dict:
-        """Start a visit from request values; raises ``VisitError`` (Finnish message)."""
+    @staticmethod
+    def _visit_arrival(arrival) -> datetime:
         if not isinstance(arrival, str):
             raise VisitError("Saapumisaika puuttuu.")
         try:
-            arrival_dt = datetime.fromisoformat(arrival)
+            return datetime.fromisoformat(arrival)
         except ValueError:
             raise VisitError("Saapumisaika ei ole kelvollinen.") from None
-        departure_dt = None
-        if departure not in (None, ""):
-            try:
-                departure_dt = datetime.fromisoformat(departure) if isinstance(departure, str) else None
-            except ValueError:
-                departure_dt = None
-            if departure_dt is None:
-                raise VisitError("Lähtöaika ei ole kelvollinen.")
+
+    @staticmethod
+    def _visit_departure(departure) -> datetime | None:
+        if departure in (None, ""):
+            return None
+        try:
+            value = datetime.fromisoformat(departure) if isinstance(departure, str) else None
+        except ValueError:
+            value = None
+        if value is None:
+            raise VisitError("Lähtöaika ei ole kelvollinen.")
+        return value
+
+    @staticmethod
+    def _visit_target(target) -> float:
         if isinstance(target, bool) or not isinstance(target, (int, float)) \
                 or not math.isfinite(target):
             raise VisitError("Tavoitteen on oltava luku.")
+        return float(target)
+
+    @staticmethod
+    def _visit_rooms(rooms) -> list:
         if not isinstance(rooms, list) or not all(isinstance(r, str) for r in rooms) \
                 or not set(rooms) <= set(ROOMS):
             raise VisitError("Tuntematon huone.")
+        return [r for r in ROOMS if r in rooms]
+
+    @staticmethod
+    def _visit_error(error: VisitError, fallback: str) -> VisitError:
+        message = str(error)
+        return VisitError(next((fi for key, fi in VISIT_ERRORS if message.startswith(key)),
+                               fallback))
+
+    def start_visit(self, arrival, target, rooms, actor: str, departure=None) -> dict:
+        """Start a visit from request values; raises ``VisitError`` (Finnish message).
+        An arrival now or earlier (on site, up to a day) heats at once."""
+        arrival_dt = self._visit_arrival(arrival)
+        departure_dt = self._visit_departure(departure)
+        target_c = self._visit_target(target)
+        room_ids = self._visit_rooms(rooms)
         try:
-            self._visits.start(arrival_dt, float(target), [r for r in ROOMS if r in rooms],
-                               actor, self._now(), departure_dt)
+            self._visits.start(arrival_dt, target_c, room_ids, actor, self._now(), departure_dt)
         except VisitError as error:
-            message = str(error)
-            raise VisitError(next((fi for key, fi in VISIT_ERRORS if message.startswith(key)),
-                                  "Vierailua ei voitu aloittaa.")) from None
-        self._refresh_plan()
+            raise self._visit_error(error, "Vierailua ei voitu aloittaa.") from None
+        self._retarget()
+        return self.visit_view()
+
+    def update_visit(self, body: dict) -> dict:
+        """Change the active visit from request values (any of arrival,
+        departure, target, rooms; departure null clears it); raises
+        ``VisitError`` (Finnish message)."""
+        changes = {}
+        if "arrival" in body:
+            changes["arrival"] = self._visit_arrival(body["arrival"])
+        if "departure" in body:
+            changes["departure"] = self._visit_departure(body["departure"])
+        if "target" in body:
+            changes["target_c"] = self._visit_target(body["target"])
+        if "rooms" in body:
+            changes["rooms"] = self._visit_rooms(body["rooms"])
+        try:
+            self._visits.update(self._now(), **changes)
+        except VisitError as error:
+            raise self._visit_error(error, "Vierailua ei voitu muuttaa.") from None
+        self._retarget()
         return self.visit_view()
 
     def end_visit(self) -> dict:
         self._visits.end(self._now())
-        self._refresh_plan()
+        self._retarget()
         return self.visit_view()
+
+    def _retarget(self) -> None:
+        """After a visit change: send the targets now (Automaatio on), so the
+        heat-up or its end does not wait for the next target tick."""
+        try:
+            self.tick_targets()
+        except Exception as error:
+            logging.error("Cottage target tick after a visit change failed: %s",
+                          type(error).__name__)
+            self._refresh_plan()
 
     def _plan_view(self, room_id: str) -> dict | None:
         sender = self._sender
@@ -1438,7 +1495,7 @@ SECTION_HTML = r"""
       <header class="card-head"><h3>Vierailu</h3></header>
       <div id="visit-state"></div>
       <div class="visit-form">
-        <label title="Milloin saavut mökille (Suomen aika). Ei oletusta.">Saapuminen
+        <label title="Milloin saavut mökille (Suomen aika). Jos olet jo mökillä, valitse nykyhetki: lämmitys alkaa heti. Ei oletusta.">Saapuminen
           <input type="datetime-local" id="visit-arrival"></label>
         <label title="Milloin lähdet mökiltä (Suomen aika). Valinnainen: vierailu päättyy silloin itsestään. Tyhjänä vierailu jatkuu, kunnes lopetat sen.">Lähtö
           <input type="datetime-local" id="visit-departure"></label>
@@ -1450,7 +1507,9 @@ SECTION_HTML = r"""
           <label><input type="checkbox" id="visit-small" checked> Kammari</label>
         </fieldset>
         <button type="button" id="visit-start" class="primary"
-          title="Aloittaa vierailun. Uusi vierailu korvaa käynnissä olevan.">Aloita vierailu</button>
+          title="Aloittaa vierailun. Vierailun aikana muutokset tallentuvat itsestään.">Aloita vierailu</button>
+        <button type="button" id="visit-end" hidden
+          title="Lopettaa vierailun; huoneet palaavat hintaohjaukseen.">Lopeta vierailu</button>
       </div>
       <p id="visit-msg" class="detail" role="status"></p>
     </article>
@@ -1509,7 +1568,7 @@ section.cottage[hidden] { display: none; }
 #visit-state { margin-bottom: .6rem; }
 #visit-state .visit-line { margin: .15rem 0; }
 #visit-state .visit-line.late { color: var(--warn); }
-#visit-state button { margin-top: .4rem; }
+.visit-form button[hidden] { display: none; }
 .cottage-rooms .value.old { color: var(--text3); text-decoration: line-through; }
 @media (max-width: 560px) {
   .cottage-rooms { grid-template-columns: 1fr; }
@@ -1613,7 +1672,6 @@ function vkHeaterSwitch(heater, onChange) {
   var $rooms = document.getElementById("cottage-rooms");
   var AUTOMATION_ON = true;
   var ROOM_NAMES = { large: "Mökki", small: "Kammari" };
-  var LATEST = null;
   var num = new Intl.NumberFormat("fi-FI", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
   var clock = new Intl.DateTimeFormat("fi-FI", { timeZone: "Europe/Helsinki",
     hour: "2-digit", minute: "2-digit" });
@@ -1763,7 +1821,6 @@ function vkHeaterSwitch(heater, onChange) {
     if (!data.configured) { $section.hidden = true; return; }
     $section.hidden = false;
     AUTOMATION_ON = data.automation_on !== false;
-    LATEST = data;
     window.vkCottageData = data;
     var conn = CONNECTION[data.site.connection] || CONNECTION.offline;
     $conn.className = "badge " + conn[0];
@@ -1785,6 +1842,11 @@ function vkHeaterSwitch(heater, onChange) {
   var $vMsg = document.getElementById("visit-msg");
   var $vArrival = document.getElementById("visit-arrival");
   var $vDeparture = document.getElementById("visit-departure");
+  var $vTarget = document.getElementById("visit-target");
+  var $vStart = document.getElementById("visit-start");
+  var $vEnd = document.getElementById("visit-end");
+  var VISIT_ROOMS = ["large", "small"];
+  var shownVisit = null;     // the visit values last put in the form
   var clock = new Intl.DateTimeFormat("fi-FI", { timeZone: "Europe/Helsinki",
     hour: "2-digit", minute: "2-digit" });
   var VISIT = null;
@@ -1813,81 +1875,114 @@ function vkHeaterSwitch(heater, onChange) {
     utc = guess - helsinkiOffsetMs(utc);
     return new Date(utc).toISOString();
   }
-  function roomReached(roomId, target) {
-    var room = LATEST && LATEST.rooms.filter(function (r) { return r.id === roomId; })[0];
-    var t = room && room.temperature;
-    if (!t) return null;
-    var fresh = t.status === "ok" && t.value !== null;
-    return { value: t.value, fresh: fresh, reached: fresh && t.value >= target - 0.5 };
+  // An ISO instant as a "datetime-local" value in Helsinki time.
+  function isoToHelsinki(iso) {
+    if (!iso) return "";
+    var v = {};
+    new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Helsinki", hourCycle: "h23",
+      year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"
+    }).formatToParts(new Date(iso)).forEach(function (p) { v[p.type] = p.value; });
+    return v.year + "-" + v.month + "-" + v.day + "T" + v.hour + ":" + v.minute;
+  }
+  function checkedRooms() {
+    return VISIT_ROOMS.filter(function (r) { return document.getElementById("visit-" + r).checked; });
+  }
+  // During a visit the form shows it; a field being edited is left alone.
+  function fillForm(v) {
+    var key = JSON.stringify([v.arrival, v.departure, v.target, v.rooms]);
+    if (key === shownVisit) return;
+    shownVisit = key;
+    var focused = document.activeElement;
+    if (focused !== $vArrival) $vArrival.value = isoToHelsinki(v.arrival);
+    if (focused !== $vDeparture) $vDeparture.value = isoToHelsinki(v.departure);
+    if (focused !== $vTarget) $vTarget.value = v.target;
+    VISIT_ROOMS.forEach(function (r) {
+      document.getElementById("visit-" + r).checked = v.rooms.indexOf(r) >= 0; });
   }
   function renderVisit() {
     $vState.textContent = "";
-    if (!VISIT || !VISIT.visit) {
-      $vState.appendChild(el("p", "detail", "Ei käynnissä olevaa vierailua."));
-      return;
-    }
-    var v = VISIT.visit, plan = VISIT.plan;
+    var v = VISIT && VISIT.visit, plan = VISIT && VISIT.plan;
+    $vStart.hidden = !!v;
+    $vEnd.hidden = !v;
+    if (!v) { shownVisit = null; return; }
+    fillForm(v);
     if (plan) {
       var started = plan.reason === "started" || new Date(plan.start).getTime() <= Date.now();
       $vState.appendChild(el("p", "visit-line",
         (started ? "Lämmitys alkoi " : "Lämmitys alkaa ") + stamp.format(new Date(plan.start)),
-        HEAT_HELP + " " + (PLAN_HELP[plan.reason] || "")));
+        HEAT_HELP + " " + (PLAN_HELP[plan.reason] || "") + " Vierailun aloittanut: " + v.created_by + "."));
     }
-    $vState.appendChild(el("p", "visit-line", "Saapuminen " + stamp.format(new Date(v.arrival)) +
-      (v.departure ? " · lähtö " + stamp.format(new Date(v.departure)) : ""),
-      v.departure ? "Vierailu päättyy lähtöaikana itsestään." : "Vierailu jatkuu, kunnes lopetat sen."));
-    $vState.appendChild(el("p", "visit-line", "Tavoite " + temp(v.target) + " · " +
-      v.rooms.map(function (r) { return ROOM_NAMES[r] || r; }).join(", "),
-      "Vierailun aloittanut: " + v.created_by));
-    var heating = v.heat_start !== null || (plan && plan.reason === "started");
     var progress = VISIT.progress || {};
     v.rooms.forEach(function (r) {
       var p = progress[r];
-      if (p) {
-        var text = ROOM_NAMES[r] + ": " + (p.fresh ? temp(p.value) : "lukema vanhentunut");
-        if (p.reached) text += " · Tavoite saavutettu";
-        else {
-          if (p.rate !== null && p.rate !== undefined && p.rate > 0)
-            text += " · lämpenee " + num.format(p.rate) + " °C/h";
-          if (p.eta && !p.late) text += " · tavoitteessa n. klo " + clock.format(new Date(p.eta));
-          if (p.late) text += " · ei ehdi ajoissa";
-        }
-        $vState.appendChild(el("p", "visit-line" + (p.late && !p.reached ? " late" : ""), text,
-          "Tavoite katsotaan saavutetuksi, kun huoneanturin tuore lukema on enintään 0,5 °C alle tavoitteen. " +
-          "Arvio perustuu viimeisen tunnin lämpenemiseen."));
-        return;
+      if (!p) return;
+      var text = ROOM_NAMES[r] + ": " + (p.fresh ? temp(p.value) : "lukema vanhentunut");
+      if (p.reached) text += " · Tavoite saavutettu";
+      else {
+        if (p.rate !== null && p.rate !== undefined && p.rate > 0)
+          text += " · lämpenee " + num.format(p.rate) + " °C/h";
+        if (p.eta && !p.late) text += " · tavoitteessa n. klo " + clock.format(new Date(p.eta));
+        if (p.late) text += " · ei ehdi ajoissa";
       }
-      var info = roomReached(r, v.target);
-      if (!heating || !info) return;
-      var line = ROOM_NAMES[r] + ": " + (info.fresh ? temp(info.value) : "lukema vanhentunut");
-      if (info.reached) line += " · Tavoite saavutettu";
-      $vState.appendChild(el("p", "visit-line", line,
-        "Tavoite katsotaan saavutetuksi vasta, kun huoneanturin tuore lukema on enintään 0,5 °C alle tavoitteen."));
+      $vState.appendChild(el("p", "visit-line" + (p.late && !p.reached ? " late" : ""), text,
+        "Tavoite katsotaan saavutetuksi, kun huoneanturin tuore lukema on enintään 0,5 °C alle tavoitteen. " +
+        "Arvio perustuu lämpenemiseen lämmityksen alusta, enintään viimeiseen 75 minuuttiin."));
     });
-    var end = el("button", "", "Lopeta vierailu", "Lopettaa vierailun; huoneet palaavat hintaohjaukseen.");
-    end.type = "button";
-    end.addEventListener("click", function () { visitCall("api/visit/end", {}); });
-    $vState.appendChild(end);
   }
-  function visitCall(url, body) {
+  var msgTimer = null;
+  function visitCall(url, body, done) {
     $vMsg.textContent = "";
+    clearTimeout(msgTimer);
     fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body) })
       .then(function (r) { return r.json().then(function (j) { return [r.ok, j]; }); })
       .then(function (res) {
-        if (!res[0]) { $vMsg.textContent = res[1].detail || "Pyyntö epäonnistui."; return; }
+        if (!res[0]) {
+          $vMsg.textContent = res[1].detail || "Pyyntö epäonnistui.";
+          shownVisit = null;           // show the visit as it still is
+          renderVisit();
+          return;
+        }
         VISIT = res[1];
         renderVisit();
+        if (done) {
+          $vMsg.textContent = done;
+          msgTimer = setTimeout(function () { $vMsg.textContent = ""; }, 3000);
+        }
+        load();                        // the room cards show the new targets at once
       }).catch(function () { $vMsg.textContent = "Yhteys palveluun katkesi."; });
   }
-  document.getElementById("visit-start").addEventListener("click", function () {
+  $vStart.addEventListener("click", function () {
     var arrival = helsinkiToIso($vArrival.value);
     if (!arrival) { $vMsg.textContent = "Valitse saapumisaika."; return; }
-    var rooms = ["large", "small"].filter(function (r) {
-      return document.getElementById("visit-" + r).checked; });
     var departure = $vDeparture.value ? helsinkiToIso($vDeparture.value) : null;
-    visitCall("api/visit", { arrival: arrival, target: parseFloat(document.getElementById("visit-target").value),
-      rooms: rooms, departure: departure });
+    visitCall("api/visit", { arrival: arrival, target: parseFloat($vTarget.value),
+      rooms: checkedRooms(), departure: departure });
+  });
+  $vEnd.addEventListener("click", function () { visitCall("api/visit/end", {}); });
+  // During a visit a changed field saves itself, once the typing stops.
+  var editTimer = null;
+  function visitEdit(read) {
+    return function () {
+      if (!(VISIT && VISIT.visit)) return;
+      clearTimeout(editTimer);
+      editTimer = setTimeout(function () {
+        var body = read();
+        if (body) visitCall("api/visit/update", body, "Tallennettu.");
+      }, 800);
+    };
+  }
+  $vArrival.addEventListener("change", visitEdit(function () {
+    var arrival = helsinkiToIso($vArrival.value);
+    return arrival ? { arrival: arrival } : null; }));
+  $vDeparture.addEventListener("change", visitEdit(function () {
+    return { departure: $vDeparture.value ? helsinkiToIso($vDeparture.value) : null }; }));
+  $vTarget.addEventListener("change", visitEdit(function () {
+    var target = parseFloat($vTarget.value);
+    return isNaN(target) ? null : { target: target }; }));
+  VISIT_ROOMS.forEach(function (r) {
+    document.getElementById("visit-" + r).addEventListener("change",
+      visitEdit(function () { return { rooms: checkedRooms() }; }));
   });
   function loadVisit() {
     fetch("api/visit").then(function (r) { return r.json(); })

@@ -14,6 +14,10 @@ not yet happened; a start that has happened stays. From the start until the
 visit ends (the end-visit button, or the optional departure time) the visit
 target replaces the economic plan for the visit's rooms.
 
+A visit started on site has its arrival now or up to ``ARRIVED_GRACE`` ago:
+it heats at once. The active visit's arrival, departure, target and rooms
+can be changed (``update``); a new arrival plans the heat-up again.
+
 Phone notices about a visit (warm, late, still on) are sent once each;
 ``notice_sent``/``mark_notice`` remember them per visit.
 """
@@ -124,6 +128,29 @@ CREATE TABLE IF NOT EXISTS visit_notice (
 );
 """
 MAX_STAY = timedelta(days=30)
+MAX_AHEAD = timedelta(days=14)
+ARRIVED_GRACE = timedelta(days=1)    # a visit started on site may have arrived already
+# Notices about reaching the target; a changed arrival, target or rooms resets them.
+TARGET_NOTICES = ("warm", "late")
+_KEEP = object()
+
+
+def _check(arrival: datetime, departure: datetime | None, target_c: float,
+           rooms: Sequence[str], now: datetime) -> None:
+    if arrival.tzinfo is None or (departure is not None and departure.tzinfo is None):
+        raise VisitError("arrival time needs a time zone")
+    if departure is not None and departure <= now:
+        raise VisitError("departure must be in the future")
+    if departure is not None and not arrival < departure <= arrival + MAX_STAY:
+        raise VisitError("departure must be after the arrival, within 30 days")
+    if arrival <= now - ARRIVED_GRACE:
+        raise VisitError("arrival time must be at most a day ago")
+    if arrival - now > MAX_AHEAD:
+        raise VisitError("arrival time must be within 14 days")
+    if not MIN_TARGET <= target_c <= MAX_TARGET:
+        raise VisitError(f"target must be between {MIN_TARGET:g} and {MAX_TARGET:g} °C")
+    if not rooms:
+        raise VisitError("choose at least one room")
 
 
 class VisitError(ValueError):
@@ -161,18 +188,7 @@ class VisitStore:
 
     def start(self, arrival: datetime, target_c: float, rooms: Sequence[str],
               created_by: str, now: datetime, departure: datetime | None = None) -> Visit:
-        if arrival.tzinfo is None or (departure is not None and departure.tzinfo is None):
-            raise VisitError("arrival time needs a time zone")
-        if departure is not None and not arrival < departure <= arrival + MAX_STAY:
-            raise VisitError("departure must be after the arrival, within 30 days")
-        if arrival <= now:
-            raise VisitError("arrival time must be in the future")
-        if arrival - now > timedelta(days=14):
-            raise VisitError("arrival time must be within 14 days")
-        if not MIN_TARGET <= target_c <= MAX_TARGET:
-            raise VisitError(f"target must be between {MIN_TARGET:g} and {MAX_TARGET:g} °C")
-        if not rooms:
-            raise VisitError("choose at least one room")
+        _check(arrival, departure, target_c, rooms, now)
         with self._lock:
             # A new visit replaces the active one.
             self._conn.execute("UPDATE cottage_visit SET ended_at_utc = ? "
@@ -183,6 +199,42 @@ class VisitStore:
                 (arrival.astimezone(timezone.utc).isoformat(), float(target_c),
                  json.dumps(list(rooms)), created_by, now.isoformat(),
                  departure.astimezone(timezone.utc).isoformat() if departure else None))
+            self._conn.commit()
+        return self.active()
+
+    def update(self, now: datetime, *, arrival: datetime | None = None, departure=_KEEP,
+               target_c: float | None = None, rooms: Sequence[str] | None = None) -> Visit:
+        """Change the active visit; None (departure: _KEEP) keeps a value,
+        departure None clears it. A new arrival plans the heat-up again."""
+        visit = self.active()
+        if visit is None:
+            raise VisitError("no active visit")
+        new_arrival = visit.arrival if arrival is None else arrival
+        new_departure = visit.departure if departure is _KEEP else departure
+        new_target = visit.target_c if target_c is None else float(target_c)
+        new_rooms = visit.rooms if rooms is None else tuple(rooms)
+        if arrival is not None and arrival.tzinfo is None:
+            raise VisitError("arrival time needs a time zone")
+        moved = new_arrival != visit.arrival
+        if moved:
+            _check(new_arrival, new_departure, new_target, new_rooms, now)
+        else:      # an arrival in the past stays valid while the visit is on
+            _check(max(new_arrival, now), new_departure, new_target, new_rooms, now)
+            if new_departure is not None and new_departure <= new_arrival:
+                raise VisitError("departure must be after the arrival, within 30 days")
+        with self._lock:
+            self._conn.execute(
+                "UPDATE cottage_visit SET arrival_utc = ?, departure_utc = ?, target_c = ?, "
+                "rooms_json = ?, heat_start_utc = CASE WHEN ? THEN NULL ELSE heat_start_utc END "
+                "WHERE id = ?",
+                (new_arrival.astimezone(timezone.utc).isoformat(),
+                 new_departure.astimezone(timezone.utc).isoformat() if new_departure else None,
+                 new_target, json.dumps(list(new_rooms)), moved, visit.visit_id))
+            if moved or new_target != visit.target_c or set(new_rooms) != set(visit.rooms):
+                self._conn.execute(
+                    f"DELETE FROM visit_notice WHERE visit_id = ? AND kind IN "
+                    f"({', '.join('?' * len(TARGET_NOTICES))})",
+                    (visit.visit_id, *TARGET_NOTICES))
             self._conn.commit()
         return self.active()
 

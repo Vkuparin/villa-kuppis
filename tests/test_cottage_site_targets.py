@@ -208,7 +208,8 @@ class VisitApiTests(unittest.TestCase):
     def test_invalid_input_gets_a_finnish_400(self):
         good = {"arrival": self.arrival(5), "target": 21, "rooms": ["large"]}
         for change, text in (
-                ({"arrival": self.arrival(-1)}, "tulevaisuudessa"),
+                ({"arrival": self.arrival(-25)}, "vuorokauden"),
+                ({"arrival": self.arrival(-2), "departure": self.arrival(-1)}, "tulevaisuudessa"),
                 ({"arrival": self.arrival(24 * 30)}, "14 päivän"),
                 ({"arrival": "2026-11-01T10:00:00"}, "aikavyöhyke"),
                 ({"arrival": "pian"}, "kelvollinen"),
@@ -226,6 +227,31 @@ class VisitApiTests(unittest.TestCase):
         self.assertIsNone(self.call("/api/visit")[1]["visit"])
         self.assertEqual(self.call("/api/visit/end", method="GET")[0], 405)
 
+    def test_a_visit_started_on_site_can_be_changed(self):
+        status, body = self.call("/api/visit", {"arrival": self.arrival(-0.2), "target": 21,
+                                                "rooms": ["large"]})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["plan"]["reason"], "started")       # heats at once
+        self.assertFalse(any(p["late"] for p in body["progress"].values()))
+        status, body = self.call("/api/visit/update", {"departure": self.arrival(5)})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["visit"]["departure"])
+        status, body = self.call("/api/visit/update", {"target": 22, "rooms": ["large", "small"]})
+        self.assertEqual((body["visit"]["target"], body["visit"]["rooms"]), (22.0, ["large", "small"]))
+        status, body = self.call("/api/visit/update", {"departure": None})
+        self.assertIsNone(body["visit"]["departure"])
+        for change, text in (({"departure": "huomenna"}, "Lähtöaika"),
+                             ({"departure": self.arrival(-0.1)}, "tulevaisuudessa"),
+                             ({"target": 40}, "5–25"), ({"rooms": []}, "vähintään yksi")):
+            status, body = self.call("/api/visit/update", change)
+            self.assertEqual(status, 400, change)
+            self.assertIn(text, body["detail"])
+        self.assertEqual(self.call("/api/visit/update", method="GET")[0], 405)
+        self.call("/api/visit/end", {})
+        status, body = self.call("/api/visit/update", {"target": 20})
+        self.assertEqual(status, 400)
+        self.assertIn("ei ole käynnissä", body["detail"])
+
     def test_without_a_cottage_the_visit_paths_are_404(self):
         with tempfile.TemporaryDirectory() as temp:
             from villa_kuppis.pump_probe import FakeClient, _unit_payload
@@ -239,7 +265,7 @@ class VisitApiTests(unittest.TestCase):
             self.addCleanup(server.shutdown)
             base = f"http://127.0.0.1:{server.server_address[1]}"
             for path, data in (("/api/visit", None), ("/api/visit", b"{}"),
-                               ("/api/visit/end", b"{}")):
+                               ("/api/visit/update", b"{}"), ("/api/visit/end", b"{}")):
                 request = urllib.request.Request(
                     base + path, data=data, headers={"Content-Type": "application/json"})
                 with self.assertRaises(urllib.error.HTTPError) as caught:
