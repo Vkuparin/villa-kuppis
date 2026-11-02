@@ -1060,6 +1060,25 @@ class CottageSite:
         """Each room's current relative humidity (%), when it is ok."""
         return self._room_values("humidity")
 
+    def above_since(self, room_id: str, role: str, limit: float,
+                    lookback: timedelta) -> datetime | None:
+        """Since when the room's stored ``role`` readings have stayed over
+        ``limit`` without a break (at most ``lookback`` back), or None when
+        the latest one is not over it. Survives an app restart."""
+        now = self._now()
+        snapshot = self._gateway.snapshot()
+        for binding in sorted(self._bindings(), key=lambda b: b.device_id):
+            if binding.room != room_id or self._role(binding, snapshot.get(binding.device_id)) != role:
+                continue
+            since = None
+            for ts, value in reversed(self._store.series(
+                    SITE_ID, binding.device_id, "value", now - lookback, now, 1000)):
+                if value is None or value <= limit:
+                    break
+                since = ts
+            return datetime.fromtimestamp(since, timezone.utc) if since is not None else None
+        return None
+
     def _room_values(self, role: str) -> dict[str, float]:
         snapshot = self._gateway.snapshot()
         out = {}

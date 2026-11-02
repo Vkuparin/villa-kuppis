@@ -841,6 +841,24 @@ class VisitProgressTests(unittest.TestCase):
         self.assertEqual(info["value"], values[-1])
         self.assertAlmostEqual(info["rate"], values[-1] - values[0], places=6)
 
+    def test_a_damp_spell_starts_where_the_stored_readings_went_over(self):
+        humidity = {"v": 70.0}
+        snapshot = self.gateway.snapshot
+        def patched():
+            snap = snapshot()
+            snap["large-humidity"]["value"] = humidity["v"]
+            return snap
+        self.gateway.snapshot = patched
+        for minutes in range(0, 180, 10):
+            if minutes == 60:
+                humidity["v"] = 86.0
+            self.site.sample()
+            self.clock[0] += timedelta(minutes=10)
+        since = self.site.above_since("large", "humidity", 80.0, timedelta(hours=25))
+        self.assertEqual(since, self.clock[0] - timedelta(minutes=120))
+        self.assertIsNone(self.site.above_since("large", "humidity", 90.0, timedelta(hours=25)))
+        self.assertIsNone(self.site.above_since("small", "humidity", 80.0, timedelta(hours=25)))
+
     def test_flat_readings_before_the_heat_up_do_not_make_a_room_late(self):
         temp = {"v": 5.0}
         snapshot = self.gateway.snapshot

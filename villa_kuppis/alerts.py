@@ -40,7 +40,7 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from . import settings as app_settings
 from .cottage import room_label
@@ -169,9 +169,11 @@ class AlertMonitor:
                                ("Mökki vastaa taas", "Yhteys mökin Home Assistantiin toimii taas."),
                                OFFLINE_AFTER))
             # Old readings prove nothing: a cold room or a device problem
-            # stays open, unreported.
+            # stays open, unreported, and a damp or stale-air spell keeps its start.
             return out + [p for k, p in self._open.items()
-                          if k.startswith(("cold:", "device:", "humid:"))]
+                          if k.startswith(("cold:", "device:", "humid:"))] + [
+                self._pending[k] for k in self._since
+                if k.startswith(("humid:", "co2:")) and k not in self._open and k in self._pending]
         for room in view["rooms"]:
             label = room_label(room["name"])
             sensor = room.get("temperature")
@@ -212,7 +214,8 @@ class AlertMonitor:
         site = app_settings.resolve(overrides, "cottage")
         at_cottage = self._visit_on(cottage)
         for room in view["rooms"]:
-            out += self._air_problems(room, site["humidity_limit_pct"]["value"], at_cottage)
+            out += self._air_problems(room, site["humidity_limit_pct"]["value"], at_cottage,
+                                      cottage)
         return out
 
     def _visit_on(self, cottage) -> bool:
@@ -221,8 +224,11 @@ class AlertMonitor:
         visit = active() if active is not None else None
         return visit is not None and self._now() >= visit.arrival
 
-    def _air_problems(self, room, humidity_limit: float, at_cottage: bool) -> list[Problem]:
-        """A damp room (a day over the limit) and, during a visit, stale air."""
+    def _air_problems(self, room, humidity_limit: float, at_cottage: bool,
+                      cottage=None) -> list[Problem]:
+        """A damp room (a day over the limit) and, during a visit, stale air.
+        A damp spell starts from the stored readings, so a restart of the
+        app does not start the day over."""
         out = []
         label = room_label(room["name"])
         for role, key, over, clear in (
@@ -240,11 +246,21 @@ class AlertMonitor:
                 continue
             if not (value > over or (known and value >= clear)):
                 continue
+            history = getattr(cottage, "above_since", None)
+            if role == "humidity" and not known and history is not None:
+                try:
+                    since = history(room["id"], "humidity", over,
+                                    timedelta(seconds=HUMIDITY_AFTER + 3600))
+                except Exception as error:
+                    log.warning("Humidity history failed: %s", type(error).__name__)
+                    since = None
+                if since is not None:
+                    self._since[key] = min(since, self._now())
             if role == "humidity":
                 problem = Problem(
                     key, "alert_humidity", "cottage", room["id"],
                     (f"{label} on kostea",
-                     f"Ilmankosteus on ollut vuorokauden yli {over:g} % (nyt {value:g} %). "
+                     f"Ilmankosteus on ollut vuorokauden yli {over:g} % (nyt {value:.0f} %). "
                      "Jatkuva kosteus on homeriski: lämmitä tai tuuleta."),
                     (f"{label}: kosteus on laskenut",
                      f"Ilmankosteus on laskenut alle {clear:g} %."), HUMIDITY_AFTER)

@@ -228,6 +228,20 @@ class MonitorTests(unittest.TestCase):
         self.service.cottage.air["large"]["humidity"] = 74.0
         self.assertEqual(self.check(1)[1:], ["Mökki: kosteus on laskenut"])
 
+    def test_a_damp_spell_keeps_its_start_over_a_restart_and_a_blip(self):
+        cottage = self.service.cottage
+        cottage.air["large"]["humidity"] = 85.4
+        # The stored readings show it damp since nearly a day (before a restart).
+        cottage.above_since = lambda room, role, limit, lookback: (
+            self.now - timedelta(hours=23, minutes=58) if room == "large" else None)
+        self.assertEqual(self.check(), [])
+        del cottage.above_since
+        cottage.connection = "stale"                     # a short blip keeps the start
+        self.assertEqual(self.check(1), [])
+        cottage.connection = "ok"
+        self.assertEqual(self.check(1), ["Mökki on kostea"])
+        self.assertIn("(nyt 85 %)", self.notifier.sent[0][1])
+
     def test_humidity_limit_comes_from_the_settings(self):
         self.settings.set("site:cottage", "humidity_limit_pct", 90.0, "test")
         self.service.cottage.air["small"]["humidity"] = 86.0
