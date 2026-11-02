@@ -4,7 +4,7 @@ Release goals and product decisions live here. Canonical cards and statuses live
 
 ## Current release
 
-Villa Kuppis is published as a Home Assistant app from `main` (`scripts/release-ha-app.sh`); the running version and what each release changed are in [ha-app/CHANGELOG.md](../ha-app/CHANGELOG.md). It has run at home since 25 October 2026 (app 0.4.0). As of 1 November 2026 the app is at 0.4.37 and the cottage integration at 0.7.0. The task releases below (0.1.0–0.4.0) are feature groups, not app versions. Most of 0.3.0 and 0.4.0 is done offline; the live checks wait for the cottage move (see the H and F cards).
+Villa Kuppis is published as a Home Assistant app from `main` (`scripts/release-ha-app.sh`); the running version and what each release changed are in [ha-app/CHANGELOG.md](../ha-app/CHANGELOG.md). It has run at home since 25 October 2026 (app 0.4.0). As of 2 November 2026 the app is at 0.4.38 and the cottage integration at 0.7.1. The task releases below (0.1.0–0.4.0) are feature groups, not app versions. Most of 0.3.0 and 0.4.0 is done offline; the live checks wait for the cottage move (see the H and F cards).
 
 ## Delivery sequence
 

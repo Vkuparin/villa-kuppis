@@ -1,5 +1,22 @@
 # Muutokset
 
+## 0.4.38
+
+- Korjattu: varoitus "ei ehdi lämmetä ajoissa" tuli turhaan noin puoli tuntia jokaisen mökin esilämmityksen alussa.
+- Vierailua voi muuttaa myös mökillä ollessa, ja päättyneen vierailun voi aloittaa uudelleen paikan päällä. Vierailun aikana muutokset tallentuvat itsestään.
+- Mökin energia-arvio ei enää liioittele turvalämmön pitoa.
+- Kosteusvahdin vuorokausi säilyy uudelleenkäynnistyksen ja lyhyen katkon yli. Tuuletusmuistutus ei toistu lyhyen yhteyskatkon jälkeen.
+- Mökin huonekortit päivittyvät heti, kun vierailu alkaa tai muuttuu. Kortissa on yksi Tavoite-rivi; hinta ja mökin kuittaus ovat sen vihjeessä.
+- Mökin yleiskuva näyttää kylmimmän huoneen ja vierailun. Sivun vaihto alkaa ylhäältä.
+- Historia: aika-akselilla tasatunnit, yksi selite ryhmää kohden ja puhelimeen sopiva energiataulukko. Päivä-näkymässä ei ole energiataulukkoa.
+- Asetukset: muutettu asetus näyttää "Tallennettu" omalla rivillään, ja desimaalit kirjoitetaan pilkulla. Pörssihinta on molemmilla sivuilla ohjausasetusten jälkeen.
+- Mökin Vähimmäislämpötila-asetus poistui: Perustaso on myös optimoidun lämmityksen alaraja.
+- Hae hinnat -nappi näkyy vain, kun hinnat ovat myöhässä. Opittujen nopeuksien Aloita alusta on Lisää-kohdan takana.
+- Testi-ilmoitus kertoo, mihin puhelimiin se lähti, ja miksi, jos se ei lähtenyt. Mökin asetuksissa näkyy, onko mökin oma hälytys valmiina.
+- Seinänäkymä: kosteus- ja CO₂-varoitus ilmoitusten rajoilla, halvin tunti kuten yleiskuvassa, oma koko näytön asennus ja "Ei yhteyttä" myös ensimmäisellä latauksella.
+- Hinnat ovat kaikkialla snt/kWh, ja varalämpö on kaikkialla turvalämpö.
+- Mökin integraatio 0.7.1: mökin oma hälytys yrittää uudelleen, kunnes jokin puhelin saa sen, ja kertoo, mitä mökki tekee. Päivitä ajamalla install.sh mökin Home Assistantissa.
+
 ## 0.4.37
 
 - Mökin oma hälytys: Villa Kuppis kertoo mökin Home Assistantille viiden minuutin välein olevansa käynnissä. Jos viestejä ei tule tuntiin (kotipalvelin tai yhteys on poikki), mökin Home Assistant lähettää itse ilmoituksen "Villa Kuppis ei vastaa" ja ilmoittaa alle 3 °C:n huoneesta. Vaatii mökin integraation 0.7.0 (aja install.sh mökin Home Assistantissa) ja että puhelimen Home Assistant -sovellus on yhdistetty myös mökin Home Assistantiin.
