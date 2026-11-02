@@ -587,7 +587,9 @@ button.switch[aria-checked="true"] .track::after { transform: translateX(18px); 
 .hist-energy { margin-top: 1rem; font-size: .88rem; }
 .hist-energy table { max-width: 34rem; }
 .hist-energy th, .hist-energy td { text-align: right; padding: .3rem .5rem; }
-.hist-energy th:first-child, .hist-energy td:first-child { text-align: left; }
+.hist-energy th:first-child, .hist-energy td:first-child { text-align: left; white-space: nowrap; }
+.hist-energy th { text-transform: none; letter-spacing: 0; }
+.hist-energy tr.nil td { color: var(--text3); }
 .hist-energy td.bar { width: 40%; }
 .ebar { display: block; height: 8px; border-radius: 4px; background: var(--accent); opacity: .7; }
 .hist-empty { color: var(--text3); padding: 2.5rem 0; text-align: center; }
@@ -1100,10 +1102,11 @@ const HIST_SERIES = [
   { key: "plan", label: "Suunnitelman tavoite", color: "var(--purple)",
     scale: "temp", dash: "10 3 2 3" },
   { key: "forecast", label: "Sääennuste", color: "var(--ok)",
-    scale: "temp", dash: "5 4" },
+    scale: "temp", dash: "5 4", group: "outdoor" },
 ];
-// Cottage heaters and similar: the server sends them as data.extra.
-const EXTRA_COLORS = ["var(--heat)", "var(--purple)", "var(--ok)"];
+// Cottage heaters: the server sends them as data.extra. One colour and one
+// legend chip for them all; the dashes tell them apart.
+const EXTRA_DASHES = ["6 3", "2 3", "10 3 2 3", "1 4"];
 const PRICE_SERIES = { key: "price", label: "Sähkön hinta (snt/kWh)", vat: null,
                        color: "var(--price)", scale: "price", dash: "" };
 // Legend chips hide and show series; the choice lasts while the page is open.
@@ -1173,11 +1176,31 @@ function fmtTimeTick(ms, range) {
   const d = new Date(ms);
   const opts = { timeZone: "Europe/Helsinki" };
   if (range === "year") Object.assign(opts, { month: "short", year: "numeric" });
-  else if (range === "month") Object.assign(opts, { day: "numeric", month: "short" });
-  else if (range === "week")
-    Object.assign(opts, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  else if (range === "month") Object.assign(opts, { day: "numeric", month: "numeric" });
+  else if (range === "week") Object.assign(opts, { weekday: "short", day: "numeric", month: "numeric" });
   else Object.assign(opts, { hour: "2-digit", minute: "2-digit" });
   return new Intl.DateTimeFormat("fi-FI", opts).format(d);
+}
+
+// Helsinki's offset from UTC (ms) at a moment.
+function helsinkiOffset(ms) {
+  const v = {};
+  new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Helsinki", hourCycle: "h23",
+    year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric"
+  }).formatToParts(new Date(ms)).forEach((p) => { v[p.type] = parseInt(p.value, 10); });
+  return Date.UTC(v.year, v.month - 1, v.day, v.hour, v.minute) - Math.floor(ms / 60000) * 60000;
+}
+// Axis times on whole hours (a day) or midnights (a week or month), Helsinki time.
+function timeTicks(t0, t1, range, most) {
+  const H = 3600000, D = 24 * H;
+  const steps = range === "day" ? [H, 2 * H, 3 * H, 4 * H, 6 * H, 12 * H]
+    : range === "week" ? [D, 2 * D] : range === "month" ? [D, 2 * D, 3 * D, 5 * D, 7 * D, 10 * D] : null;
+  if (!steps) return Array.from({ length: most + 1 }, (_, i) => t0 + (i / most) * (t1 - t0));
+  const step = steps.find((s) => (t1 - t0) / s <= most) || steps[steps.length - 1];
+  const off = helsinkiOffset(t0);
+  const out = [];
+  for (let t = Math.ceil((t0 + off) / step) * step - off; t <= t1; t += step) out.push(t);
+  return out;
 }
 
 function drawHistory(data) {
@@ -1190,12 +1213,12 @@ function drawHistory(data) {
       pts: (data[s.key] || []).map(([iso, v]) => [new Date(iso).getTime(), v])
     }))
     .concat((data.extra || []).map((e, i) => ({
-      key: e.key, label: e.label, color: EXTRA_COLORS[i % EXTRA_COLORS.length],
-      scale: "temp", dash: "6 3",
+      key: e.key, label: e.label, color: "var(--heat)",
+      scale: "temp", dash: EXTRA_DASHES[i % EXTRA_DASHES.length], group: "extra",
       pts: e.points.map(([iso, v]) => [new Date(iso).getTime(), v])
     })))
     .filter((s) => s.pts.length > 0);
-  const series = allSeries.filter((s) => !histHidden.has(s.key));
+  const series = allSeries.filter((s) => !histHidden.has(s.group || s.key));
   const allPrice = (data.price || [])
     .map(([iso, v]) => [new Date(iso).getTime(), v]);
   const pricePts = histHidden.has("price") ? [] : allPrice;
@@ -1260,7 +1283,7 @@ function drawHistory(data) {
       const y = YP(v);
       svg.appendChild(svgEl("text", { x: W - m.right + 6, y: y + 4,
         "text-anchor": "start", "font-size": 10.5, fill: "var(--price)" },
-        tempFmt.format(v) + " s"));
+        tempFmt.format(v) + " snt"));
     }
   }
 
@@ -1271,11 +1294,11 @@ function drawHistory(data) {
     svg.appendChild(svgEl("text", { x: m.left - 6, y: y + 4, "text-anchor": "end",
       "font-size": 10.5, fill: "var(--text3)" }, tempFmt.format(v) + "°"));
   }
-  const nTime = Math.max(2, Math.min(8, Math.floor((W - m.left - m.right) / 90)));
-  for (let i = 0; i <= nTime; i++) {
-    const t = t0 + (i / nTime) * (t1 - t0);
-    svg.appendChild(svgEl("text", { x: X(t), y: bottom + 18,
-      "text-anchor": i === 0 ? "start" : i === nTime ? "end" : "middle",
+  const nTime = Math.max(2, Math.min(8, Math.floor((W - m.left - m.right) / 70)));
+  for (const t of timeTicks(t0, t1, data.range, nTime)) {
+    const x = X(t);
+    svg.appendChild(svgEl("text", { x: x, y: bottom + 18,
+      "text-anchor": x < m.left + 24 ? "start" : x > W - m.right - 24 ? "end" : "middle",
       "font-size": 10.5, fill: "var(--text3)" }, fmtTimeTick(t, data.range)));
   }
   svg.appendChild(svgEl("line", { x1: m.left, x2: W - m.right, y1: bottom, y2: bottom,
@@ -1379,12 +1402,23 @@ function drawHistory(data) {
     '<li><button type="button" data-series="' + esc(key) + '" aria-pressed="' +
     !histHidden.has(key) + '" title="Näytä tai piilota käyrä"><span class="swatch" style="background:' +
     color + '"></span>' + esc(label) + "</button></li>";
-  const items = allSeries.map((s) => chip(s.key, s.color, s.label));
+  // A group (outdoor and its forecast, the heaters) shows and hides together.
+  const items = [];
+  const grouped = new Set();
+  for (const s of allSeries) {
+    const key = s.group || s.key;
+    if (grouped.has(key)) continue;
+    grouped.add(key);
+    const members = allSeries.filter((o) => (o.group || o.key) === key);
+    const label = key === "extra" ? (members.length > 1 ? "Patterien asetukset" : s.label)
+      : key === "outdoor" && members.length > 1 ? s.label + " ja ennuste" : s.label;
+    items.push(chip(key, s.color, label));
+  }
   if (allPrice.length) items.push(chip("price", PRICE_SERIES.color, PRICE_SERIES.label));
   if (marks.length) items.push(
     '<li><span class="badge mute" title="Lähetetyt komennot näkyvät kaavion alareunassa.">Komennot</span></li>');
   $histLegend.innerHTML = items.join("");
-  drawEnergy(data.energy || [], data.energy_estimated);
+  drawEnergy(data.energy || [], data.energy_estimated, data.price_extra || 0);
 }
 $histLegend.addEventListener("click", (e) => {
   const b = e.target.closest("[data-series]");
@@ -1398,7 +1432,9 @@ const eurFmt = new Intl.NumberFormat("fi-FI",
   { style: "currency", currency: "EUR" });
 const kwhFmt = new Intl.NumberFormat("fi-FI", { maximumFractionDigits: 1 });
 
-function drawEnergy(days, estimated) {
+const energyDayFmt = new Intl.DateTimeFormat("fi-FI", { timeZone: "Europe/Helsinki",
+  weekday: "short", day: "numeric", month: "numeric" });
+function drawEnergy(days, estimated, extra) {
   if (!days.length) {
     $histEnergy.innerHTML = '<p class="detail">Energian kulutus ja kustannus: ei tiedossa.</p>';
     return;
@@ -1415,13 +1451,17 @@ function drawEnergy(days, estimated) {
     : eurFmt.format(d.cost_eur) + avg(d.cost_eur, d.kwh) + (d.cost_complete ? "" : " (osa tunneista)");
   const notes = [];
   if (days.length > shown.length) notes.push("Viimeiset 31 päivää.");
-  if (estimated) notes.push("Arvio: patterien nimessä oleva teho ja aika, jonka ne ovat lämmittäneet.");
+  if (estimated) notes.push("Arvio: patterien nimessä oleva teho ja arvioitu lämmitysaika.");
+  if (extra > 0) notes.push("Hinnassa mukana siirto ja verot " + kwhFmt.format(extra) + " snt/kWh.");
+  // A day with next to nothing is greyed out, not given a cost.
+  const nil = (d) => d.kwh < 0.05;
   $histEnergy.innerHTML = (notes.length ? '<p class="detail">' + notes.join(" ") + "</p>" : "") +
     "<table><thead><tr><th>Päivä</th><th>kWh</th><th></th>" +
     "<th>Kustannus</th></tr></thead><tbody>" + shown.map((d) =>
-    "<tr><td>" + esc(d.date) + "</td><td>" + kwhFmt.format(d.kwh) + "</td>" +
+    "<tr" + (nil(d) ? ' class="nil"' : "") + "><td>" + esc(energyDayFmt.format(new Date(d.date + "T12:00:00Z"))) +
+    "</td><td>" + kwhFmt.format(d.kwh) + "</td>" +
     '<td class="bar"><span class="ebar" style="width:' + (100 * d.kwh / top).toFixed(1) +
-    '%"></span></td><td>' + cost(d) + "</td></tr>").join("") + "</tbody>" +
+    '%"></span></td><td>' + (nil(d) ? "–" : cost(d)) + "</td></tr>").join("") + "</tbody>" +
     (shown.length > 1 ? "<tfoot><tr><td><strong>Yhteensä</strong></td><td><strong>" + kwhFmt.format(kwh) +
       "</strong></td><td></td><td><strong>" + (priced.length ? eurFmt.format(eur) : "ei tiedossa") + "</strong>" +
       (priced.length ? avg(eur, pricedKwh) : "") + "</td></tr></tfoot>" : "") +

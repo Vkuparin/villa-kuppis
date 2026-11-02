@@ -1440,6 +1440,7 @@ class PumpService:
         payload = {
             "now": _iso(_to_epoch(now)),
             "vat_percent": round((factor - 1) * 100, 2) if factor != 1 else None,
+            "price_extra": price_extra(overrides, site),
             "max_end": _iso(_to_epoch(now + timedelta(seconds=HISTORY_AHEAD))),
             "forecast": [[_iso(ts), v] for ts, v in forecast],
             "unit": unit,
