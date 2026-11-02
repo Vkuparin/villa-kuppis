@@ -153,9 +153,9 @@ class OptionsTests(unittest.TestCase):
     def test_full_options_make_a_valid_config_with_private_secrets(self):
         config = ha_app.build_config({
             "pumps": "melcloud", "melcloud_username": "a@example.com",
-            "melcloud_password": "pw", "weather_home": "60.18,25.06",
+            "melcloud_password": "secret-pw-7d3f", "weather_home": "60.18,25.06",
             "cottage_url": "wss://cottage.example.ts.net/api/websocket",
-            "cottage_token": "tok", "public_origin": ORIGIN,
+            "cottage_token": "secret-token-a91c", "public_origin": ORIGIN,
             "tailscale_proxy": "192.168.86.36", "automation_default_on": False,
         }, self.root, "supervisor-token")
         loaded = Config.load_dict(config)
@@ -166,7 +166,8 @@ class OptionsTests(unittest.TestCase):
         for name in ("melcloud.json", "home-token", "cottage-token"):
             mode = stat.S_IMODE((self.root / "secrets" / name).stat().st_mode)
             self.assertEqual(mode, 0o600, name)
-        self.assertNotIn("pw", json.dumps(config))
+        for secret in ("secret-pw-7d3f", "secret-token-a91c", "supervisor-token"):
+            self.assertNotIn(secret, json.dumps(config))
 
     def test_missing_melcloud_login_is_a_readable_error(self):
         with self.assertRaisesRegex(ha_app.OptionsError, "melcloud_username"):

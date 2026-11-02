@@ -9,6 +9,7 @@ in seconds.
 from __future__ import annotations
 
 import asyncio
+import sys
 import shutil
 import tempfile
 import threading
@@ -453,7 +454,10 @@ class PollBackoffTests(ServiceTestCase):
         delays = []
 
         async def fake_sleep(seconds, *args):
-            delays.append(seconds)
+            # Only this service's poll loop: other services may still be
+            # stopping in the same process and sleep too.
+            if sys._getframe(1).f_code.co_name == "_poll_loop":
+                delays.append(seconds)
             await real_sleep(0.01)
 
         client = FlakyFake(make_unit_payloads())
