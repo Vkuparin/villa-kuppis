@@ -182,26 +182,47 @@ SCRIPT = r"""
     var vals = fc.map(function (r) { return r[1]; });
     var sub = vals.length ? "Ennuste 24 h: " + t(Math.min.apply(null, vals)) + "…" +
       t(Math.max.apply(null, vals)) + " °C" : "Ennustetta ei ole vielä haettu.";
-    if (now === null && vals.length) { now = vals[0]; sub = "Ennuste · " + sub; }
+    if (now === null && vals.length) { now = vals[0]; sub = "Ennuste nyt · " + sub.replace("Ennuste ", ""); }
     return tile("", "cloud", "Ulkona", t(now), now === null ? "" : "°C", sub, spark(fc),
       "Ilmatieteen laitoksen havainto ja ennuste");
+  }
+  var dayTime = new Intl.DateTimeFormat("fi-FI", { timeZone: "Europe/Helsinki", weekday: "short",
+    hour: "2-digit", minute: "2-digit" });
+  function visitTile(state) {
+    var v = state && state.visit;
+    if (!v) return tile("", "calendar", "Vierailu", "–", "", "Ei tulossa olevaa vierailua.");
+    var plan = state.plan;
+    var arrived = new Date(v.arrival).getTime() <= Date.now();
+    var sub = "Tavoite " + t(v.target) + " °C";
+    if (!arrived && plan)
+      sub = (plan.reason === "started" || new Date(plan.start).getTime() <= Date.now()
+        ? "Lämmitys alkoi " : "Lämmitys alkaa ") + esc(dayTime.format(new Date(plan.start))) + " · " + sub;
+    if (arrived && v.departure) sub += " · lähtö " + esc(dayTime.format(new Date(v.departure)));
+    return tile("", "calendar", "Vierailu", arrived ? "Mökillä" : esc(dayTime.format(new Date(v.arrival))),
+      "", sub);
   }
   function indoorTiles() {
     var out = [];
     if (vkSite() === "cottage") {
       var c = window.vkCottageData;
       var rooms = c && c.configured ? c.rooms : [];
-      var temps = rooms.filter(function (r) { return r.temperature && r.temperature.value !== null; });
-      out.push(tile("", "thermo", "Sisällä",
-        temps.length ? t(temps.reduce(function (a, r) { return a + r.temperature.value; }, 0) / temps.length) : "–",
-        temps.length ? "°C" : "",
-        temps.map(function (r) { return esc(r.name) + " " + t(r.temperature.value) + " °C"; }).join(" · ") ||
-        "Ei lukemia."));
+      // An empty cottage is about its coldest room, not an average.
+      var temps = rooms.filter(function (r) { return r.temperature && r.temperature.value !== null; })
+        .sort(function (a, b) { return a.temperature.value - b.temperature.value; });
+      var cold = temps[0];
+      out.push(tile("", "thermo", "Sisällä", cold ? t(cold.temperature.value) : "–", cold ? "°C" : "",
+        cold ? (temps.length > 1 ? "Kylmin " + esc(cold.name) + " · " : "") +
+          temps.slice(1).map(function (r) { return esc(r.name) + " " + t(r.temperature.value) + " °C"; }).join(" · ")
+          : "Ei lukemia.", "", "Kylmimmän huoneen lämpötila"));
       var conn = c && c.configured ? c.site.connection : null;
-      var CONN = { ok: "Yhteys ok", stale: "Vanhentunut", offline: "Ei yhteyttä",
-                   auth_failed: "Tunnus hylätty" };
-      out.push(tile("", "link", "Mökin yhteys", conn ? esc(CONN[conn] || conn) : "–", "",
-        rooms.length ? rooms.length + " huonetta" : "Mökkiä ei ole liitetty."));
+      if (conn !== "ok") {
+        // The connection earns a tile only when something is wrong with it.
+        var CONN = { stale: "Vanhentunut", offline: "Ei yhteyttä", auth_failed: "Tunnus hylätty" };
+        out.push(tile("", "link", "Mökin yhteys", conn ? esc(CONN[conn] || conn) : "–", "",
+          rooms.length ? "Lukemat voivat olla vanhoja." : "Mökkiä ei ole liitetty."));
+      } else {
+        out.push(visitTile(window.vkVisit));
+      }
       return out;
     }
     var units = (typeof lastView !== "undefined" && lastView && lastView.units) || [];

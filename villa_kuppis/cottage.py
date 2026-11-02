@@ -1618,7 +1618,7 @@ section.cottage[hidden] { display: none; }
 #visit-state { margin-bottom: .6rem; }
 #visit-state .visit-line { margin: .15rem 0; }
 #visit-state .visit-line.late { color: var(--warn); }
-.visit-form button[hidden] { display: none; }
+.visit-form button[hidden], #cottage-conn[hidden] { display: none; }
 .cottage-rooms .value.old { color: var(--text3); text-decoration: line-through; }
 @media (max-width: 560px) {
   .cottage-rooms { grid-template-columns: 1fr; }
@@ -1882,6 +1882,7 @@ function vkHeaterSwitch(heater, onChange) {
     var conn = CONNECTION[data.site.connection] || CONNECTION.offline;
     $conn.className = "badge " + conn[0];
     $conn.textContent = "Yhteys mökkiin: " + conn[1];
+    $conn.hidden = data.site.connection === "ok";     // the header already says ok
     $conn.title = data.site.error || "Viimeisin yhteys: " + when(data.site.last_contact);
     var missing = data.site.missing_bindings || [];
     $note.textContent = (AUTOMATION_ON ? "" : "Automaatio on pois päältä: mökille ei lähetetä " +
@@ -2000,7 +2001,7 @@ function vkHeaterSwitch(heater, onChange) {
           renderVisit();
           return;
         }
-        VISIT = res[1];
+        VISIT = window.vkVisit = res[1];
         renderVisit();
         if (done) {
           $vMsg.textContent = done;
@@ -2043,7 +2044,7 @@ function vkHeaterSwitch(heater, onChange) {
   });
   function loadVisit() {
     fetch("api/visit").then(function (r) { return r.json(); })
-      .then(function (j) { VISIT = j; renderVisit(); }).catch(function () {});
+      .then(function (j) { VISIT = window.vkVisit = j; renderVisit(); }).catch(function () {});
   }
   function load() {
     fetch("api/cottage").then(function (r) { return r.json(); })
