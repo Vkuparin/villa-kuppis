@@ -1,4 +1,4 @@
 # Written by scripts/release-ha-app.sh: the commit the app image is built from.
 args:
-  VK_REF: cc4bb4c5ecf3790b9f274aa6d28a14b4682493c4
-  VK_VERSION: 0.4.37
+  VK_REF: 498e31000cc36742687304dbd2d43de9f4d6a56d
+  VK_VERSION: 0.4.38
