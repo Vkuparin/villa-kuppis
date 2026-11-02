@@ -596,6 +596,7 @@ class CottageSite:
         self._logged: set = set()
         self._target_lock = threading.Lock()
         self._heartbeat_at: datetime | None = None
+        self._heartbeat_known = False      # the integration has the service
         self._known: frozenset = frozenset()
         self._roles: dict[str, str] = {}   # device id -> role seen with a reading
         self._switches: dict[str, str] = {}   # heater device id -> last on/off request id
@@ -661,11 +662,14 @@ class CottageSite:
             return False
         self._heartbeat_at = now
         try:
-            if "heartbeat" not in self._gateway.services(INTEGRATION_DOMAIN):
-                return False        # an integration older than 0.7.0
+            if not self._heartbeat_known:
+                if "heartbeat" not in self._gateway.services(INTEGRATION_DOMAIN):
+                    return False        # an integration older than 0.7.0
+                self._heartbeat_known = True
             call(INTEGRATION_DOMAIN, "heartbeat", {})
             return True
         except Exception as error:
+            self._heartbeat_known = False   # look again: the integration may be gone
             logging.warning("Cottage heartbeat failed: %s", type(error).__name__)
             return False
 
@@ -1327,7 +1331,7 @@ class CottageSite:
                         **{key: attrs.get(key) for key in (
                             "mode", "reason", "drive", "revision", "requested_target",
                             "valid_until", "manual_until", "manual_by", "disabled_heaters",
-                            "chosen_sensor")}}
+                            "chosen_sensor", "alarm")}}
             disabled = (room["status"] or {}).get("disabled_heaters")
             for heater in room["heaters"]:
                 # Older integrations have no disabled_heaters: no switch.
@@ -1337,8 +1341,11 @@ class CottageSite:
             room["state"] = _worst(statuses) if statuses else "unbound"
             rooms.append(room)
         automation = self._targets_cfg["automation_on"]() if self._targets_cfg else False
+        # The cottage's own alarm (integration 0.7.1+): the same on every room.
+        alarm = next((r["status"]["alarm"] for r in rooms
+                      if r["status"] and isinstance(r["status"].get("alarm"), dict)), None)
         return {"configured": True, "site": self.health(), "rooms": rooms,
-                "automation_on": bool(automation)}
+                "automation_on": bool(automation), "alarm": alarm}
 
     def history(self, room_id: str, start, end, max_points: int) -> dict:
         """Series for one room: ALPSTUGA temperature, target in force, heaters."""
@@ -1467,6 +1474,8 @@ class FakeSiteGateway:
     def snapshot(self) -> dict:
         now = self._now()
         ts = now.isoformat()
+        heard = datetime.fromtimestamp(int(now.timestamp()) // 300 * 300,
+                                       timezone.utc).isoformat()
         wave = math.sin(now.timestamp() / 1800.0)
         large_temp = round(18.6 + 0.5 * wave, 1)
         small_temp = round(7.4 + 0.3 * wave, 1)
@@ -1518,7 +1527,9 @@ class FakeSiteGateway:
                 attrs = {**attrs, "disabled_heaters": sorted(
                     b.entity_id for b in DEMO_BINDINGS
                     if b.room == binding.room and b.entity_id in disabled),
-                    "chosen_sensor": chosen.get(binding.room)}
+                    "chosen_sensor": chosen.get(binding.room),
+                    "alarm": {"enabled": True, "phones": ["demo_puhelin"],
+                              "silent_minutes": 60, "heard": heard}}
                 state.update({"value": target, "attributes": attrs,
                               "caps": {"unit": "°C", "device_class": "temperature"}})
             else:
@@ -1874,6 +1885,19 @@ function vkHeaterSwitch(heater, onChange) {
     });
     return c;
   }
+  // The cottage's own alarm only shows here when it needs a look; Asetukset
+  // tells whether it is ready.
+  var HEARD_LATE_MS = 20 * 60000;      // heartbeats every 5 min, seen to 5 min
+  function alarmNote(data) {
+    var a = data.alarm;
+    if (!a || !a.enabled || data.site.connection !== "ok") return "";
+    if (!a.phones.length)
+      return "Mökin oma hälytys ei tavoita ketään: yhdistä puhelin mökin Home Assistantiin.";
+    if (a.heard && Date.now() - new Date(a.heard).getTime() < HEARD_LATE_MS) return "";
+    return "Mökki ei ole kuullut kodin palvelinta" + (a.heard ? " klo " + clock.format(new Date(a.heard)) +
+      " jälkeen" : "") + ": jos tämä jatkuu tunnin, mökki ilmoittaa puhelimiin, " +
+      "että Villa Kuppis ei vastaa.";
+  }
   function render(data) {
     if (!data.configured) { $section.hidden = true; return; }
     $section.hidden = false;
@@ -1888,7 +1912,7 @@ function vkHeaterSwitch(heater, onChange) {
     $note.textContent = (AUTOMATION_ON ? "" : "Automaatio on pois päältä: mökille ei lähetetä " +
       "tavoitteita, ja patterit siirtyvät turvalämpöön noin minuutin kuluttua. ") +
       (missing.length ? "Home Assistantista puuttuu liitettyjä laitteita: " +
-      missing.join(", ") + "." : "");
+      missing.join(", ") + ". " : "") + alarmNote(data);
     $rooms.textContent = "";
     data.rooms.forEach(function (room) { $rooms.appendChild(card(room)); });
     if (typeof setExtraHistUnits === "function")

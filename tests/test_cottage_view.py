@@ -291,7 +291,9 @@ class ViewTests(unittest.IsolatedAsyncioTestCase):
                           status_attrs("follow", "room 18.4 °C, target 19 °C"), push=False)
         self.ha.set_state("sensor.small_alpstuga_t", "7.2", temperature, push=False)
         self.ha.set_state("sensor.villa_kuppis_small_target", "7.0",
-                          status_attrs("fallback", "no target from Villa Kuppis"), push=False)
+                          {**status_attrs("fallback", "no target from Villa Kuppis"),
+                           "alarm": {"enabled": True, "phones": ["ville_s24"],
+                                     "silent_minutes": 60, "heard": None}}, push=False)
         self.store = BindingStore(Path(self.tmp.name) / cottage.SITES_DB)
         bind_all(self.store)
         self.gateway = HomeAssistantGateway(
@@ -332,6 +334,19 @@ class ViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.ha.calls[-1][:2], ("villa_kuppis_cottage", "heartbeat"))
         self.clock.advance(60)
         self.assertFalse(await asyncio.to_thread(self.site.heartbeat))
+        # Once seen, the service list is not read again; a failure reads it again.
+        self.ha.services["villa_kuppis_cottage"] = {}
+        self.clock.advance(300)
+        self.assertTrue(await asyncio.to_thread(self.site.heartbeat))
+        self.ha.fail["heartbeat"] = ("service_not_found", "gone")
+        self.clock.advance(300)
+        with self.assertLogs(level="WARNING"):
+            self.assertFalse(await asyncio.to_thread(self.site.heartbeat))
+        del self.ha.fail["heartbeat"]
+        calls = len(self.ha.calls)
+        self.clock.advance(300)
+        self.assertFalse(await asyncio.to_thread(self.site.heartbeat))
+        self.assertEqual(len(self.ha.calls), calls)
 
     async def test_room_values_for_the_planner(self):
         self.assertEqual(self.site.room_temperatures(), {"large": 18.4, "small": 7.2})
@@ -355,6 +370,7 @@ class ViewTests(unittest.IsolatedAsyncioTestCase):
         small = self.room("small")
         self.assertEqual((small["status"]["mode"], small["status"]["target"]), ("fallback", 7.0))
         self.assertEqual(small["heaters"], [])
+        self.assertEqual(self.site.view()["alarm"]["phones"], ["ville_s24"])
         health = self.site.view()["site"]
         self.assertEqual((health["connection"], health["state"], health["missing_bindings"]),
                          ("ok", "ok", []))

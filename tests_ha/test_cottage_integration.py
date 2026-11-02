@@ -396,6 +396,20 @@ async def test_cottage_alarm_is_sent_again_until_a_phone_gets_it(
     assert len(phone) == 1                   # said once
 
 
+async def test_status_shows_the_alarm_its_phones_and_the_last_heartbeat(
+        hass, calls, freezer: FrozenDateTimeFactory):
+    async_mock_service(hass, "notify", "mobile_app_ville_s24")
+    await setup(hass)
+    alarm = status(hass).attributes["alarm"]
+    assert (alarm["enabled"], alarm["phones"], alarm["heard"]) == (True, ["ville_s24"], None)
+    await hass.services.async_call(DOMAIN, "heartbeat", {}, blocking=True)
+    freezer.tick(timedelta(minutes=1))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    heard = dt_util.parse_datetime(status(hass).attributes["alarm"]["heard"])
+    assert timedelta(0) <= dt_util.utcnow() - heard <= timedelta(minutes=6)
+
+
 async def test_cottage_alarm_can_be_switched_off(hass, calls, freezer):
     phone = async_mock_service(hass, "notify", "mobile_app_ville")
     config = {DOMAIN: {**CONFIG[DOMAIN], "alarm": {"enabled": False}}}

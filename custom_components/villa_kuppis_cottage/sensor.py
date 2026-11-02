@@ -2,8 +2,9 @@
 
 State: the effective room target (°C), or unknown in manual mode.
 Attributes carry what Villa Kuppis reads back after ``set_target``
-(revision, requested target, validity, schedule length), the controller's mode and the
-room's devices (``devices``), which Villa Kuppis binds automatically.
+(revision, requested target, validity, schedule length), the controller's mode, the
+room's devices (``devices``), which Villa Kuppis binds automatically, and the
+state of the cottage's own alarm (``alarm``).
 """
 
 from __future__ import annotations
@@ -24,7 +25,8 @@ async def async_setup_platform(hass: HomeAssistant, config, async_add_entities,
     if discovery_info is None:
         return
     controller: CottageController = hass.data[DOMAIN]
-    async_add_entities(RoomTargetSensor(room) for room in controller.rooms.values())
+    async_add_entities(RoomTargetSensor(room, controller)
+                       for room in controller.rooms.values())
 
 
 class RoomTargetSensor(SensorEntity):
@@ -32,8 +34,9 @@ class RoomTargetSensor(SensorEntity):
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
 
-    def __init__(self, room: Room):
+    def __init__(self, room: Room, controller: CottageController):
         self._room = room
+        self._controller = controller
         self._attr_name = f"Villa Kuppis {room.name}"
         self._attr_unique_id = f"{DOMAIN}_{room.room_id}_target"
         self.entity_id = f"sensor.villa_kuppis_{room.room_id}_target"
@@ -79,6 +82,9 @@ class RoomTargetSensor(SensorEntity):
             # room is an edit of the package, nothing in Villa Kuppis.
             "devices": room.devices,
             "reported": self._reported(),
+            # The cottage's own alarm (alarm.py); the key also tells Villa
+            # Kuppis that this version reports it.
+            "alarm": self._controller.alarm_status(),
         }
 
     def _reported(self) -> dict:

@@ -8,7 +8,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from villa_kuppis.alerts import AlertMonitor, HomeAssistantNotifier
+from villa_kuppis.alerts import AlertMonitor, Delivery, HomeAssistantNotifier
 from villa_kuppis.ha_gateway import HAError
 from villa_kuppis.ha_pumps import EnergyRecorder, SessionReloader
 from villa_kuppis.settings import SettingsStore
@@ -71,6 +71,10 @@ class FakeNotifier:
         self.sent.append((title, message))
         return self.ok
 
+    def deliver(self, title, message):
+        self.send(title, message)
+        return Delivery(("ville",)) if self.ok else Delivery(reason="no_phones")
+
 
 def unit(unit_id="u1", name="Olohuone", **extra):
     values = {"id": unit_id, "name": name, "power": True, "mode": "Cool", "in_error": False}
@@ -97,12 +101,12 @@ class MonitorTests(unittest.TestCase):
         return [title for title, _ in self.notifier.sent]
 
     def test_test_notice_goes_through_the_same_notifier(self):
-        self.assertEqual(self.monitor.send_test("cottage"), 1)
+        self.assertEqual(self.monitor.send_test("cottage").sent, ("ville",))
         title, message = self.notifier.sent[-1]
         self.assertEqual(title, "Villa Kuppis: testi-ilmoitus")
         self.assertIn("Mökki", message)
         self.notifier.ok = False
-        self.assertEqual(self.monitor.send_test("home"), 0)
+        self.assertEqual(self.monitor.send_test("home").reason, "no_phones")
 
     def test_cold_room_alerts_once_and_is_over_a_degree_above_the_limit(self):
         self.assertEqual(self.check(), [])
@@ -441,7 +445,9 @@ class NotifierTests(GatewayTestCase):
         self.ha.fail["mobile_app_ville"] = ("service_not_found", "gone")
         notifier = HomeAssistantNotifier(await self.start_gateway())
         with self.assertLogs("villa_kuppis.alerts", "WARNING"):
-            self.assertTrue(await self.send(notifier))
+            delivery = await asyncio.get_running_loop().run_in_executor(
+                None, notifier.deliver, "Testi", "Viesti")
+        self.assertEqual((delivery.sent, delivery.failed), (("tabletti",), ("ville",)))
 
     async def test_reload_targets_a_pump_entity(self):
         later = [self.clock()]   # the gateway's own clock stays, so it stays fresh
@@ -456,13 +462,29 @@ class NotifierTests(GatewayTestCase):
                       self.ha.calls)
 
     async def test_no_phone_or_no_connection_is_not_sent(self):
+        loop = asyncio.get_running_loop()
         notifier = HomeAssistantNotifier(self.make_gateway())
         with self.assertLogs("villa_kuppis.alerts", "WARNING"):
             self.assertFalse(await self.send(notifier))
+        with self.assertLogs("villa_kuppis.alerts", "WARNING"):
+            delivery = await loop.run_in_executor(None, notifier.deliver, "T", "V")
+        self.assertEqual(delivery.reason, "unreachable")
         notifier = HomeAssistantNotifier(await self.start_gateway())
         with self.assertLogs("villa_kuppis.alerts", "WARNING"):
             self.assertFalse(await self.send(notifier))
+        delivery = await loop.run_in_executor(None, notifier.deliver, "T", "V")
+        self.assertEqual(delivery.reason, "no_phones")
         self.assertEqual([c for c in self.ha.calls if c[0] == "notify"], [])
+
+    async def test_every_send_failing_is_its_own_reason(self):
+        self.ha.services["notify"] = {"mobile_app_ville": {}}
+        self.ha.fail["mobile_app_ville"] = ("home_assistant_error", "no token")
+        notifier = HomeAssistantNotifier(await self.start_gateway())
+        with self.assertLogs("villa_kuppis.alerts", "WARNING"):
+            delivery = await asyncio.get_running_loop().run_in_executor(
+                None, notifier.deliver, "T", "V")
+        self.assertEqual((delivery.sent, delivery.failed, delivery.reason),
+                         ((), ("ville",), "failed"))
 
 
 if __name__ == "__main__":

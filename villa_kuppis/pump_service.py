@@ -1620,11 +1620,18 @@ class PumpService:
         if self.alerts is None:
             return 409, {"error": "no_alerts",
                          "detail": "Ilmoitukset lähetetään kodin Home Assistantin kautta, eikä sitä ole otettu käyttöön."}
-        sent = self.alerts.send_test(site)
-        if not sent:
-            return 502, {"error": "not_sent",
-                         "detail": "Yksikään puhelin ei saanut ilmoitusta. Tarkista, että Home Assistant -sovellus on yhdistetty kodin Home Assistantiin."}
-        return 200, {"sent": sent}
+        delivery = self.alerts.send_test(site)
+        if delivery.sent:
+            return 200, {"sent": len(delivery.sent), "phones": list(delivery.sent),
+                         "failed": list(delivery.failed)}
+        detail = {
+            "unreachable": "Kodin Home Assistant ei vastaa, joten ilmoitusta ei lähetetty.",
+            "no_phones": "Kodin Home Assistantiin ei ole yhdistetty yhtään puhelinta. "
+                         "Asenna puhelimeen Home Assistant -sovellus ja kirjaudu sillä kodin "
+                         "Home Assistantiin.",
+        }.get(delivery.reason, "Lähetys epäonnistui kaikkiin puhelimiin (" +
+              ", ".join(delivery.failed) + "). Katso syy kodin Home Assistantin lokista.")
+        return 502, {"error": delivery.reason or "not_sent", "detail": detail}
 
     def restart_cottage_learning(self, room, actor: str) -> datetime:
         """Learn a cottage room again from now on; raises ValueError for an

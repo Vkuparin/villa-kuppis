@@ -387,12 +387,28 @@ class CottageController:
         if said:
             await self._async_save()
 
-    async def _async_notify(self, title: str, message: str) -> int:
-        """Send to every phone; returns how many got it."""
+    def _phones(self) -> list[str]:
+        """The alarm's notify services: configured, or every phone with the app."""
         names = self.alarm_conf["notify"]
         if not names:
             services = self.hass.services.async_services_for_domain("notify")
             names = sorted(s for s in services if s.startswith("mobile_app_"))
+        return list(names)
+
+    def alarm_status(self) -> dict:
+        """For the room sensors: is the alarm on, which phones it reaches and
+        when Villa Kuppis was last heard (to 5 minutes, like ``reported``)."""
+        heard = self.alarm.heard
+        if heard is not None:
+            heard = dt_util.utc_from_timestamp(int(heard.timestamp()) // 300 * 300)
+        return {"enabled": self.alarm_conf["enabled"],
+                "phones": [n.removeprefix("mobile_app_") for n in self._phones()],
+                "silent_minutes": self.alarm_conf["silent_minutes"],
+                "heard": heard.isoformat() if heard else None}
+
+    async def _async_notify(self, title: str, message: str) -> int:
+        """Send to every phone; returns how many got it."""
+        names = self._phones()
         if not names:
             if title not in self._unsent:
                 _LOGGER.warning("Alarm not sent, no phone has the Home Assistant app: %s", title)

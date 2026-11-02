@@ -83,6 +83,21 @@ class Problem:
     after: float = 0.0         # seconds it must last before the notice
 
 
+@dataclass(frozen=True)
+class Delivery:
+    """Who got one notice. ``reason`` says why nobody did: ``unreachable``
+    (no Home Assistant), ``no_phones`` (no phone has the app) or ``failed``
+    (every send failed)."""
+    sent: tuple[str, ...] = ()
+    failed: tuple[str, ...] = ()
+    reason: str | None = None
+
+
+def phone_name(service: str) -> str:
+    """notify.mobile_app_ville_s24 -> ville_s24."""
+    return service.removeprefix(PHONE_PREFIX)
+
+
 class HomeAssistantNotifier:
     """Sends a notice to every phone of one Home Assistant gateway."""
 
@@ -92,27 +107,33 @@ class HomeAssistantNotifier:
 
     def send(self, title: str, message: str) -> int:
         """Send to every phone; the number of phones reached (0: none)."""
+        return len(self.deliver(title, message).sent)
+
+    def deliver(self, title: str, message: str) -> Delivery:
         try:
             phones = [s for s in self._gateway.services("notify") if s.startswith(PHONE_PREFIX)]
         except Exception as error:
             log.warning("Alert not sent: Home Assistant unreachable (%s)", type(error).__name__)
-            return 0
+            return Delivery(reason="unreachable")
         if phones != self._phones:
             self._phones = phones
             if phones:
                 log.info("Alerts go to %d phone(s) in Home Assistant", len(phones))
             else:
                 log.warning("Alert not sent: no phone has the Home Assistant app")
-        sent = 0
+        if not phones:
+            return Delivery(reason="no_phones")
+        sent, failed = [], []
         for phone in phones:
             try:
                 self._gateway.call("notify", phone, {"title": title, "message": message})
-                sent += 1
+                sent.append(phone_name(phone))
             except Exception as error:
+                failed.append(phone_name(phone))
                 log.warning("Alert to %s failed: %s", phone, type(error).__name__)
         if sent:
             log.info("Alert sent: %s", title)
-        return sent
+        return Delivery(tuple(sent), tuple(failed), None if sent else "failed")
 
 
 class AlertMonitor:
@@ -133,12 +154,12 @@ class AlertMonitor:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
-    def send_test(self, site: str) -> int:
-        """A test notice from the settings page; the number of phones reached."""
+    def send_test(self, site: str) -> Delivery:
+        """A test notice from the settings page: which phones got it."""
         label = app_settings.SITE_LABELS.get(site, site)
-        return int(self._notifier.send(
-            "Villa Kuppis: testi-ilmoitus",
-            f"Ilmoitukset tulevat perille. Lähetetty {label}-sivun asetuksista."))
+        title = "Villa Kuppis: testi-ilmoitus"
+        message = f"Ilmoitukset tulevat perille. Lähetetty {label}-sivun asetuksista."
+        return self._notifier.deliver(title, message)
 
     # -- checks --
 

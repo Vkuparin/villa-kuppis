@@ -241,14 +241,25 @@ class AlertTestApiTests(AppTestCase):
         server, _ = self._start_app(FakeClient([_unit_payload("u1", "Yksikkö", mode="Cool")]))
         sent = []
 
+        from villa_kuppis.alerts import Delivery
+        result = Delivery(("ville", "tabletti"))
+
         class Alerts:
             def send_test(self, site):
                 sent.append(site)
-                return 2
+                return result
         server.service.alerts = Alerts()
-        status, body = http_json("POST", self._url(server, "/api/alerts/test"), {"site": "cottage"})
-        self.assertEqual((status, body), (200, {"sent": 2}))
+        url = self._url(server, "/api/alerts/test")
+        status, body = http_json("POST", url, {"site": "cottage"})
+        self.assertEqual((status, body), (200, {"sent": 2, "phones": ["ville", "tabletti"],
+                                                "failed": []}))
         self.assertEqual(sent, ["cottage"])
+        for result, needle in ((Delivery(reason="unreachable"), "ei vastaa"),
+                               (Delivery(reason="no_phones"), "yhtään puhelinta"),
+                               (Delivery(failed=("ville",), reason="failed"), "(ville)")):
+            status, body = http_json("POST", url, {"site": "home"})
+            self.assertEqual(status, 502)
+            self.assertIn(needle, body["detail"])
 
 
 class WallViewTests(AppTestCase):

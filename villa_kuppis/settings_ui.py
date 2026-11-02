@@ -219,7 +219,37 @@ SCRIPT = r"""
       $body.appendChild(row);
       if (d.group === "Ilmoitukset") alertRow = row;
     });
-    if (alertRow && level === "site") alertRow.after(testRow(site));
+    if (alertRow && level === "site") {
+      var test = testRow(site);
+      alertRow.after(test);
+      if (site === "cottage") test.after(alarmRow());
+    }
+  }
+  var hhmm = new Intl.DateTimeFormat("fi-FI", { timeZone: "Europe/Helsinki",
+    hour: "2-digit", minute: "2-digit" });
+  // The cottage's own alarm (integration 0.7.1+): it speaks up through the
+  // cottage Home Assistant's phones when the home server goes silent.
+  function alarmRow() {
+    var row = make("div", { className: "set-row" });
+    var note = make("span", { className: "set-note detail" });
+    row.appendChild(note);
+    row.hidden = true;
+    fetch("api/cottage", { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        var a = j && j.alarm;
+        if (!j || !j.configured) return;
+        note.textContent = !a ? "Mökin oma hälytys näkyy täällä, kun mökin integraatio on päivitetty."
+          : !a.enabled ? "Mökin oma hälytys on pois päältä mökin Home Assistantin asetuksissa."
+          : !a.phones.length ? "Mökin oma hälytys ei tavoita ketään: yhdistä puhelin mökin Home Assistantiin."
+          : "Mökin oma hälytys on valmiina: jos kodin palvelin ei vastaa " + a.silent_minutes +
+            " minuuttiin, mökki ilmoittaa itse mökin Home Assistantin puhelimiin (" +
+            a.phones.join(", ") + ")." +
+            (a.heard ? " Mökki kuuli kodin palvelimen viimeksi klo " + hhmm.format(new Date(a.heard)) + "." : "");
+        row.hidden = false;
+      })
+      .catch(function () {});
+    return row;
   }
   function testRow(site) {
     var row = make("div", { className: "set-row" });
@@ -235,8 +265,10 @@ SCRIPT = r"""
         body: JSON.stringify({ site: site }) })
         .then(function (r) { return r.json().then(function (j) { return [r.ok, j]; }); })
         .then(function (res) {
-          note.textContent = res[0] ? "Testi-ilmoitus lähti " + res[1].sent + " puhelimeen."
-            : res[1].detail || "Lähetys epäonnistui.";
+          var j = res[1];
+          note.textContent = !res[0] ? j.detail || "Lähetys epäonnistui."
+            : "Testi-ilmoitus lähti kodin Home Assistantin kautta: " + (j.phones || []).join(", ") +
+              "." + (j.failed && j.failed.length ? " Ei mennyt: " + j.failed.join(", ") + "." : "");
         })
         .catch(function () { note.textContent = "Lähetys epäonnistui."; })
         .then(function () { btn.disabled = false; });
