@@ -276,6 +276,12 @@ class WallViewTests(AppTestCase):
         # It only reads: every fetch is a GET of the API.
         self.assertNotIn("method:", PAGE)
         self.assertNotIn("POST", PAGE)
+        # Installs on its own, fullscreen, starting at the wall view.
+        self.assertIn('<link rel="manifest" href="wall.webmanifest">', PAGE)
+        with urllib.request.urlopen(self._url(server, "/wall.webmanifest"), timeout=5) as response:
+            manifest = json.loads(response.read())
+        self.assertEqual((manifest["start_url"], manifest["display"], manifest["id"]),
+                         ("wall", "fullscreen", "wall"))
 
 
 class PageTests(AppTestCase):

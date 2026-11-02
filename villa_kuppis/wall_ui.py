@@ -15,7 +15,11 @@ PAGE = r"""<!doctype html>
 <title>Villa Kuppis: seinänäkymä</title>
 <meta name="theme-color" content="#0d0e10">
 <meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<link rel="manifest" href="wall.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
 <script>
 (function () {
   var a = null;
@@ -52,6 +56,7 @@ body { margin: 0; background: var(--bg); color: var(--text);
 .now-price .value small { font-size: .4em; font-weight: 500; color: var(--text2);
                           margin-left: .3em; }
 .now-price .label { color: var(--text2); font-size: 18px; margin-top: 6px; }
+.now-price .label span { white-space: nowrap; }
 .sites { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
          align-content: start; }
 .site { background: var(--surface); border: 1px solid var(--line); border-radius: 20px;
@@ -124,6 +129,8 @@ var one = new Intl.NumberFormat("fi-FI", { minimumFractionDigits: 1, maximumFrac
 var whole = new Intl.NumberFormat("fi-FI", { maximumFractionDigits: 0 });
 var lastOk = null;
 var lastPrices = null;
+var cottageOverview = null, cottageOverviewAt = 0;
+var COTTAGE_OVERVIEW_MS = 10 * 60 * 1000;   // only its outdoor reading is used
 
 function el(tag, cls, text) {
   var e = document.createElement(tag);
@@ -145,11 +152,13 @@ function tick() {
   document.getElementById("clock").textContent = clockFmt.format(now);
   var d = dateFmt.format(now);
   document.getElementById("date").textContent = d.charAt(0).toUpperCase() + d.slice(1);
-  if (lastOk !== null && Date.now() - lastOk > 5 * 60 * 1000) {
-    var u = document.getElementById("updated");
-    u.className = "err";
-    u.textContent = "Ei yhteyttä Villa Kuppisiin " + clockFmt.format(new Date(lastOk)) + " jälkeen";
-  }
+  if (lastOk !== null && Date.now() - lastOk > 5 * 60 * 1000) offline();
+}
+function offline() {
+  var u = document.getElementById("updated");
+  u.className = "err";
+  u.textContent = lastOk === null ? "Ei yhteyttä Villa Kuppisiin"
+    : "Ei yhteyttä Villa Kuppisiin " + clockFmt.format(new Date(lastOk)) + " jälkeen";
 }
 
 function head(section, title, outdoor, badges) {
@@ -215,15 +224,18 @@ function renderCottage(cottage, visitInfo, overview) {
       sub.appendChild(el("span", "heat", "Tavoite " + deg(plan.target)));
       sub.appendChild(document.createTextNode(" · " + plan.reason_text));
     } else if (status.target !== null && status.target !== undefined) {
-      sub.textContent = "Varalämpö " + deg(status.target);
+      sub.textContent = "Turvalämpö " + deg(status.target);
     }
     r.appendChild(sub);
     var air = el("div", "air");
     var parts = [];
+    var limits = cottage.air_limits || {};
     if (room.humidity && room.humidity.status === "ok")
-      parts.push([whole.format(room.humidity.value) + " %", room.humidity.value >= 80]);
+      parts.push(["kosteus " + whole.format(room.humidity.value) + " %",
+                  room.humidity.value > (limits.humidity_pct || 80)]);
     if (room.co2 && room.co2.status === "ok")
-      parts.push([whole.format(room.co2.value) + " ppm", room.co2.value >= 1200]);
+      parts.push(["CO\u2082 " + whole.format(room.co2.value) + " ppm",
+                  room.co2.value > (limits.co2_ppm || 1200)]);
     parts.forEach(function (p, i) {
       if (i) air.appendChild(document.createTextNode(" · "));
       air.appendChild(el("span", p[1] ? "warn" : "", p[0]));
@@ -257,18 +269,32 @@ function renderPrices(overview) {
     .filter(function (p) { return p[0] >= start && p[0] < start + 24 * 3600 * 1000 && p[1] !== null; });
   if (!ahead.length || ahead[0][0] !== start) { box.hidden = true; top.hidden = true; return; }
   box.hidden = false; top.hidden = false;
-  var unit = overview.vat_percent ? "c/kWh, sis. ALV" : "c/kWh";
+  var unit = overview.vat_percent ? "snt/kWh, sis. ALV" : "snt/kWh";
   document.getElementById("price-value").innerHTML = "";
   document.getElementById("price-value").appendChild(document.createTextNode(one.format(ahead[0][1])));
   document.getElementById("price-value").appendChild(el("small", "", unit));
   var values = ahead.map(function (p) { return p[1]; });
   var lo = Math.min.apply(null, values), hi = Math.max.apply(null, values);
-  var cheapest = ahead[values.indexOf(lo)];
-  document.getElementById("price-label").textContent = "Pörssisähkö nyt · halvin klo " +
-    clockFmt.format(new Date(cheapest[0])) + " (" + one.format(lo) + " c)";
-  var hours = Math.round(ahead.length / 4);
-  document.getElementById("prices-title").textContent = "Seuraavat " + hours + " tuntia";
-  document.getElementById("prices-range").textContent = one.format(lo) + "–" + one.format(hi) + " c/kWh";
+  // The cheapest whole hour ahead, as on the overview.
+  var hours = {}, best = null;
+  ahead.forEach(function (p) {
+    var k = Math.floor(p[0] / 3600000);
+    (hours[k] = hours[k] || []).push(p[1]);
+  });
+  Object.keys(hours).forEach(function (k) {
+    var a = hours[k].reduce(function (x, y) { return x + y; }, 0) / hours[k].length;
+    if (best === null || a < best[1]) best = [Number(k), a];
+  });
+  var label = document.getElementById("price-label");
+  label.textContent = "";
+  label.appendChild(el("span", "", "Pörssisähkö nyt"));
+  label.appendChild(document.createTextNode(" · "));
+  label.appendChild(el("span", "", "halvin tunti klo " + hourFmt.format(new Date(best[0] * 3600000)) +
+    " (" + one.format(best[1]) + " snt)"));
+  var count = Math.round(ahead.length / 4);
+  document.getElementById("prices-title").textContent =
+    count <= 1 ? "Seuraava tunti" : "Seuraavat " + count + " tuntia";
+  document.getElementById("prices-range").textContent = one.format(lo) + "–" + one.format(hi) + " snt/kWh";
   var svg = document.getElementById("price-chart");
   var W = Math.max(300, svg.clientWidth || 800), H = Math.max(130, svg.clientHeight || 130);
   var base = H - 20, label = H - 4;
@@ -295,10 +321,19 @@ function renderPrices(overview) {
   svg.innerHTML = out;
 }
 
+function cottageOutdoor() {
+  if (cottageOverview && Date.now() - cottageOverviewAt < COTTAGE_OVERVIEW_MS)
+    return Promise.resolve(cottageOverview);
+  return optional("api/overview?site=cottage").then(function (o) {
+    if (o) { cottageOverview = o; cottageOverviewAt = Date.now(); }
+    return o;
+  });
+}
+
 function refresh() {
   Promise.all([get("api/view"), optional("api/away"), optional("api/cottage"),
                optional("api/visit"), optional("api/overview?site=home"),
-               optional("api/overview?site=cottage")]).then(function (r) {
+               cottageOutdoor()]).then(function (r) {
     renderHome(r[0], r[1], r[4]);
     renderCottage(r[2], r[3], r[5]);
     lastPrices = r[4];
@@ -307,7 +342,7 @@ function refresh() {
     var u = document.getElementById("updated");
     u.className = "";
     u.textContent = "Päivitetty " + clockFmt.format(new Date());
-  }).catch(function () { tick(); });
+  }).catch(function () { tick(); if (lastOk === null) offline(); });
 }
 
 // Keep the screen on while the page is visible (needs HTTPS; ignored elsewhere).

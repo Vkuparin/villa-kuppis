@@ -1304,7 +1304,12 @@ class PumpService:
     def cottage_view(self) -> dict:
         if self.cottage is None:
             return {"configured": False, "site": None, "rooms": []}
-        return self.cottage.view()
+        from .alerts import CO2_LIMIT
+        values = resolve(SettingsStore(self.store.path).overrides(), "cottage")
+        # The alert limits, so the views warn at the same readings.
+        return {**self.cottage.view(),
+                "air_limits": {"humidity_pct": values["humidity_limit_pct"]["value"],
+                               "co2_ppm": CO2_LIMIT}}
 
     def sites_health(self) -> list[dict]:
         return [] if self.cottage is None else [self.cottage.health()]

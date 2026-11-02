@@ -4,7 +4,8 @@ Serves one self-contained page (inline CSS and JS, no external assets,
 fully offline) plus a small JSON API on top of PumpService:
 
 * GET  /              the Finnish app
-* GET  /manifest.webmanifest, /sw.js, /icon*.png, /icon.svg  installable PWA (card H3.1)
+* GET  /manifest.webmanifest, /sw.js, /icon*.png, /icon.svg  installable PWA (card H3.1);
+  /wall.webmanifest installs the wall view on its own
 * GET  /api/view      unit states, pending slots and service status
 * GET  /api/events    the event log (newest first)
 * GET  /api/history   downsampled time series (card F3.3)
@@ -227,6 +228,8 @@ _STATIC_DIR = Path(__file__).parent / "static"
 _STATIC_FILES = {
     "/manifest.webmanifest": ("manifest.webmanifest",
                               "application/manifest+json; charset=utf-8", "no-cache"),
+    "/wall.webmanifest": ("wall.webmanifest",
+                          "application/manifest+json; charset=utf-8", "no-cache"),
     "/sw.js": ("sw.js", "text/javascript; charset=utf-8", "no-cache"),
     "/icon.svg": ("icon.svg", "image/svg+xml", "public, max-age=86400"),
     "/icon-192.png": ("icon-192.png", "image/png", "public, max-age=86400"),

@@ -200,6 +200,7 @@ class VisitApiTests(unittest.TestCase):
         self.assertEqual(rooms["small"]["status"]["requested_target"], 21.0)
         self.assertEqual(rooms["small"]["status"]["mode"], "follow")
         self.assertIsNotNone(rooms["small"]["plan"]["acked_at"])
+        self.assertEqual(cottage["air_limits"], {"humidity_pct": 80.0, "co2_ppm": 1200})
         status, body = self.call("/api/visit")
         self.assertIsNotNone(body["visit"]["heat_start"])
         status, body = self.call("/api/visit/end", {})
