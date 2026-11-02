@@ -278,7 +278,7 @@ class PageTests(unittest.TestCase):
         page = render_page(demo=True)
         for text in ("Aloita vierailu", "Lopeta vierailu", "Lämmitys alkaa", "Lämmitys alkoi",
                      "Saapuminen", "Tavoite saavutettu", "12 tuntia", "\"api/visit\"",
-                     "Suunniteltu tavoite", "Mökki kuitannut"):
+                     "Suunniteltu tavoite", "Mökki ei ole vahvistanut tavoitetta"):
             self.assertIn(text, page)
 
 

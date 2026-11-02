@@ -49,6 +49,7 @@ from .cottage_targets import ACTOR as PLAN_ACTOR
 from .cottage_targets import CottageTargetSender
 from .credential_file import read_token_file
 from . import learning
+from . import settings as app_settings
 from .ha_gateway import (DEFAULT_ENTITY_STALE_AFTER, Binding, BindingError,
                          BindingStore, HomeAssistantGateway)
 from .pump_service import (DB_FILENAME, HISTORY_INTERVAL_SECONDS, _iso,
@@ -1047,9 +1048,11 @@ class CottageSite:
         target = sender.last.get(room_id) if sender is not None else None
         if target is None:
             return None
+        overrides = self._targets_cfg["overrides"]() if self._targets_cfg else {}
         return {"target": target.target_c, "reason": target.reason,
                 "reason_text": PLAN_REASONS.get(target.reason, target.reason),
                 "price": float(target.price_c_kwh) if target.price_c_kwh is not None else None,
+                "vat": app_settings.vat_factor(overrides, SITE_ID) != 1.0,
                 "acked_at": self._acked.get(room_id)}
 
     def room_temperatures(self) -> dict[str, float]:
@@ -1719,6 +1722,8 @@ function vkHeaterSwitch(heater, onChange) {
   var $rooms = document.getElementById("cottage-rooms");
   var AUTOMATION_ON = true;
   var ROOM_NAMES = { large: "Mökki", small: "Kammari" };
+  var ACK_LATE_MS = 45 * 60000;        // targets go out every quarter hour
+  var PAGE_STARTED = Date.now();
   var num = new Intl.NumberFormat("fi-FI", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
   var clock = new Intl.DateTimeFormat("fi-FI", { timeZone: "Europe/Helsinki",
     hour: "2-digit", minute: "2-digit" });
@@ -1761,7 +1766,8 @@ function vkHeaterSwitch(heater, onChange) {
     ttl.appendChild(el("h3", "", room.name));
     var mode = st && st.mode ? COTTAGE_MODES[st.mode] || st.mode : null;
     if (mode) {
-      var sub = el("span", "sub", null, "Mökin ohjaimen toimintatila.");
+      var sub = el("span", "sub", null, "Mökin ohjaimen toimintatila. " + (st.reason || "") +
+        (MODE_HELP[st.mode] ? (st.reason ? " – " : "") + MODE_HELP[st.mode] : ""));
       sub.innerHTML = vkIcon("flame");
       sub.appendChild(document.createTextNode(mode));
       ttl.appendChild(sub);
@@ -1782,17 +1788,25 @@ function vkHeaterSwitch(heater, onChange) {
       "</b><span>huone</span></div>";
     main.appendChild(g);
     var side = el("div", "cot-side");
+    var plan = room.plan;
     if (st) {
       var ok = st.status === "ok";
+      // One target: the one in force, why, and the planned one only when it differs.
       var f1 = el("div", "fld");
-      f1.appendChild(el("span", "fld-l", "Voimassa oleva tavoite", "Lämpötila, johon mökin ohjain pyrkii juuri nyt."));
-      f1.appendChild(el("b", "value" + (ok ? "" : " old"), st.target === null ? "–" : temp(st.target), st.reason || ""));
+      f1.appendChild(el("span", "fld-l", "Tavoite", "Lämpötila, johon mökin ohjain pyrkii juuri nyt."));
+      var tip = [];
+      if (plan) tip.push(plan.price === null ? "Jakson hintaa ei ole tiedossa." :
+        "Jakson pörssihinta " + num.format(plan.price) + " snt/kWh" + (plan.vat ? " (sis. ALV)." : " (ilman ALV:ta)."));
+      if (plan && plan.acked_at) tip.push("Mökki vahvisti tavoitteen klo " + clock.format(new Date(plan.acked_at)) + ".");
+      if (st.valid_until && st.mode !== "fallback" && st.mode !== "manual")
+        tip.push("Voimassa klo " + clock.format(new Date(st.valid_until)) + " asti.");
+      if (!AUTOMATION_ON) tip.push("Automaatio on pois päältä, joten tavoitetta ei lähetetä mökille.");
+      f1.appendChild(el("b", "value" + (ok ? "" : " old"), st.target === null ? "–" : temp(st.target), tip.join(" ")));
+      if (plan && plan.reason_text) f1.appendChild(el("span", "fld-l", plan.reason_text));
+      if (plan && AUTOMATION_ON && st.target !== null && Math.abs(plan.target - st.target) >= 0.05)
+        f1.appendChild(el("span", "fld-l", "→ " + temp(plan.target),
+          "Suunniteltu tavoite tälle jaksolle; mökki saa sen seuraavalla lähetyksellä."));
       side.appendChild(f1);
-      var f2 = el("div", "fld");
-      f2.appendChild(el("span", "fld-l", "Tila", "Mökin ohjaimen toimintatila."));
-      f2.appendChild(el("b", "value" + (ok ? "" : " old"), mode || "–", (st.reason || "") +
-        (st.mode && MODE_HELP[st.mode] ? (st.reason ? " – " : "") + MODE_HELP[st.mode] : "")));
-      side.appendChild(f2);
     }
     main.appendChild(side);
     c.appendChild(main);
@@ -1819,16 +1833,13 @@ function vkHeaterSwitch(heater, onChange) {
       c.appendChild(pick);
     }
     if (st) {
-      var plan = room.plan;
-      if (plan) {
-        c.appendChild(row("Suunniteltu tavoite", temp(plan.target) + " · " + plan.reason_text, true,
-          (plan.price === null ? "Jakson hintaa ei ole tiedossa." : "Jakson hinta " + num.format(plan.price) + " c/kWh (alv mukana).") +
-          (AUTOMATION_ON ? "" : " Automaatio on pois päältä, joten tavoitetta ei lähetetä mökille."),
-          "Hinnan ja vierailun perusteella suunniteltu tavoite tälle jaksolle."));
-        c.appendChild(row("Mökki kuitannut", plan.acked_at ? when(plan.acked_at) : "ei vielä", !!plan.acked_at,
-          plan.acked_at ? clock.format(new Date(plan.acked_at)) : "Mökki ei ole vielä kuitannut tämän käynnistyksen jälkeen yhtään tavoitetta.",
-          "Milloin mökin ohjain viimeksi vahvisti saaneensa tavoitteen."));
-      }
+      // Only a late acknowledgement is worth a line of its own.
+      var acked = plan && plan.acked_at ? new Date(plan.acked_at).getTime() : null;
+      if (plan && AUTOMATION_ON && room.state === "ok" && (acked === null ?
+          Date.now() - PAGE_STARTED > ACK_LATE_MS : Date.now() - acked > ACK_LATE_MS))
+        c.appendChild(row("Mökki ei ole vahvistanut tavoitetta", acked === null ? "ei vielä" : when(plan.acked_at), false,
+          "Mökin ohjain vahvistaa jokaisen Villa Kuppiksen lähettämän tavoitteen, yleensä vartin välein. " +
+          "Jos vahvistuksia ei tule, mökki seuraa viimeisintä saamaansa suunnitelmaa ja sen jälkeen turvalämpöä."));
       if (st.mode === "manual" && st.manual_until) {
         // One tap ends the pause; the room follows Villa Kuppis again.
         var resume = el("div", "heater-sw");
@@ -1846,8 +1857,7 @@ function vkHeaterSwitch(heater, onChange) {
         resume.appendChild(el("span"));
         resume.appendChild(rbtn);
         c.appendChild(resume);
-      } else if (st.valid_until && st.mode !== "fallback")
-        c.appendChild(el("p", "detail", "Villa Kuppiksen tavoite voimassa klo " + clock.format(new Date(st.valid_until)) + " asti."));
+      }
     } else {
       c.appendChild(el("p", "detail", "Huoneen tilatietoa ei ole liitetty."));
     }

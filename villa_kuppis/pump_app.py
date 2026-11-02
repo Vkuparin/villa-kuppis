@@ -1666,8 +1666,14 @@ function markNav() {
   });
 }
 markNav();
+let shownPage = vkPage();
 function showPage() {
   document.body.dataset.page = vkPage();
+  // Another page starts at its top, not where the last one was scrolled.
+  if (vkPage() !== shownPage) {
+    shownPage = vkPage();
+    window.scrollTo(0, 0);
+  }
   markNav();
   if (autoState) showAutomation(autoState);
   populateUnits(lastView ? lastView.units || [] : []);
