@@ -375,6 +375,27 @@ async def test_cottage_alarm_speaks_up_only_when_villa_kuppis_is_silent(
     assert phone[-1].data["title"] == "Mökki: Villa Kuppis vastaa taas"
 
 
+async def test_cottage_alarm_is_sent_again_until_a_phone_gets_it(
+        hass, calls, freezer: FrozenDateTimeFactory, hass_storage):
+    await setup(hass)
+    await hass.services.async_call(DOMAIN, "heartbeat", {}, blocking=True)
+    freezer.tick(timedelta(minutes=61))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()       # silent, but no phone has the app yet
+    assert not (hass_storage[DOMAIN]["data"].get("alarm") or {}).get("silent_sent")
+
+    phone = async_mock_service(hass, "notify", "mobile_app_ville")
+    freezer.tick(timedelta(minutes=1))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert [c.data["title"] for c in phone] == ["Mökki: Villa Kuppis ei vastaa"]
+    assert hass_storage[DOMAIN]["data"]["alarm"]["silent_sent"] is True
+    freezer.tick(timedelta(minutes=1))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert len(phone) == 1                   # said once
+
+
 async def test_cottage_alarm_can_be_switched_off(hass, calls, freezer):
     phone = async_mock_service(hass, "notify", "mobile_app_ville")
     config = {DOMAIN: {**CONFIG[DOMAIN], "alarm": {"enabled": False}}}

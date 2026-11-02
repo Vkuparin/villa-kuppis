@@ -435,8 +435,15 @@ _alarm_spec.loader.exec_module(cottage_alarm)
 class CottageAlarmTests(unittest.TestCase):
     """The cottage's own alarm (alarm.py) when Villa Kuppis is silent."""
 
-    def titles(self, alarm, minutes, rooms):
-        return [t for t, _ in alarm.check(START + timedelta(minutes=minutes), rooms, 5.0)]
+    def titles(self, alarm, minutes, rooms, delivered=True, plan_until=None):
+        """Titles due then; each counts as said when ``delivered``."""
+        out = []
+        for key, title, _message in alarm.check(START + timedelta(minutes=minutes), rooms,
+                                                5.0, plan_until):
+            if delivered:
+                alarm.sent(key)
+            out.append(title)
+        return out
 
     def test_a_cold_room_is_reported_once_and_over_a_degree_above(self):
         alarm = cottage_alarm.Alarm()
@@ -451,3 +458,27 @@ class CottageAlarmTests(unittest.TestCase):
     def test_nothing_before_the_first_heartbeat(self):
         alarm = cottage_alarm.Alarm()
         self.assertEqual(self.titles(alarm, 600, {"Mökki": 1.0}), [])
+
+    def test_a_notice_no_phone_got_is_offered_again(self):
+        alarm = cottage_alarm.Alarm()
+        alarm.heartbeat(START)
+        both = ["Mökki: Villa Kuppis ei vastaa", "Mökki: Kammari on kylmä"]
+        self.assertEqual(self.titles(alarm, 61, {"Kammari": 2.0}, delivered=False), both)
+        self.assertEqual(self.titles(alarm, 62, {"Kammari": 2.0}), both)
+        self.assertEqual(self.titles(alarm, 63, {"Kammari": 2.0}), [])
+        alarm.heartbeat(START + timedelta(minutes=64))
+        self.assertEqual(self.titles(alarm, 64, {"Kammari": 2.0}, delivered=False),
+                         ["Mökki: Villa Kuppis vastaa taas"])
+        self.assertEqual(self.titles(alarm, 65, {"Kammari": 2.0}),
+                         ["Mökki: Villa Kuppis vastaa taas"])
+
+    def test_the_silence_notice_says_how_long_the_last_plan_lasts(self):
+        alarm = cottage_alarm.Alarm()
+        alarm.heartbeat(START)
+        now = START + timedelta(minutes=61)
+        until = datetime(2026, 11, 21, 16, 0, tzinfo=timezone.utc)   # 18.00 in Helsinki
+        message = alarm.check(now, {}, 5.0, until)[0][2]
+        self.assertIn("seuraa viimeisintä suunnitelmaa 21.11. klo 18.00 asti", message)
+        self.assertIn("turvalämmön 5 °C", message)
+        message = alarm.check(now, {}, 5.0, None)[0][2]
+        self.assertIn("Patterit pitävät turvalämmön 5 °C.", message)

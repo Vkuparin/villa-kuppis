@@ -249,6 +249,7 @@ class CottageController:
         self.store = Store(hass, STORAGE_VERSION, DOMAIN)
         self.context = Context()
         self.alarm_conf = ALARM_SCHEMA(conf.get("alarm") or {})
+        self._unsent: set[str] = set()     # alarm titles no phone got yet (logged once)
         self.alarm = cottage_alarm.Alarm(cottage_alarm.AlarmSettings(
             cold_below=self.alarm_conf["cold_below"],
             silent=timedelta(minutes=self.alarm_conf["silent_minutes"])))
@@ -256,6 +257,9 @@ class CottageController:
     async def async_load(self) -> None:
         data = await self.store.async_load() or {}
         self.alarm.heard = dt_util.parse_datetime(data.get("heard") or "")
+        said = data.get("alarm") or {}
+        self.alarm.silent_sent = bool(said.get("silent_sent"))
+        self.alarm.cold = {name for name in said.get("cold") or () if isinstance(name, str)}
         for room_id, entity_id in (data.get("sensors") or {}).items():
             room = self.rooms.get(room_id)
             if room is not None:
@@ -282,7 +286,8 @@ class CottageController:
             for rid, r in self.rooms.items() if r.target is not None
         }, "disabled": {rid: sorted(r.disabled) for rid, r in self.rooms.items() if r.disabled},
            "sensors": {rid: r.chosen_sensor for rid, r in self.rooms.items() if r.chosen_sensor},
-           "heard": self.alarm.heard.isoformat() if self.alarm.heard else None})
+           "heard": self.alarm.heard.isoformat() if self.alarm.heard else None,
+           "alarm": {"silent_sent": self.alarm.silent_sent, "cold": sorted(self.alarm.cold)}})
 
     def resolve(self) -> list[Room]:
         """Rooms whose sensor or heaters changed (areas and chosen sensors)."""
@@ -369,26 +374,46 @@ class CottageController:
         if not self.alarm_conf["enabled"]:
             return
         rooms = {room.name: room.fresh_temp for room in self.rooms.values()}
-        for title, message in self.alarm.check(dt_util.utcnow(), rooms,
-                                               self.settings.safe_setpoint):
-            await self._async_notify(title, message)
+        plans = [room.target.valid_until for room in self.rooms.values()
+                 if room.target is not None]
+        said = False
+        for key, title, message in self.alarm.check(
+                dt_util.utcnow(), rooms, self.settings.safe_setpoint,
+                max(plans) if plans else None):
+            # A notice no phone got is offered again on the next check.
+            if await self._async_notify(title, message):
+                self.alarm.sent(key)
+                said = True
+        if said:
+            await self._async_save()
 
-    async def _async_notify(self, title: str, message: str) -> None:
+    async def _async_notify(self, title: str, message: str) -> int:
+        """Send to every phone; returns how many got it."""
         names = self.alarm_conf["notify"]
         if not names:
             services = self.hass.services.async_services_for_domain("notify")
             names = sorted(s for s in services if s.startswith("mobile_app_"))
         if not names:
-            _LOGGER.warning("Alarm not sent, no phone has the Home Assistant app: %s", title)
-            return
+            if title not in self._unsent:
+                _LOGGER.warning("Alarm not sent, no phone has the Home Assistant app: %s", title)
+            self._unsent.add(title)
+            return 0
+        sent = 0
         for name in names:
             try:
                 await self.hass.services.async_call("notify", name,
                                                     {"title": title, "message": message},
                                                     blocking=True, context=self.context)
+                sent += 1
             except Exception as err:   # one phone must not stop the others
-                _LOGGER.warning("Alarm to %s failed: %s", name, err or type(err).__name__)
-        _LOGGER.warning("Alarm sent: %s", title)
+                if title not in self._unsent:
+                    _LOGGER.warning("Alarm to %s failed: %s", name, err or type(err).__name__)
+        if sent:
+            self._unsent.discard(title)
+            _LOGGER.warning("Alarm sent: %s", title)
+        else:
+            self._unsent.add(title)   # retried every minute; logged once
+        return sent
 
     async def async_clear_manual(self, call: ServiceCall) -> None:
         room = self._room(call.data["room"])
