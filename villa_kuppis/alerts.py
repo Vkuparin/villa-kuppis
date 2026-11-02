@@ -43,7 +43,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from . import settings as app_settings
-from .cottage import room_label
+from .cottage import deg_text, room_label
 
 log = logging.getLogger(__name__)
 
@@ -65,11 +65,6 @@ PHONE_PREFIX = "mobile_app_"
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _deg(value: float) -> str:
-    text = f"{value:.1f}".removesuffix(".0")
-    return text.replace(".", ",") + " °C"
 
 
 @dataclass(frozen=True)
@@ -189,10 +184,11 @@ class AlertMonitor:
                                 "mökin Home Assistantiin 30 minuuttiin."),
                                ("Mökki vastaa taas", "Yhteys mökin Home Assistantiin toimii taas."),
                                OFFLINE_AFTER))
-            # Old readings prove nothing: a cold room or a device problem
-            # stays open, unreported, and a damp or stale-air spell keeps its start.
+            # Old readings prove nothing: a cold room, a device problem or a
+            # stale-air reminder stays open, unreported, and a damp or
+            # stale-air spell keeps its start.
             return out + [p for k, p in self._open.items()
-                          if k.startswith(("cold:", "device:", "humid:"))] + [
+                          if k.startswith(("cold:", "device:", "humid:", "co2:"))] + [
                 self._pending[k] for k in self._since
                 if k.startswith(("humid:", "co2:")) and k not in self._open and k in self._pending]
         for room in view["rooms"]:
@@ -229,9 +225,9 @@ class AlertMonitor:
             if value < limit or (key in self._open and value < limit + COLD_CLEAR_MARGIN):
                 out.append(Problem(key, "alert_cold", "cottage", room["id"],
                                    (f"{room_label(room['name'])} on kylmä",
-                                    f"Lämpötila on {_deg(value)}, alle hälytysrajan {_deg(limit)}."),
+                                    f"Lämpötila on {deg_text(value)}, alle hälytysrajan {deg_text(limit)}."),
                                    (f"{room_label(room['name'])} on taas lämpimämpi",
-                                    f"Lämpötila on noussut yli {_deg(limit + COLD_CLEAR_MARGIN)}.")))
+                                    f"Lämpötila on noussut yli {deg_text(limit + COLD_CLEAR_MARGIN)}.")))
         site = app_settings.resolve(overrides, "cottage")
         at_cottage = self._visit_on(cottage)
         for room in view["rooms"]:

@@ -36,7 +36,7 @@ Defaults for the cottage (since app 0.4.35; before, 8 °C below 8 c/kWh and 12 �
 
 `Hintaohjaus` for the cottage chooses between the fixed thresholds above and the optimizer (card F5.2, the default). The owner sets, per site or room:
 
-- **Minimum temperature** (`Vähimmäislämpötila`, 5 °C): never go below this, whatever the price.
+- **Base level** (`Perustaso`, 5 °C): never go below this, whatever the price (the fixed thresholds' base level too).
 - **Maximum storage temperature** (`Suurin varaava lämpötila`, 12 °C): never heat above this to store cheap energy.
 
 The optimizer (`heat_optimizer.py`) chooses a target for each 15-minute period that minimizes the cost of the known price window while staying between the minimum and the maximum: it stores heat in cheap periods and coasts through expensive ones. It uses each room's learned heat-up and cool-down rates (from the ALPSTUGA temperature and the target in force) and the FMI forecast, values the heat left at the end of the known prices at their median price, and keeps the fixed thresholds' plan whenever its own does not score at least as well. A room uses it only once its model is learned and its held-out day passed; until then, and whenever its temperature is unknown or no price is known, the fixed thresholds apply. A visit still replaces the plan from its heat-up start.

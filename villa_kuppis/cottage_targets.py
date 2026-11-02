@@ -30,7 +30,7 @@ With ``Hintaohjaus`` set to ``Optimoitu`` a room whose learned model passed
 its held-out day gets the heating optimizer's target instead (card F5.2,
 ``heat_optimizer``), planned once per period over all known prices; the
 fixed thresholds stay its fallback and its baseline. The optimizer's floor
-is the higher of ``smart_min_c`` and ``heat_base_c``. A visit heat-up uses
+is ``heat_base_c``. A visit heat-up uses
 the optimizer only in ``Optimoitu`` rooms, and plans with
 ``VISIT_HEAT_MARGIN`` of the learned heating rate so the room is warm by
 the arrival even if the heaters are slower than learned.
@@ -115,7 +115,7 @@ def schedule(steps: Sequence[RoomTarget]) -> list[dict]:
 
 def heat_limits(values: Mapping) -> HeatLimits:
     """The optimizer's band for a room: never below its base level."""
-    floor = max(float(values["smart_min_c"]["value"]), float(values["heat_base_c"]["value"]))
+    floor = float(values["heat_base_c"]["value"])
     return HeatLimits(floor, max(floor, float(values["smart_max_c"]["value"])))
 
 

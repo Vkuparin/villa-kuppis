@@ -132,7 +132,8 @@ def _heater_state(row: tuple | None, ts: int, room_c: float | None,
     return None
 
 
-def _deg(value: float) -> str:
+def deg_text(value: float) -> str:
+    """21.5 -> "21,5 °C", 5.0 -> "5 °C" (for texts and phone notices)."""
     text = f"{value:.1f}".removesuffix(".0")
     return text.replace(".", ",") + " °C"
 
@@ -940,20 +941,20 @@ class CottageSite:
         if progress and len(progress) == len(visit.rooms) and all(
                 p["reached"] for p in progress.values()):
             out.append((visit.visit_id, "warm", "Mökki on lämmin",
-                        ", ".join(f"{ROOMS.get(r, r)} {_deg(p['value'])}" for r, p in progress.items())
-                        + f". Tavoite {_deg(visit.target_c)}."))
+                        ", ".join(f"{ROOMS.get(r, r)} {deg_text(p['value'])}" for r, p in progress.items())
+                        + f". Tavoite {deg_text(visit.target_c)}."))
         late = [r for r, p in progress.items() if p["late"] and not p["reached"]]
         if late:
             out.append((visit.visit_id, "late", "Mökki ei ehdi lämmetä ajoissa",
                         f"{names(late)}: " + ", ".join(
-                            _deg(progress[r]["value"]) if progress[r]["fresh"] else "ei lukemaa"
+                            deg_text(progress[r]["value"]) if progress[r]["fresh"] else "ei lukemaa"
                             for r in late)
-                        + f". Tavoite {_deg(visit.target_c)} saapumiseen "
+                        + f". Tavoite {deg_text(visit.target_c)} saapumiseen "
                         + visit.arrival.astimezone(HELSINKI).strftime("%-d.%-m. klo %H.%M")
                         + " mennessä ei ehkä toteudu."))
         if visit.departure is None and now >= visit.arrival + VISIT_LEFT_AFTER:
             out.append((visit.visit_id, "left", "Mökkivierailu on yhä päällä",
-                        f"Huoneet pidetään {_deg(visit.target_c)} lämmössä. Lopeta vierailu "
+                        f"Huoneet pidetään {deg_text(visit.target_c)} lämmössä. Lopeta vierailu "
                         "Villa Kuppisissa, jos olet jo lähtenyt mökiltä."))
         return out
 

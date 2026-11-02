@@ -1421,7 +1421,9 @@ function drawHistory(data) {
   if (marks.length) items.push(
     '<li><span class="badge mute" title="Lähetetyt komennot näkyvät kaavion alareunassa.">Komennot</span></li>');
   $histLegend.innerHTML = items.join("");
-  drawEnergy(data.energy || [], data.energy_estimated, data.price_extra || 0);
+  // Daily energy compares days: the day view (one or two days) leaves it out.
+  if ($histRange.value === "day") $histEnergy.textContent = "";
+  else drawEnergy(data.energy || [], data.energy_estimated, data.price_extra || 0);
 }
 $histLegend.addEventListener("click", (e) => {
   const b = e.target.closest("[data-series]");

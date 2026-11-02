@@ -135,11 +135,12 @@ class StoreTests(unittest.TestCase):
     def test_cottage_heating_texts_match_what_is_built(self):
         # The thresholds drive the cottage; the storage band only the optimizer.
         for key in ("heat_base_c", "heat_rule1_price_c_kwh", "heat_rule1_c",
-                    "heat_rule2_price_c_kwh", "heat_rule2_c", "smart_min_c", "smart_max_c"):
+                    "heat_rule2_price_c_kwh", "heat_rule2_c", "smart_max_c"):
             self.assertNotIn("ei vielä", S.BY_KEY[key].help.lower())
             self.assertEqual(S.BY_KEY[key].kinds, ("heat",))
         self.assertEqual(S.BY_KEY["smart_max_c"].shown_if, ("heat_price_control", ("optimized",)))
         self.assertNotIn("smart_enabled", S.BY_KEY)
+        self.assertNotIn("smart_min_c", S.BY_KEY)     # Perustaso is the floor
 
 
 class SharedVatTests(unittest.TestCase):

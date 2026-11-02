@@ -51,7 +51,10 @@ SCRIPT = r"""
     var p = iso.split("-");
     return Number(p[2]) + "." + Number(p[1]) + "." + p[0];
   }
-  function signed(v) { return (v > 0 ? "+" : "") + num(v, 1); }
+  function signed(v) {
+    var r = Math.round(v * 10) / 10;      // no "+0,0" or "−0,0"
+    return r === 0 ? "0,0" : (r > 0 ? "+" : "") + num(r, 1);
+  }
   function item(ul, text, cls) {
     var li = document.createElement("li");
     li.textContent = text;

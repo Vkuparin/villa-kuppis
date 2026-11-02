@@ -106,25 +106,15 @@ DEFINITIONS: tuple[Definition, ...] = (
     Definition("night_enabled", "Yötila käytössä", "Yötila", "bool", False, help="Yötilassa pumpun puhallus asetetaan hiljaisimmalle nopeudelle yötilan aikana, ja aiempi puhallusasetus palautetaan aamulla, ellet ole muuttanut sitä itse. Ei riipu hinnoista.", kinds=("cool",)),
     Definition("night_start", "Yötilan alku", "Yötila", "time", "22:00", help="Yötilan alkamisaika (Suomen aika).", kinds=("cool",), shown_if=("night_enabled", (True,))),
     Definition("night_end", "Yötilan loppu", "Yötila", "time", "07:00", help="Yötilan päättymisaika (Suomen aika); voi olla seuraavana päivänä.", kinds=("cool",), shown_if=("night_enabled", (True,))),
-    Definition("vat_enabled", "Lisää ALV sähkönhintaan", "Pörssihinta", "bool",
-               False, shared=True, help="Lisää ALV sähkön pörssihintaan kodissa ja mökillä (yhteinen asetus). Vaikuttaa hintakäyrään, energiakustannuksiin ja halpa/kallis-rajojen vertailuun, joten rajat annetaan ALV:llisina."),
-    Definition("vat_percent", "ALV-prosentti", "Pörssihinta", "number", 25.5,
-               "%", 0, 100, shared=True, help="Sähkön ALV-prosentti, jota käytetään, kun ALV-kytkin on päällä. Yhteinen kodille ja mökille.", shown_if=("vat_enabled", (True,))),
-    Definition("price_extra_c_kwh", "Siirto, vero ja marginaali", "Pörssihinta", "number",
-               0.0, "snt/kWh", 0, 100, site_only=True,
-               help="Mitä maksat pörssihinnan päälle jokaisesta kilowattitunnista ALV:n kanssa: siirtomaksu, sähkövero ja sähkönmyyjän marginaali. Luvut löytyvät sähkö- ja siirtolaskusta. Optimoitu ohjaus ja energiakustannukset käyttävät kokonaishintaa, jotta lämpöä tai viileää ei varata, kun siirto ja verot syövät hintaedun. Hintakäyrä ja hintarajat pysyvät pörssihinnassa."),
     Definition("heat_price_control", "Hintaohjaus", "Lämmitys", "choice", "optimized",
                choices=(("fixed", "Kiinteät rajat"), ("optimized", "Optimoitu")),
-               help="Kiinteät rajat: tavoite tulee perustasosta ja hintarajoista. Optimoitu: lämpöä varataan halvoilla tunneilla ja kalliit tunnit mennään varatulla lämmöllä, niin että huone pysyy vähimmäislämpötilan ja suurimman varaavan lämpötilan välissä. Suunnitelma tehdään koko tunnetulle hintajaksolle huoneen opitun lämpenemis- ja jäähtymisnopeuden ja sääennusteen avulla, eikä se ole kiinteitä rajoja kalliimpi. Optimointi alkaa, kun huoneen nopeudet on opittu ja testipäivän ennuste on hyväksytty; siihen asti käytetään kiinteitä rajoja. Mökkikäynnin esilämmitys suunnitellaan opitulla nopeudella vain Optimoitu-tilassa; kiinteillä rajoilla esilämmitys alkaa kiinteällä ennakolla.",
+               help="Kiinteät rajat: tavoite tulee perustasosta ja hintarajoista. Optimoitu: lämpöä varataan halvoilla tunneilla ja kalliit tunnit mennään varatulla lämmöllä, niin että huone pysyy perustason ja suurimman varaavan lämpötilan välissä. Suunnitelma tehdään koko tunnetulle hintajaksolle huoneen opitun lämpenemis- ja jäähtymisnopeuden ja sääennusteen avulla, eikä se ole kiinteitä rajoja kalliimpi. Optimointi alkaa, kun huoneen nopeudet on opittu ja testipäivän ennuste on hyväksytty; siihen asti käytetään kiinteitä rajoja. Mökkikäynnin esilämmitys suunnitellaan opitulla nopeudella vain Optimoitu-tilassa; kiinteillä rajoilla esilämmitys alkaa kiinteällä ennakolla.",
                kinds=("heat",)),
-    Definition("smart_min_c", "Vähimmäislämpötila", "Lämmitys", "number", 5.0,
-               "°C", 0, 30, help="Optimoidun lämmityksen alaraja: huone pidetään vähintään tässä lämpötilassa ja aina vähintään perustasossa.",
-               kinds=("heat",), shown_if=("heat_price_control", ("optimized",))),
+    Definition("heat_base_c", "Perustaso (lämmitys)", "Lämmitys", "number",
+               5.0, "°C", 0, 30, help="Mökin huoneiden tavoitelämpötila, kun mikään hintaraja ei täyty tai hintaa ei ole tiedossa. Tavoite lähetetään mökin Home Assistantiin, kun Automaatio on päällä; muuten mökki pitää oman turvalämpönsä. Optimoitu lämmitys ei laske huonetta tämän alle. Mökkikäynnin lämmitys ohittaa tämän.", kinds=("heat",)),
     Definition("smart_max_c", "Suurin varaava lämpötila", "Lämmitys",
                "number", 12.0, "°C", 0, 30, help="Optimoidun lämmityksen yläraja: halvoilla tunneilla huonetta lämmitetään varastoon enintään tähän lämpötilaan.",
                kinds=("heat",), shown_if=("heat_price_control", ("optimized",))),
-    Definition("heat_base_c", "Perustaso (lämmitys)", "Lämmitys", "number",
-               5.0, "°C", 0, 30, help="Mökin huoneiden tavoitelämpötila, kun mikään hintaraja ei täyty tai hintaa ei ole tiedossa. Tavoite lähetetään mökin Home Assistantiin, kun Automaatio on päällä; muuten mökki pitää oman turvalämpönsä. Mökkikäynnin lämmitys ohittaa tämän.", kinds=("heat",)),
     Definition("heat_rule1_price_c_kwh", "Hintaraja 1: hinta alle", "Lämmitys",
                "number", 0.0, "snt/kWh", -50, 500, help="Kun pörssihinta on tämän alle, huone lämmitetään hintarajan 1 tavoitelämpötilaan. Jos molemmat hintarajat täyttyvät, korkeampi tavoite voittaa, eikä tavoite ole koskaan perustasoa alempi. Hintoihin lisätään ALV, jos ALV-kytkin on päällä. Siirto ja verot maksetaan joka kilowattitunnista, joten tyhjän mökin lämmittäminen varastoon kannattaa yleensä vain hyvin halvalla.", kinds=("heat",)),
     Definition("heat_rule1_c", "Hintaraja 1: tavoitelämpötila", "Lämmitys",
@@ -133,6 +123,13 @@ DEFINITIONS: tuple[Definition, ...] = (
                "number", -2.0, "snt/kWh", -50, 500, help="Kun pörssihinta on tämän alle, huone lämmitetään hintarajan 2 tavoitelämpötilaan. Jos molemmat hintarajat täyttyvät, korkeampi tavoite voittaa. Hintoihin lisätään ALV, jos ALV-kytkin on päällä.", kinds=("heat",)),
     Definition("heat_rule2_c", "Hintaraja 2: tavoitelämpötila", "Lämmitys",
                "number", 12.0, "°C", 0, 30, help="Tavoitelämpötila, kun hinta on hintarajan 2 alle.", kinds=("heat",)),
+    Definition("vat_enabled", "Lisää ALV sähkönhintaan", "Pörssihinta", "bool",
+               False, shared=True, help="Lisää ALV sähkön pörssihintaan kodissa ja mökillä (yhteinen asetus). Vaikuttaa hintakäyrään, energiakustannuksiin ja halpa/kallis-rajojen vertailuun, joten rajat annetaan ALV:llisina."),
+    Definition("vat_percent", "ALV-prosentti", "Pörssihinta", "number", 25.5,
+               "%", 0, 100, shared=True, help="Sähkön ALV-prosentti, jota käytetään, kun ALV-kytkin on päällä. Yhteinen kodille ja mökille.", shown_if=("vat_enabled", (True,))),
+    Definition("price_extra_c_kwh", "Siirto, vero ja marginaali", "Pörssihinta", "number",
+               0.0, "snt/kWh", 0, 100, site_only=True,
+               help="Mitä maksat pörssihinnan päälle jokaisesta kilowattitunnista ALV:n kanssa: siirtomaksu, sähkövero ja sähkönmyyjän marginaali. Luvut löytyvät sähkö- ja siirtolaskusta. Optimoitu ohjaus ja energiakustannukset käyttävät kokonaishintaa, jotta lämpöä tai viileää ei varata, kun siirto ja verot syövät hintaedun. Hintakäyrä ja hintarajat pysyvät pörssihinnassa."),
     Definition("alert_pump", "Ilmoitus, kun pumppu ei toimi", "Ilmoitukset", "bool", True,
                help="Puhelimeen tulee ilmoitus, kun pumppu ei ole käytettävissä tai ilmoittaa laitevirheestä 30 minuutin ajan, ja toinen, kun pumppu toimii taas. Ilmoitus menee jokaiseen puhelimeen, jonka Home Assistant -sovellus on yhdistetty kodin Home Assistantiin.",
                kinds=("cool",)),
@@ -229,8 +226,6 @@ def _check_consistent(values: Mapping[str, object]) -> None:
         raise ValueError("poissaoloraja ei voi olla enimmäislämpötilaa pienempi")
     if values["low_price_c_kwh"] > values["high_price_c_kwh"]:
         raise ValueError("halpa hinta ei voi ylittää kallista hintaa")
-    if values["smart_min_c"] > values["smart_max_c"]:
-        raise ValueError("vähimmäislämpötila ei voi ylittää suurinta varaavaa lämpötilaa")
 
 
 def parse_scope(scope: str) -> tuple[str, str | None]:

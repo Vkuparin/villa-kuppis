@@ -59,7 +59,7 @@ a.set-link:hover { border-color: var(--ctl); }
 .set-help[hidden] { display: none; }
 .set-src:empty { display: none; }
 .set-reset { min-width: 40px; min-height: 40px; padding: 0; font-size: 1.1rem; color: var(--text3); }
-.set-row input[type=number], .set-row input[type=time] {
+.set-row input.set-num, .set-row input[type=time] {
   min-height: 44px; width: 7.5rem; font-size: .95rem; padding: 0 .7rem;
   border: 1px solid var(--line3); border-radius: 10px;
   background: var(--surface); color: var(--text); font-variant-numeric: tabular-nums; }
@@ -124,16 +124,20 @@ SCRIPT = r"""
     } else if (d.type === "time") {
       el = make("input", { type: "time", id: id, value: v });
     } else {
-      el = make("input", { type: "number", id: id, step: "any",
-                           value: String(v) });
-      if (d.min !== null) el.min = d.min;
-      if (d.max !== null) el.max = d.max;
+      // Text, not type=number, so the value reads "8,18" the Finnish way.
+      // A field that takes a negative value keeps a keyboard with a minus.
+      el = make("input", { type: "text", id: id, className: "set-num",
+                           value: String(v).replace(".", ","), autocomplete: "off" });
+      el.setAttribute("inputmode", d.min !== null && d.min < 0 ? "text" : "decimal");
     }
     return el;
   }
   function readControl(d, el) {
     if (d.type === "bool") return el.getAttribute("aria-checked") === "true";
-    if (d.type === "number") return el.value === "" ? null : Number(el.value);
+    if (d.type === "number") {
+      var text = el.value.trim().replace(",", ".").replace("\u2212", "-");
+      return text === "" ? null : Number(text);     // NaN: not a number
+    }
     return el.value;
   }
   function render() {
@@ -187,8 +191,9 @@ SCRIPT = r"""
           ctl.setAttribute("aria-checked", readControl(d, ctl) ? "false" : "true");
         }
         var v = readControl(d, ctl);
-        if (v === null) {
-          saved = { key: d.key, text: "Anna arvo.", err: true, at: Date.now() };
+        if (v === null || (typeof v === "number" && isNaN(v))) {
+          saved = { key: d.key, text: v === null ? "Anna arvo." : "Anna luku, esim. 8,5.",
+                    err: true, at: Date.now() };
           render();
           return;
         }

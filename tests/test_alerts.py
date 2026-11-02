@@ -270,6 +270,11 @@ class MonitorTests(unittest.TestCase):
         self.service.cottage.air["large"]["co2"] = 1300
         self.check(1)
         self.assertEqual(self.check(10)[1:], ["Tuuleta: Mökki"])
+        self.service.cottage.connection = "stale"               # a blip: no second reminder
+        self.check(1)
+        self.service.cottage.connection = "ok"
+        self.check(1)
+        self.assertEqual(self.check(15)[2:], [])
 
     def test_notice_that_was_not_sent_is_retried(self):
         self.notifier.ok = False
