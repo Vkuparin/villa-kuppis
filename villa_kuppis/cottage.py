@@ -88,6 +88,10 @@ VISIT_ERRORS = (
 )
 VISIT_REACHED_MARGIN = 0.5     # a room counts as warm this close below the target
 VISIT_LEFT_AFTER = timedelta(hours=72)   # reminder of a visit without departure
+WARMING_WINDOW = timedelta(minutes=75)   # the warming rate looks this far back
+# The rise just after the heaters start lags, so the rate may call a room late
+# only after this much heating (no rise in an hour and arrival still count).
+VISIT_LATE_FROM_RATE_AFTER = timedelta(minutes=45)
 VISIT_AWAY_ACTOR = "Mökkivierailu"
 # Worst first: the state shown for a room is its worst reading.
 _STATUS_ORDER = ("missing", "unavailable", "stale", "unknown", "ok")
@@ -817,9 +821,10 @@ class CottageSite:
     def mark_visit_notice(self, visit_id: int, kind: str) -> None:
         self._visits.mark_notice(visit_id, kind, self._now())
 
-    def _warming(self, room_id: str, now: datetime) -> dict | None:
+    def _warming(self, room_id: str, now: datetime, since: datetime | None = None) -> dict | None:
         """The room's fresh temperature and how fast it rose over the last
-        hour (°C/h, None with under 30 minutes of readings)."""
+        hour (°C/h, None with under 30 minutes of readings). With ``since``
+        (the heat-up start) the rate leaves out the flat readings before it."""
         snapshot = self._gateway.snapshot()
         for binding in sorted(self._bindings(), key=lambda b: b.device_id):
             state = snapshot.get(binding.device_id) or {}
@@ -829,8 +834,9 @@ class CottageSite:
             if reading_status("temperature", state, now) != "ok" or value is None:
                 return {"value": value, "fresh": False, "rate": None}
             # Rows are stored on change, so the end point is the reading now.
+            start = now - WARMING_WINDOW if since is None else max(since, now - WARMING_WINDOW)
             rows = [(ts, v) for ts, v in self._store.series(
-                SITE_ID, binding.device_id, "value", now - timedelta(minutes=75), now, 100)
+                SITE_ID, binding.device_id, "value", start, now, 100)
                 if v is not None]
             span = now.timestamp() - rows[0][0] if rows else 0
             rate = (value - rows[0][1]) * 3600 / span if span >= 1800 else None
@@ -847,7 +853,7 @@ class CottageSite:
             return {}
         out = {}
         for room in visit.rooms:
-            info = self._warming(room, now)
+            info = self._warming(room, now, since=start)
             if info is None:
                 continue
             item = {**info, "reached": False, "eta": None, "late": False}
@@ -859,7 +865,8 @@ class CottageSite:
                 if rate is not None and rate > 0.1:
                     eta = now + timedelta(hours=(goal - info["value"]) / rate)
                     item["eta"] = eta.isoformat()
-                    item["late"] = eta > visit.arrival + timedelta(minutes=15)
+                    item["late"] = (now - start >= VISIT_LATE_FROM_RATE_AFTER
+                                    and eta > visit.arrival + timedelta(minutes=15))
                 elif now - start >= timedelta(hours=1):
                     item["late"] = True        # an hour of heating and no rise
                 if now >= visit.arrival:

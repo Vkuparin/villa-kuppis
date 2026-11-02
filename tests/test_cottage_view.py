@@ -708,9 +708,6 @@ class RoleTests(unittest.TestCase):
         self.assertIsNone(role_of(b("alpstuga", "sensor.a")))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class VisitProgressTests(unittest.TestCase):
     """The visit card's progress lines and the phone notices built from them."""
@@ -736,7 +733,7 @@ class VisitProgressTests(unittest.TestCase):
 
     def warming(self, **rooms):
         """Room -> (value, rate) with fresh readings."""
-        self.site._warming = lambda room, now: (
+        self.site._warming = lambda room, now, since=None: (
             {"value": rooms[room][0], "fresh": True, "rate": rooms[room][1]}
             if room in rooms else None)
 
@@ -768,6 +765,10 @@ class VisitProgressTests(unittest.TestCase):
     def test_a_slow_room_gets_a_late_notice(self):
         self.start()
         self.warming(large=(20.6, 1.0), small=(10.0, 0.5))   # 21 h to go, arrival in 10 h
+        self.clock[0] += timedelta(minutes=44)               # the rise lags at first
+        self.assertFalse(self.site.visit_view()["progress"]["small"]["late"])
+        self.assertEqual(self.kinds(), [])
+        self.clock[0] += timedelta(minutes=1)
         self.assertTrue(self.site.visit_view()["progress"]["small"]["late"])
         notices = self.site.visit_notices()
         self.assertEqual([n[1] for n in notices], ["late"])
@@ -811,6 +812,30 @@ class VisitProgressTests(unittest.TestCase):
         self.assertTrue(info["fresh"])
         self.assertEqual(info["value"], values[-1])
         self.assertAlmostEqual(info["rate"], values[-1] - values[0], places=6)
+
+    def test_flat_readings_before_the_heat_up_do_not_make_a_room_late(self):
+        temp = {"v": 5.0}
+        snapshot = self.gateway.snapshot
+        def patched():
+            snap = snapshot()
+            snap["large-temperature"]["value"] = round(temp["v"], 2)
+            return snap
+        self.gateway.snapshot = patched
+        self.arrival = self.clock[0] + timedelta(hours=10, minutes=30)
+        visit = self.start(rooms=("large",), started=False)
+        for _ in range(24):                      # two hours flat at 5 °C
+            self.site.sample()
+            self.clock[0] += timedelta(minutes=5)
+        heat_start = self.clock[0]
+        self.site._visits.mark_started(visit.visit_id, heat_start)
+        for _ in range(18):                      # 2 °C/h: 20.5 °C in 7.75 h, arrival in 8.5 h
+            self.clock[0] += timedelta(minutes=5)
+            temp["v"] = 5.0 + 2.0 * (self.clock[0] - heat_start).total_seconds() / 3600
+            self.site.sample()
+            progress = self.site.visit_view()["progress"]["large"]
+            self.assertFalse(progress["late"], self.clock[0] - heat_start)
+            self.assertNotIn("late", self.kinds())
+        self.assertAlmostEqual(progress["rate"], 2.0, delta=0.1)
 
 
 class VisitAwayTests(unittest.TestCase):
@@ -862,3 +887,7 @@ class VisitAwayTests(unittest.TestCase):
         self.service.cottage.end_visit()
         self.service.sync_visit_away()
         self.assertFalse(self.service.automation.away())
+
+
+if __name__ == "__main__":
+    unittest.main()
