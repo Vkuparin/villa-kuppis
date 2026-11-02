@@ -195,6 +195,25 @@ class CoolingTests(ServiceTestCase):
         self.assertEqual(len(rows), 96)
         self.assertEqual({v for _, v in rows}, {25.0})
 
+    def test_price_fetch_button_shows_only_when_prices_are_late(self):
+        service, clock = self.start()
+        self.assertTrue(service.plan_view()["prices_late"])       # none at all
+        self.set_prices(100)
+        clock._now = datetime(2026, 10, 19, 10, 0, tzinfo=timezone.utc)
+        self.assertFalse(service.plan_view()["prices_late"])      # 13.00 local
+        clock._now = datetime(2026, 10, 19, 12, 30, tzinfo=timezone.utc)
+        self.assertTrue(service.plan_view()["prices_late"])       # 15.30, no tomorrow
+        start, end = helsinki_day_bounds(DAY + timedelta(days=1))
+        store = PriceStore(f"{self.tmp}/prices.db")
+        try:
+            store.replace_day((DAY + timedelta(days=1)).isoformat(),
+                              [PriceInterval(ts, Decimal(100))
+                               for ts in range(start, end, INTERVAL_SECONDS)],
+                              datetime(2026, 10, 19, tzinfo=timezone.utc))
+        finally:
+            store.close()
+        self.assertFalse(service.plan_view()["prices_late"])
+
     def test_away_button_cools_only_above_away_maximum_and_restores(self):
         service, _ = self.start(cool_power=False)
         self.set_prices(30)                       # cheap: normally precools

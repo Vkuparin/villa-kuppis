@@ -69,6 +69,7 @@ WATCHED_ACTIONS = ("power", "setpoint", "mode")
 # How long after its power-on a unit found in a mode other than Cool is
 # switched off again (the mode was changed while the unit was off).
 WRONG_MODE_WINDOW = timedelta(minutes=30)
+PRICES_LATE_AFTER = (15, 0)   # Helsinki; tomorrow is fetched from 14.25 on
 ACTOR = "Suunnitelma"
 SITE = "home"
 DEFAULT_INTERVAL = 60.0
@@ -526,10 +527,15 @@ class CoolingAutomation:
                     "over_max_c_h": round(result.over_max_c_h, 2),
                     "fixed_over_max_c_h": round(result.fixed_over_max_c_h, 2)},
             })
+        # Prices are fetched by themselves (tomorrow's from 14:25); the
+        # button to fetch them by hand shows only when they are late.
+        local = now.astimezone(HELSINKI)
+        late = not plan or ((local.hour, local.minute) >= PRICES_LATE_AFTER
+                            and not self._periods(local.date() + timedelta(days=1)))
         return {"enabled": self.enabled, "available": self.available,
                 "actor": ACTOR,
                 "day": now.astimezone(HELSINKI).date().isoformat(),
-                "has_prices": bool(plan), "away": self.away(),
+                "has_prices": bool(plan), "prices_late": late, "away": self.away(),
                 "cool_kw": optimizer.COOL_KW, "units": shown}
 
     # -- apply --

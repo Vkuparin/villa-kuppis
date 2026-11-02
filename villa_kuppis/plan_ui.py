@@ -11,7 +11,7 @@ SECTION_HTML = r"""
       <div class="tools">
         <button type="button" class="switch" role="switch" aria-checked="false" id="away-btn"
           title="Poissa ollessa jäähdytetään vasta poissa-tilan enimmäislämpötilan yli eikä esijäähdytetä."><span class="track"></span><span>Poissa kotoa</span></button>
-        <button type="button" id="prices-btn" title="Hakee tämän ja huomisen päivän pörssihinnat, jos niitä ei vielä ole.">Hae hinnat</button>
+        <button type="button" id="prices-btn" hidden title="Hakee tämän ja huomisen päivän pörssihinnat. Hinnat haetaan itsestään; painike näkyy vain, kun ne ovat myöhässä.">Hae hinnat</button>
       </div>
     </div>
     <p id="prices-note" class="detail" role="status"></p>
@@ -21,7 +21,7 @@ SECTION_HTML = r"""
 """
 
 STYLE = r"""
-#prices-note:empty, #plan-note:empty { display: none; }
+#prices-note:empty, #plan-note:empty, #prices-btn[hidden] { display: none; }
 .plan-unit { padding: .85rem 0 .2rem; border-top: 1px solid var(--line2); }
 .plan-unit:first-of-type { border-top: 0; padding-top: .3rem; }
 .plan-unit h3 { display: flex; flex-wrap: wrap; align-items: baseline; gap: .2rem .6rem;
@@ -152,6 +152,7 @@ SCRIPT = r"""
   }
   function render(data) {
     showAway(!!data.away);
+    $prices.hidden = !data.prices_late;
     $body.textContent = "";
     if (!data.has_prices) {
       $note.textContent = "Päivän sähkönhintoja ei ole vielä tallennettu.";

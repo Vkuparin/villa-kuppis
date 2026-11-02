@@ -16,19 +16,19 @@ SECTION_HTML = r"""
                 title="Kohde tai huone, jonka asetuksia muokataan."></select>
       </div>
     </div>
-    <p class="detail">Huoneen asetus ohittaa kohteen asetuksen, ja kohteen
+    <p class="detail" id="set-intro">Huoneen asetus ohittaa kohteen asetuksen, ja kohteen
       asetus ohittaa oletuksen. Muutos tulee voimaan seuraavassa
       suunnitelmassa.</p>
     <div id="set-body"></div>
     <h3>Käyttöliittymä</h3>
     <p class="detail">Näkymä tallentuu tähän laitteeseen ja selaimeen.</p>
     <div class="set-row">
-      <label for="ui-dark">Tumma teema</label>
+      <label for="ui-dark" class="set-name">Tumma teema</label>
       <button type="button" class="switch" role="switch" aria-checked="false"
               id="ui-dark"><span class="track"></span></button>
     </div>
     <div class="set-row">
-      <label for="ui-accent">Aksenttiväri</label>
+      <label for="ui-accent" class="set-name">Aksenttiväri</label>
       <select id="ui-accent" aria-label="Aksenttiväri">
         <option value="blue">Sininen</option>
         <option value="green">Vihreä</option>
@@ -69,6 +69,11 @@ a.set-link:hover { border-color: var(--ctl); }
            border-radius: 999px; background: var(--surface2); }
 #set-status { font-size: .82rem; color: var(--text3); }
 #set-status.err { color: var(--err); }
+#set-scope[hidden], #set-intro[hidden] { display: none; }
+.set-name, .set-note { flex: 1 1 14rem; }
+.set-saved { flex: 0 0 auto; font-size: .82rem; color: var(--ok); transition: opacity .6s; }
+.set-saved.err { color: var(--err); flex-basis: 100%; }
+.set-saved.gone { opacity: 0; }
 """
 
 SCRIPT = r"""
@@ -79,6 +84,9 @@ SCRIPT = r"""
   var $status = document.getElementById("set-status");
   var data = null;
   var SRC = { "default": "Oletus", site: "Kohteen asetus", room: "Huoneen asetus" };
+  // The last save, shown next to its own row for a moment (errors stay).
+  var saved = null;     // { key, text, err, at }
+  var SAVED_MS = 3000;
 
   function say(text, isErr) {
     $status.textContent = text || "";
@@ -180,7 +188,7 @@ SCRIPT = r"""
         }
         var v = readControl(d, ctl);
         if (v === null) {
-          say("Anna arvo ennen tallennusta.", true);
+          saved = { key: d.key, text: "Anna arvo.", err: true, at: Date.now() };
           render();
           return;
         }
@@ -199,6 +207,14 @@ SCRIPT = r"""
         });
         row.appendChild(reset);
       }
+      if (saved && saved.key === d.key && (saved.err || Date.now() - saved.at < SAVED_MS)) {
+        var mark = make("span", { className: "set-saved" + (saved.err ? " err" : ""),
+                                  textContent: saved.text });
+        mark.setAttribute("role", "status");
+        row.appendChild(mark);
+        if (!saved.err) setTimeout(function () { mark.className += " gone"; },
+                                   Math.max(0, SAVED_MS - (Date.now() - saved.at)));
+      }
       row.appendChild(help);
       $body.appendChild(row);
       if (d.group === "Ilmoitukset") alertRow = row;
@@ -208,7 +224,7 @@ SCRIPT = r"""
   function testRow(site) {
     var row = make("div", { className: "set-row" });
     var hint = "Tarkista, että ilmoitukset tulevat puhelimeen.";
-    var note = make("span", { className: "set-label detail", textContent: hint });
+    var note = make("span", { className: "set-note detail", textContent: hint });
     note.setAttribute("role", "status");
     var btn = make("button", { type: "button", textContent: "Lähetä testi-ilmoitus" });
     btn.addEventListener("click", function () {
@@ -236,28 +252,34 @@ SCRIPT = r"""
         var prev = keepScope ? $scope.value : null;
         $scope.textContent = "";
         // Each page shows its own site's settings (all when no page is known).
-        j.scopes.filter(function (s) {
+        var scopes = j.scopes.filter(function (s) {
           return typeof vkSite !== "function" || s.site === vkSite();
-        }).forEach(function (s) {
+        });
+        scopes.forEach(function (s) {
           $scope.appendChild(make("option", { value: s.id, textContent: s.label }));
         });
+        // One scope (the cottage): nothing to choose and nothing overrides.
+        $scope.hidden = scopes.length < 2;
+        document.getElementById("set-intro").hidden = scopes.length < 2;
         if (prev) $scope.value = prev;
         render();
       })
       .catch(function () { say("Asetusten haku epäonnistui.", true); });
   }
   function send(body) {
-    say("Tallennetaan…");
+    var mark = function (text, err) {
+      saved = { key: body.key, text: text, err: err, at: Date.now() };
+    };
     fetch("api/settings", { method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body) })
       .then(function (r) { return r.json().then(function (j) { return [r.ok, j]; }); })
       .then(function (res) {
-        if (!res[0]) { say("Tallennus epäonnistui: " + (res[1].detail || ""), true); return; }
-        say("Tallennettu. Muutos tulee voimaan seuraavassa suunnitelmassa.");
+        if (!res[0]) { mark("Tallennus epäonnistui: " + (res[1].detail || ""), true); render(); return; }
+        mark("Tallennettu ✓", false);
         load(true);
       })
-      .catch(function () { say("Tallennus epäonnistui.", true); });
+      .catch(function () { mark("Tallennus epäonnistui.", true); render(); });
   }
   $scope.addEventListener("change", render);
   document.addEventListener("vk-page", function () { load(false); });

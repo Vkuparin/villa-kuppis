@@ -322,7 +322,7 @@ class ApiTests(unittest.TestCase):
     def test_page_has_settings_section(self):
         page = http("GET", self.url("/"))[2].decode("utf-8")
         for needle in ("Asetukset", 'id="set-scope"', "Palauta oletus",
-                       "Muutos tulee voimaan seuraavassa suunnitelmassa"):
+                       "Tallennettu", "set-saved"):
             self.assertIn(needle, page)
         self.assertNotIn("/*SETTINGS", page)
         self.assertNotIn("<!--SETTINGS", page)

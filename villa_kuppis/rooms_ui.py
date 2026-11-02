@@ -34,7 +34,8 @@ STYLE = r"""
 .room-card ul:empty { display: none; }
 .rooms-ok { color: var(--ok); }
 .rooms-bad { color: var(--err); }
-.room-card .room-restart { align-self: flex-start; font-size: .8rem; }
+.room-card .room-restart { margin-top: .4rem; font-size: .8rem; }
+.room-card .room-more summary { cursor: pointer; font-size: .8rem; color: var(--text3); }
 """
 
 SCRIPT = r"""
@@ -164,6 +165,11 @@ SCRIPT = r"""
       if (cot) {
         // After moving the heaters (to the cottage, for example) the old
         // readings describe another room.
+        var more = document.createElement("details");
+        more.className = "room-more";
+        var summary = document.createElement("summary");
+        summary.textContent = "Lisää";
+        more.appendChild(summary);
         var restart = document.createElement("button");
         restart.type = "button";
         restart.className = "room-restart";
@@ -178,7 +184,8 @@ SCRIPT = r"""
             body: JSON.stringify({ room: u.id.replace(/^cottage:/, "") }) })
             .then(function () { load(); }).catch(function () { restart.disabled = false; });
         });
-        card.appendChild(restart);
+        more.appendChild(restart);
+        card.appendChild(more);   // needed about once, after a move: out of the way
       }
       $body.appendChild(card);
     });
