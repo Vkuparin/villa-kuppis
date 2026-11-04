@@ -175,6 +175,31 @@ async def test_target_survives_a_restart(hass, calls, hass_storage):
     assert state.attributes["revision"] == 7
 
 
+async def test_hand_change_hold_survives_a_restart(hass, calls, hass_storage):
+    # An integration update restarts it: a person's hand-set heater stays.
+    until = (dt_util.utcnow() + timedelta(hours=3)).isoformat()
+    hass_storage[DOMAIN] = {"version": 1, "minor_version": 1, "key": DOMAIN, "data": {
+        "targets": {}, "manual": {"large": {"until": until, "by": "climate.mill_1"}}}}
+    set_heater(hass, "climate.mill_1", 22.0)
+    await setup(hass)
+    state = status(hass)
+    assert state.attributes["mode"] == "manual"
+    assert state.attributes["manual_by"] == "climate.mill_1"
+    assert ("climate.mill_1", 5.0) not in sent(calls)
+
+
+async def test_hand_change_hold_is_saved(hass, calls, hass_storage):
+    await setup(hass)
+    await set_target(hass, "large", 18, revision=1)
+    set_heater(hass, "climate.mill_1", 21.0)
+    await hass.async_block_till_done()
+    set_heater(hass, "climate.mill_1", 24.0)
+    await hass.async_block_till_done()
+    assert status(hass).attributes["mode"] == "manual"
+    saved = hass_storage[DOMAIN]["data"]["manual"]["large"]
+    assert saved["by"] == "climate.mill_1"
+
+
 async def test_hand_change_pauses_the_room_until_cleared(hass, calls, freezer):
     await setup(hass)
     await set_target(hass, "large", 18, revision=1)
@@ -186,7 +211,7 @@ async def test_hand_change_pauses_the_room_until_cleared(hass, calls, freezer):
     await hass.async_block_till_done()
     assert status(hass).attributes["mode"] == "manual"
     assert status(hass).attributes["manual_by"] == "climate.mill_1"
-    assert status(hass).state == "unknown"
+    assert status(hass).state == "24.0"   # the hand-set target (0.7.2)
     hass.states.async_set("sensor.alpstuga_large", "19.5")
     await hass.async_block_till_done()
     assert calls == []
@@ -241,7 +266,7 @@ async def test_switched_off_heater_still_keeps_a_cold_room_from_freezing(hass, c
     await hass.async_block_till_done()
     assert status(hass, "small").attributes["room_temperature"] == 6.5   # below 7 °C
     assert ("climate.mill_4", "heat") in [(c.data["entity_id"], c.data["hvac_mode"]) for c in modes]
-    assert "frost guard" in status(hass, "small").attributes["reason"]
+    assert "pakkasvahti" in status(hass, "small").attributes["reason"]
 
 
 async def test_far_future_revision_does_not_lock_out_targets(hass, calls, hass_storage):

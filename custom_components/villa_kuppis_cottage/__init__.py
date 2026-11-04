@@ -270,6 +270,14 @@ class CottageController:
             room = self.rooms.get(room_id)
             if room is not None:
                 room.disabled = {e for e in entities if e in room.heaters}
+        # A hand change keeps its hold over a restart (an integration update
+        # once put a hand-set heater back to the safe setpoint).
+        for room_id, saved in (data.get("manual") or {}).items():
+            room = self.rooms.get(room_id)
+            until = dt_util.parse_datetime((saved or {}).get("until") or "")
+            if room is not None and until is not None and until > dt_util.utcnow():
+                room.memory.manual_until = until
+                room.memory.manual_by = saved.get("by")
         for room_id, saved in (data.get("targets") or {}).items():
             room = self.rooms.get(room_id)
             until = dt_util.parse_datetime(saved.get("valid_until") or "")
@@ -287,6 +295,8 @@ class CottageController:
             for rid, r in self.rooms.items() if r.target is not None
         }, "disabled": {rid: sorted(r.disabled) for rid, r in self.rooms.items() if r.disabled},
            "sensors": {rid: r.chosen_sensor for rid, r in self.rooms.items() if r.chosen_sensor},
+           "manual": {rid: {"until": r.memory.manual_until.isoformat(), "by": r.memory.manual_by}
+                      for rid, r in self.rooms.items() if r.memory.manual_until is not None},
            "heard": self.alarm.heard.isoformat() if self.alarm.heard else None,
            "alarm": {"silent_sent": self.alarm.silent_sent, "cold": sorted(self.alarm.cold)}})
 
@@ -447,8 +457,11 @@ class CottageController:
         room.fresh_temp = (sensor.value if sensor and sensor.reported_at is not None
                            and now - sensor.reported_at <= self.settings.sensor_max_age
                            else None)
+        manual = (room.memory.manual_until, room.memory.manual_by)
         decision = control.decide(now, room.target, sensor, heaters,
                                   room.memory, self.settings)
+        if (room.memory.manual_until, room.memory.manual_by) != manual:
+            await self._async_save()
         if room.decision is None or decision.mode != room.decision.mode:
             _LOGGER.info("%s: %s (%s)", room.name, decision.mode, decision.reason)
         room.decision = decision
