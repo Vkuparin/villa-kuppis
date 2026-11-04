@@ -230,6 +230,7 @@ class ManualTests(unittest.TestCase):
         sent_before = len(sim.commands)
         sim.run(60)
         self.assertEqual(sim.decisions[-1][1].mode, "manual")
+        self.assertEqual(sim.decisions[-1][1].effective_target, 24.0)
         self.assertEqual(len(sim.commands), sent_before)
         self.assertEqual(sim.room.heaters[0].setpoint, 24.0)
         sim.run(4 * 60)

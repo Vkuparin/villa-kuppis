@@ -363,7 +363,11 @@ def decide(now: datetime, target: Target | None, sensor: Sensor | None,
         reason = f"{memory.manual_by} changed by hand"
         if cold:
             reason += f"; room {room:g} °C, frost guard on"
-        return _decision("manual", reason, None, None, cmds, heaters, memory, settings, False)
+        held = [h.setpoint for h in heaters
+                if h.enabled and h.available and h.mode != OFF and h.setpoint is not None]
+        # The target in force is what the person set, not "nothing".
+        return _decision("manual", reason, max(held) if held else None, None, cmds,
+                         heaters, memory, settings, False)
     memory.manual_until = memory.manual_by = None
 
     if target is None or now >= target.valid_until:

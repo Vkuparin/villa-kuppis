@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.42
+
+- Korjattu: Käsiohjauksen aikana mökin Tavoite ja historian Voimassa oleva tavoite -viiva näyttävät nyt käsin asetetun lämpötilan eivätkä "–" tai vanhaa arvoa. Mökin integraatio 0.7.2: päivitä install.sh:lla, jotta historia tallentaa arvon.
+
 ## 0.4.41
 
 - ALPSTUGA-anturien kosteus, lämpötila, CO₂ ja PM2,5 näkyvät nyt myös Laitteet-korteilla ja historiassa, ei vain huonekortilla.

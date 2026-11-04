@@ -1333,6 +1333,13 @@ class CottageSite:
                             "mode", "reason", "drive", "revision", "requested_target",
                             "valid_until", "manual_until", "manual_by", "disabled_heaters",
                             "chosen_sensor", "alarm")}}
+            st = room["status"]
+            if st and st.get("mode") == "manual" and st.get("target") is None:
+                # Integration before 0.7.2 reports no target during Käsiohjaus.
+                held = [h["setpoint"] for h in room["heaters"]
+                        if h["setpoint"] is not None and h["mode"] not in (None, "off")
+                        and h["available"]]
+                st["target"] = max(held) if held else None
             disabled = (room["status"] or {}).get("disabled_heaters")
             for heater in room["heaters"]:
                 # Older integrations have no disabled_heaters: no switch.
