@@ -118,7 +118,44 @@ def tile_kind(domain: str, state: dict) -> str:
     return domain
 
 
+# English entity-name tails that integrations add (Matter, Tapo, Google ...), in Finnish.
+NAME_TAILS = {
+    "temperature": "lämpötila", "humidity": "kosteus", "air quality": "ilmanlaatu",
+    "download speed": "latausnopeus", "upload speed": "lähetysnopeus",
+    "battery": "akku", "battery level": "akun varaus", "power": "teho", "energy": "energia",
+    "voltage": "jännite", "current": "virta", "illuminance": "valoisuus",
+    "carbon dioxide": "hiilidioksidi", "co2": "hiilidioksidi", "pressure": "ilmanpaine",
+    "signal strength": "signaalin voimakkuus", "uptime": "käyntiaika", "ping": "viive",
+    "cpu usage": "suorittimen käyttö", "memory usage": "muistin käyttö",
+    "connected devices": "yhdistetyt laitteet", "wi-fi": "wifi", "last seen": "viimeksi nähty",
+    "pm2.5": "pienhiukkaset (PM2,5)", "pm10": "hengitettävät hiukkaset (PM10)",
+    "volatile organic compounds": "haihtuvat yhdisteet", "tvoc": "haihtuvat yhdisteet",
+    "motion": "liike", "door": "ovi", "window": "ikkuna", "occupancy": "läsnäolo",
+    "state": "tila", "status": "tila",
+}
+# A device-type word at the end of the base name repeats what the measurement says.
+NAME_BASE_NOISE = (" patteri", " mittari", " anturi", " sensor", " meter")
+
+
+def finnish_name(name: str) -> str:
+    """'Kammari 1000W patteri Temperature' -> 'Kammari 1000W lämpötila'. Other names stay."""
+    low = name.lower()
+    for tail in sorted(NAME_TAILS, key=len, reverse=True):
+        if low.endswith(" " + tail):
+            base = name[:-(len(tail) + 1)].rstrip()
+            for noise in NAME_BASE_NOISE:
+                if base.lower().endswith(noise) and len(base) > len(noise) + 1:
+                    base = base[:-len(noise)].rstrip()
+                    break
+            return f"{base} {NAME_TAILS[tail]}"
+    return name
+
+
 def _name(state: dict, entry: dict | None, device: dict | None) -> str:
+    return finnish_name(_raw_name(state, entry, device))
+
+
+def _raw_name(state: dict, entry: dict | None, device: dict | None) -> str:
     attrs = state.get("attributes") or {}
     name = attrs.get("friendly_name")
     if isinstance(name, str) and name.strip():

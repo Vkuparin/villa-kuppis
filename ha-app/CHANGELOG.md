@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.40
+
+- Laitekorttien englanninkieliset nimet ja tilat näkyvät suomeksi (esim. "Kammari 1000W lämpötila", "Ilmanlaatu", "Hyvä", "Latausnopeus").
+
 ## 0.4.39
 
 - Korjattu: puhelimella "Käsiohjaus päättyy klo ..." -teksti ei enää leikkaudu; Palauta automaatio -nappi on tekstin alla. Pitkät laitenimet rivittyvät.

@@ -40,6 +40,15 @@ def entry(entity_id, area=None, device=None, **extra):
             "device_id": device, "platform": "test", **extra}
 
 
+class FinnishNameTest(unittest.TestCase):
+    def test_english_tails_become_finnish(self):
+        from villa_kuppis.devices import finnish_name
+        self.assertEqual(finnish_name("Kammari 1000W patteri Temperature"), "Kammari 1000W lämpötila")
+        self.assertEqual(finnish_name("Kammari Alpstuga mittari Air quality"), "Kammari Alpstuga ilmanlaatu")
+        self.assertEqual(finnish_name("Archer BE230 Download speed"), "Archer BE230 latausnopeus")
+        self.assertEqual(finnish_name("Olohuone"), "Olohuone")
+
+
 class BuildTest(unittest.TestCase):
     def test_area_from_entity_or_its_device(self):
         reg = registry([entry("sensor.t", device="d1"), entry("light.l", area="piha", device="d1")],

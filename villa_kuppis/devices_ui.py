@@ -235,6 +235,16 @@ SCRIPT = r"""
     b.appendChild(el("span", "", on ? "Päällä" : "Pois"));
     return b;
   }
+  var STATES = {good: "Hyvä", fair: "Tyydyttävä", moderate: "Kohtalainen", poor: "Huono",
+    very_poor: "Erittäin huono", extremely_poor: "Erittäin huono", excellent: "Erinomainen",
+    unknown: "Tuntematon", on: "Päällä", off: "Pois", open: "Auki", closed: "Kiinni",
+    home: "Kotona", not_home: "Poissa", idle: "Lepotilassa", heat: "Lämmitys", cool: "Viilennys",
+    detected: "Havaittu", clear: "Ei havaintoa", connected: "Yhdistetty", disconnected: "Ei yhteyttä",
+    charging: "Latautuu", low: "Matala", normal: "Normaali", high: "Korkea"};
+  function stateWord(s) {
+    var k = String(s).toLowerCase().replace(/ /g, "_");
+    return STATES[k] || String(s);
+  }
   function valueText(d) {
     if (!d.available) return ["Ei saatavilla", ""];
     var v = d.value, unit = d.unit || UNITS[d.kind] || "";
@@ -243,7 +253,7 @@ SCRIPT = r"""
       case "humidity": case "battery": return [v === null ? "–" : Math.round(v), "%"];
       case "co2": case "power": case "illuminance": return [v === null ? "–" : Math.round(v), unit];
       case "air": case "energy": case "number": return [v === null ? "–" : num2.format(v), unit];
-      case "text": return [String(d.state), ""];
+      case "text": return [stateWord(d.state), ""];
       case "binary":
         var words = BINARY[d.device_class] || ["Päällä", "Pois"];
         return [d.on ? words[0] : words[1], ""];
@@ -258,7 +268,7 @@ SCRIPT = r"""
                             d.position !== null && d.position !== undefined ? "% auki" : ""];
       case "climate": return [d.current !== null && d.current !== undefined ? num1.format(d.current) : "–", "°C"];
       case "scene": case "script": return ["", ""];
-      default: return [String(d.state), unit];
+      default: return [stateWord(d.state), unit];
     }
   }
   function isActive(d) {
