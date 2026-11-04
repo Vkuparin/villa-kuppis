@@ -108,6 +108,41 @@ class SiteTargetTests(IsolatedAsyncioTestCase):
         self.assertFalse(view["automation_on"])
         self.assertEqual(self.room("large")["plan"]["target"], 12.0)
 
+    async def test_optimized_rooms_with_a_learning_restart_still_get_their_thresholds(self):
+        # Ville's settings on 2026-11-04: Optimoitu, below 15 c -> 8 °C, below 8 c -> 12 °C.
+        # The rooms are not learned yet, so the thresholds are the plan. Reading
+        # the learning history after a restart once crashed every tick.
+        overrides = {"site:cottage": {"heat_price_control": "optimized", "heat_base_c": 5,
+                                      "smart_max_c": 12,
+                                      "heat_rule1_price_c_kwh": 15, "heat_rule1_c": 8,
+                                      "heat_rule2_price_c_kwh": 8, "heat_rule2_c": 12}}
+        for room in ("large", "small"):
+            self.bindings.bind("cottage", f"{room}-temperature",
+                               f"sensor.{room}_temperature", "sensor", "", room)
+            self.bindings.bind("cottage", f"{room}-heater", f"climate.{room}_heater",
+                               "climate", "", room)
+            self.site.restart_learning(room, "test")
+        self.clock.advance(3600)
+        read = []
+
+        def models():
+            end = self.clock()
+            for room in ("large", "small"):
+                read.append(self.site.learning_readings(room, end - timedelta(days=7), end))
+            return {}, None
+        self.site._targets_cfg.update(overrides=lambda: overrides, models=models)
+        self.site._sender_map = None          # rebuild the sender with the new settings
+        sent = self.site.tick_targets()
+        await self.settle(sent)
+        self.assertEqual(len(read), 2)
+        targets = {t["room"]: t for t in self.ha.targets}
+        # 03:00 local at 2 c/kWh: below both thresholds, the higher target wins.
+        self.assertEqual({room: t["target"] for room, t in targets.items()},
+                         {"large": 12.0, "small": 12.0})
+        steps = [t.target_c for t in self.site._sender.schedules["small"]]
+        self.assertEqual(set(steps), {12.0, 8.0, 5.0})   # 6 c -> 12, 9 c -> 8, 15 c -> 5
+        self.assertEqual(self.room("small")["plan"]["reason"], "threshold")
+
     async def test_room_without_a_status_binding_is_skipped(self):
         self.bindings.unbind("cottage", "small-status")
         with self.assertLogs(level="WARNING") as logs:
