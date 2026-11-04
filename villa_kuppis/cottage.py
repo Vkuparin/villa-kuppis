@@ -1603,7 +1603,8 @@ section.cottage[hidden] { display: none; }
 .heater-sw { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center;
              gap: .3rem .8rem; padding: .45rem 0; border-top: 1px solid var(--line2);
              font-size: .88rem; }
-.heater-sw .hs-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.heater-sw .hs-name { min-width: 0; overflow-wrap: anywhere; }
+.heater-sw.resume { grid-template-columns: minmax(0, 1fr); justify-items: start; }
 .heater-sw .hs-val { color: var(--text2); font-variant-numeric: tabular-nums; }
 .heater-sw.off .hs-name, .heater-sw.off .hs-val { color: var(--text3); }
 .heater-sw button.switch { min-height: 44px; font-size: .82rem; color: var(--text2); }
@@ -1854,7 +1855,7 @@ function vkHeaterSwitch(heater, onChange) {
           "Jos vahvistuksia ei tule, mökki seuraa viimeisintä saamaansa suunnitelmaa ja sen jälkeen turvalämpöä."));
       if (st.mode === "manual" && st.manual_until) {
         // One tap ends the pause; the room follows Villa Kuppis again.
-        var resume = el("div", "heater-sw");
+        var resume = el("div", "heater-sw resume");
         resume.appendChild(el("span", "hs-name", "Käsiohjaus päättyy klo " +
           clock.format(new Date(st.manual_until)), st.manual_by ? "Muutettu: " + st.manual_by : ""));
         var rbtn = el("button", "", "Palauta automaatio",
@@ -1866,7 +1867,6 @@ function vkHeaterSwitch(heater, onChange) {
             body: JSON.stringify({ room: room.id }) }).then(function () { load(); },
             function () { rbtn.disabled = false; });
         });
-        resume.appendChild(el("span"));
         resume.appendChild(rbtn);
         c.appendChild(resume);
       }

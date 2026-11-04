@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.39
+
+- Korjattu: puhelimella "Käsiohjaus päättyy klo ..." -teksti ei enää leikkaudu; Palauta automaatio -nappi on tekstin alla. Pitkät laitenimet rivittyvät.
+
 ## 0.4.38
 
 - Korjattu: varoitus "ei ehdi lämmetä ajoissa" tuli turhaan noin puoli tuntia jokaisen mökin esilämmityksen alussa.
