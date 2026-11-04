@@ -755,7 +755,7 @@ SCRIPT = r"""
         var price = el("input"); price.type = "number"; price.step = "any";
         price.value = r.max_price !== undefined && r.max_price !== null ? r.max_price : "";
         price.placeholder = "ei rajaa";
-        fs.appendChild(field("Hinta enintään (snt/kWh)", price, "Toiminnot tehdään vain, kun sähkön hinta on enintään tämä. Tyhjä: ei rajaa."));
+        fs.appendChild(field("Hinta enintään (snt/kWh)", price, "Toiminnot tehdään vain, kun sähkön pörssihinta on enintään tämä (ilman siirtoa ja veroja; ALV mukana, jos ALV-kytkin on päällä). Tyhjä: ei rajaa."));
         body.appendChild(fs);
         var acts = el("fieldset");
         acts.appendChild(el("legend", "", "Toiminnot"));

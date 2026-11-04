@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.44
+
+- Hintarajojen (Halpa/Kallis hinta, Hintaraja 1 ja 2) selitys ja yksikkö kertovat nyt, mitä hintaa verrataan: pörssihinta ilman siirtoa, veroja ja marginaalia, ja ALV mukana vain jos "Lisää ALV sähkönhintaan" on päällä (yksikössä lukee "ALV 25,5 % mukana" tai "ilman ALV:ta"). Laskenta ei muuttunut: rajat olivat jo ALV:llisia ALV-kytkimen ollessa päällä, joten vanhoja arvoja ei tarvitse muuttaa. Laitesääntöjen "Hinta enintään" -selitys täsmennetty samoin.
+
 ## 0.4.43
 
 - Historian Tulos-tekstit ovat nyt kokonaan suomeksi (esim. "tavoite vanheni", "Kammari 1000W patteri: säätö käsin"), laitteista näkyy nimi eikä entiteetin tunnus, ja "muuttaja"-toisto on poistettu. Vanhat tapahtumat käännetään näytettäessä. Mökin integraatio 0.7.3: päivitä install.sh:lla, jotta uudet syyt tulevat suomeksi.

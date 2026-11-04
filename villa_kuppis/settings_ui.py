@@ -92,7 +92,15 @@ SCRIPT = r"""
     $status.textContent = text || "";
     $status.className = isErr ? "err" : "";
   }
-  function unitLabel(d) { return d.unit ? " (" + d.unit + ")" : ""; }
+  var SPOT_LIMITS = ["low_price_c_kwh", "high_price_c_kwh", "heat_rule1_price_c_kwh", "heat_rule2_price_c_kwh"];
+  function unitLabel(d, eff) {
+    if (!d.unit) return "";
+    if (eff && SPOT_LIMITS.indexOf(d.key) >= 0 && eff.vat_enabled) {
+      var pct = String(eff.vat_percent.value).replace(".", ",");
+      return " (" + d.unit + (eff.vat_enabled.value ? ", ALV " + pct + " % mukana" : ", ilman ALV:ta") + ")";
+    }
+    return " (" + d.unit + ")";
+  }
   function fmtDefault(d) {
     var v = d.default;
     if (d.type === "bool") return v ? "päällä" : "pois";
@@ -164,7 +172,7 @@ SCRIPT = r"""
       var row = make("div", { className: "set-row" });
       var id = "set-" + d.key;
       // Not a <label for>: tapping the text must explain, not toggle the control.
-      var label = make("span", { className: "set-label", textContent: d.label + unitLabel(d),
+      var label = make("span", { className: "set-label", textContent: d.label + unitLabel(d, eff),
                                  title: d.help, tabIndex: 0 });
       label.setAttribute("role", "button");
       label.setAttribute("aria-expanded", "false");
@@ -180,7 +188,7 @@ SCRIPT = r"""
       });
       var ctl = controlFor(d, eff[d.key], id);
       ctl.title = "Oletus: " + fmtDefault(d);
-      ctl.setAttribute("aria-label", d.label + unitLabel(d));
+      ctl.setAttribute("aria-label", d.label + unitLabel(d, eff));
       var src = make("span", { className: "set-src",
         textContent: d.shared ? "Koti ja mökki"
           : eff[d.key].source === "default" || eff[d.key].source === level
