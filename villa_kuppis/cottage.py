@@ -921,6 +921,16 @@ class CottageSite:
         cmd = next((c for c in sent if c["value"]["room"] == room), None)
         return cmd or {"state": "confirmed", "room": room, "target": target}
 
+    def _clear_hand(self, rooms, actor: str) -> None:
+        """Remove the hand-set targets of ``rooms`` (a visit takes them over)."""
+        hand = self._store.hand_targets(SITE_ID)
+        now = int(self._now().timestamp())
+        for room in rooms:
+            if room in hand:
+                self._store.set_hand_target(SITE_ID, room, None, now, actor)
+                self._store.add_event(now, SITE_ID, room, actor, "clear_hand", None,
+                                      "visit", ROOMS.get(room, room))
+
     def _status_binding(self, room: str) -> Binding:
         status = next((b for b in self._bindings()
                        if b.room == room and role_of(b) == "status"), None)
@@ -988,10 +998,13 @@ class CottageSite:
         start = visit.heat_start or (plan.start if plan is not None and plan.reason == "started" else None)
         if start is None or now < start:
             return {}
+        hand = self._store.hand_targets(SITE_ID)
         # A visit started on site has nobody to warn about being late.
         planned = start < visit.arrival
         out = {}
         for room in visit.rooms:
+            if room in hand:
+                continue      # held at its hand-set target, not the visit's
             info = self._warming(room, now, since=start)
             if info is None:
                 continue
@@ -1041,7 +1054,8 @@ class CottageSite:
         out = []
         progress = self._progress(visit, now)
         names = lambda rooms: ", ".join(ROOMS.get(r, r) for r in rooms)
-        if progress and len(progress) == len(visit.rooms) and all(
+        heated = [r for r in visit.rooms if r not in self._store.hand_targets(SITE_ID)]
+        if progress and len(progress) == len(heated) and all(
                 p["reached"] for p in progress.values()):
             out.append((visit.visit_id, "warm", "Mökki on lämmin",
                         ", ".join(f"{ROOMS.get(r, r)} {deg_text(p['value'])}" for r, p in progress.items())
@@ -1113,10 +1127,11 @@ class CottageSite:
             self._visits.start(arrival_dt, target_c, room_ids, actor, self._now(), departure_dt)
         except VisitError as error:
             raise self._visit_error(error, "Vierailua ei voitu aloittaa.") from None
+        self._clear_hand(room_ids, actor)    # the newest choice wins
         self._retarget()
         return self.visit_view()
 
-    def update_visit(self, body: dict) -> dict:
+    def update_visit(self, body: dict, actor: str = "web") -> dict:
         """Change the active visit from request values (any of arrival,
         departure, target, rooms; departure null clears it); raises
         ``VisitError`` (Finnish message)."""
@@ -1133,6 +1148,9 @@ class CottageSite:
             self._visits.update(self._now(), **changes)
         except VisitError as error:
             raise self._visit_error(error, "Vierailua ei voitu muuttaa.") from None
+        visit = self._visits.active()
+        if visit is not None and ("target_c" in changes or "rooms" in changes):
+            self._clear_hand(visit.rooms, actor)   # a new visit target wins
         self._retarget()
         return self.visit_view()
 
@@ -1965,7 +1983,7 @@ function vkHeaterSwitch(heater, onChange) {
       });
       f1.appendChild(tbtn);
       if (plan && plan.reason_text) f1.appendChild(el("span", "fld-l", plan.reason_text));
-      if (plan && AUTOMATION_ON && st.target !== null && Math.abs(plan.target - st.target) >= 0.05)
+      if (plan && (AUTOMATION_ON || room.hand) && st.target !== null && Math.abs(plan.target - st.target) >= 0.05)
         f1.appendChild(el("span", "fld-l", "→ " + temp(plan.target),
           "Suunniteltu tavoite tälle jaksolle; mökki saa sen seuraavalla lähetyksellä."));
       side.appendChild(f1);
@@ -1998,7 +2016,7 @@ function vkHeaterSwitch(heater, onChange) {
     if (st) {
       // Only a late acknowledgement is worth a line of its own.
       var acked = plan && plan.acked_at ? new Date(plan.acked_at).getTime() : null;
-      if (plan && AUTOMATION_ON && room.state === "ok" && (acked === null ?
+      if (plan && (AUTOMATION_ON || room.hand) && room.state === "ok" && (acked === null ?
           Date.now() - PAGE_STARTED > ACK_LATE_MS : Date.now() - acked > ACK_LATE_MS))
         c.appendChild(row("Mökki ei ole vahvistanut tavoitetta", acked === null ? "ei vielä" : when(plan.acked_at), false,
           "Mökin ohjain vahvistaa jokaisen Villa Kuppiksen lähettämän tavoitteen, yleensä vartin välein. " +
@@ -2006,10 +2024,12 @@ function vkHeaterSwitch(heater, onChange) {
       if (room.hand || (st.mode === "manual" && st.manual_until)) {
         // One tap ends the pause or the hand-set target; the room follows Villa Kuppis again.
         var resume = el("div", "heater-sw resume");
-        resume.appendChild(room.hand
-          ? el("span", "hs-name", "Tavoite asetettu käsin: " + temp(room.hand.target),
-            "Asettanut " + room.hand.set_by + ". Huone pysyy tässä, kunnes palautat automaation.")
-          : el("span", "hs-name", "Käsiohjaus päättyy klo " +
+        if (room.hand)
+          resume.appendChild(el("span", "hs-name", "Tavoite asetettu käsin: " + temp(room.hand.target),
+            "Asettanut " + room.hand.set_by + ". Huone pysyy tässä, kunnes palautat automaation " +
+            "tai aloitat tai muutat vierailun, jossa huone on mukana."));
+        if (st.mode === "manual" && st.manual_until)
+          resume.appendChild(el("span", "hs-name", "Käsiohjaus päättyy klo " +
             clock.format(new Date(st.manual_until)), st.manual_by ? "Muutettu: " + st.manual_by : ""));
         var rbtn = el("button", "", "Palauta automaatio",
           "Lopettaa käsiohjauksen heti; mökin ohjain jatkaa Villa Kuppiksen tavoitteella" +
@@ -2046,8 +2066,9 @@ function vkHeaterSwitch(heater, onChange) {
       (room.plan ? room.plan.target : 20));
     var wrap = el("div", "heater-sw tgt-edit");
     var label = el("span", "hs-name", "Tavoite käsin",
-      "Huone pidetään tässä lämpötilassa, myös vierailun ja Automaatio pois -tilan aikana, " +
-      "kunnes palautat automaation. Muutos lähtee, kun päästät irti.");
+      "Huone pidetään tässä lämpötilassa, myös käynnissä olevan vierailun ja Automaatio pois " +
+      "-tilan aikana, kunnes palautat automaation tai aloitat tai muutat vierailun. " +
+      "Muutos lähtee, kun päästät irti.");
     var val = el("span", "hs-val", temp(start));
     var r = el("input");
     r.type = "range"; r.min = 5; r.max = 25; r.step = 0.5; r.value = start;

@@ -288,6 +288,37 @@ class VisitApiTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("ei ole käynnissä", body["detail"])
 
+    def test_hand_target_and_visit_newest_choice_wins(self):
+        def rooms():
+            return {r["id"]: r for r in self.call("/api/cottage")[1]["rooms"]}
+        self.call("/api/cottage/room_target", {"room": "large", "target": 15})
+        self.call("/api/cottage/room_target", {"room": "small", "target": 16})
+        # A visit with Mökki takes it over; Kammari keeps its hand target.
+        status, body = self.call("/api/visit", {"arrival": self.arrival(-0.2), "target": 21,
+                                                "rooms": ["large"]})
+        self.assertEqual(status, 200)
+        self.service.cottage.tick_targets()
+        r = rooms()
+        self.assertIsNone(r["large"]["hand"])
+        self.assertEqual(r["large"]["plan"]["reason"], "visit")
+        self.assertEqual((r["small"]["hand"]["target"], r["small"]["plan"]["reason"]), (16.0, "hand"))
+        # A hand target set during the visit wins and leaves the visit's progress.
+        self.call("/api/cottage/room_target", {"room": "large", "target": 12})
+        r = rooms()
+        self.assertEqual((r["large"]["plan"]["target"], r["large"]["plan"]["reason"]), (12.0, "hand"))
+        self.assertNotIn("large", self.call("/api/visit")[1]["progress"])
+        self.assertEqual(self.service.cottage.visit_notices(), [])
+        # Changing only the departure keeps it; a new visit target takes the room back.
+        self.call("/api/visit/update", {"departure": self.arrival(5)})
+        self.assertEqual(rooms()["large"]["hand"]["target"], 12.0)
+        self.call("/api/visit/update", {"target": 22})
+        self.assertIsNone(rooms()["large"]["hand"])
+        _, events = self.call("/api/events")
+        self.assertIn("clear_hand", [e["action"] for e in events])
+        # Ending the visit leaves Kammari's hand target alone.
+        self.call("/api/visit/end", {})
+        self.assertEqual(rooms()["small"]["hand"]["target"], 16.0)
+
     def test_without_a_cottage_the_visit_paths_are_404(self):
         with tempfile.TemporaryDirectory() as temp:
             from villa_kuppis.pump_probe import FakeClient, _unit_payload

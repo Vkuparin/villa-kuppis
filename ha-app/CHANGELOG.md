@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.49
+
+- Käsin asetettu huoneen tavoite ja vierailu eivät enää riitele: uusin valinta voittaa. Vierailun aloitus, tai sen tavoitteen tai huoneiden muutos, poistaa mukana olevien huoneiden käsin asetetun tavoitteen. Vierailun aikana käsin asetettu tavoite voittaa, ja se huone jätetään pois vierailun lämpenemisseurannasta ja ilmoituksista (ei vääriä "ei ehdi lämmetä" -ilmoituksia). Huonekortti näyttää sekä käsin asetetun tavoitteen että pattereiden käsiohjaustauon, ja "Palauta automaatio" lopettaa molemmat.
+
 ## 0.4.48
 
 - Korjattu: mökin tavoitelaskenta kaatui joka minuutti 31.10. lähtien (oppimisen aloitusajan aikaleimavirhe), joten mökille ei lähtenyt tavoitteita eikä vierailun lämmitystä, ja huoneiden oppimisnäkymä antoi virheen. Vierailun aloitus ja lopetus vastaavat taas heti eivätkä näytä "Yhteys palveluun katkesi".

@@ -881,6 +881,7 @@ function changeText(action, requested) {
     case "learning": return "Oppiminen aloitettu alusta";
     case "clear_manual": return "Käsiohjaus lopetettu, automaatio jatkuu";
     case "hand_target": return "Tavoite käsin → " + fmtTemp(parseFloat(requested));
+    case "clear_hand": return "Käsin asetettu tavoite poistettu, vierailu jatkaa";
     case "fan": return "Puhallus → " + fanName(requested);
     case "power": return requested ? "Laitteen päälle" : "Laitteen pois päältä";
     case "device": return requested;
@@ -2357,7 +2358,7 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             body = self._read_json_object() if cottage is not None else None
             if body is not None:
                 try:
-                    self._json(200, cottage.update_visit(body))
+                    self._json(200, cottage.update_visit(body, identity["actor"]))
                 except VisitError as error:
                     self._json(400, {"error": "bad_body", "detail": str(error)})
         elif parts.path == "/api/visit/end":

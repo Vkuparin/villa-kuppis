@@ -36,7 +36,9 @@ the optimizer only in ``Optimoitu`` rooms, and plans with
 the arrival even if the heaters are slower than learned.
 
 A hand-set room target ("Tavoite" on the room card) replaces the room's
-whole plan, visit included, until "Palauta automaatio" removes it. It is
+whole plan, visit included, until "Palauta automaatio" removes it or a
+visit with the room is started or its target or rooms change (the newest
+choice wins). It is
 sent with ``Automaatio`` off too: a person asked for it, so it is not
 automation.
 """
