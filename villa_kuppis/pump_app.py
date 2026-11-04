@@ -75,6 +75,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
 from urllib.parse import parse_qs, urlsplit
 
+from .finnish import translate_payload
 from .pump_probe import FakeClient, _unit_payload
 from . import settings as app_settings
 from . import cottage as cottage_ui
@@ -908,6 +909,7 @@ const ERRORS = {
   not_running: "Palvelu ei ole käynnissä."
 };
 function commandError(body, fallbackStatus) {
+  if (body.detail && ERRORS[body.error]) return body.detail;
   const base = ERRORS[body.error] || "Muutos epäonnistui (virhekoodi " +
     (body.error || fallbackStatus) + ").";
   return body.detail ? base + " " + body.detail : base;
@@ -2030,7 +2032,7 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
     def _json(self, status: int, obj) -> None:
         self._send(
             status,
-            json.dumps(obj, ensure_ascii=False).encode("utf-8"),
+            json.dumps(translate_payload(obj), ensure_ascii=False).encode("utf-8"),
             "application/json; charset=utf-8",
         )
 

@@ -590,7 +590,7 @@ class ServiceHttpTests(unittest.TestCase):
         status, events = self.get(server, "/api/events")
         self.assertEqual(status, 200)
         self.assertEqual([(e["site"], e["actor"]) for e in events],
-                         [("cottage", ACTOR_CONTROLLER), ("home", "web"),
+                         [("cottage", ACTOR_CONTROLLER), ("home", "Verkkosovellus"),
                           ("cottage", ACTOR_MANUAL)])
         status, events = self.get(server, "/api/events?limit=1")
         self.assertEqual(len(events), 1)

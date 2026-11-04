@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.45
+
+- Kodin tapahtumien Tulos-tekstit, komentovirheiden selitteet (esim. "Arvon on oltava 18–30.") ja yhteysvirheet näkyvät nyt suomeksi, myös vanhoissa tapahtumissa. "web"-toimija näkyy nimellä "Verkkosovellus". Muu käyttöliittymä oli jo suomeksi; jäljellä ovat vain omat laitteiden nimet ja tuotenimet (esim. Mill, ALPSTUGA, MELCloud Home, Home Assistant).
+
 ## 0.4.44
 
 - Hintarajojen (Halpa/Kallis hinta, Hintaraja 1 ja 2) selitys ja yksikkö kertovat nyt, mitä hintaa verrataan: pörssihinta ilman siirtoa, veroja ja marginaalia, ja ALV mukana vain jos "Lisää ALV sähkönhintaan" on päällä (yksikössä lukee "ALV 25,5 % mukana" tai "ilman ALV:ta"). Laskenta ei muuttunut: rajat olivat jo ALV:llisia ALV-kytkimen ollessa päällä, joten vanhoja arvoja ei tarvitse muuttaa. Laitesääntöjen "Hinta enintään" -selitys täsmennetty samoin.
