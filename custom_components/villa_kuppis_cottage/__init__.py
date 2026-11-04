@@ -160,13 +160,14 @@ def read_sensor(state: State | None) -> control.Sensor | None:
 
 
 def read_heater(entity_id: str, state: State | None, enabled: bool = True) -> control.Heater:
+    name = str(state.attributes.get("friendly_name") or "") if state is not None else ""
     if state is None or state.state in UNAVAILABLE:
-        return control.Heater(entity_id, False, None, None, enabled=enabled)
+        return control.Heater(entity_id, False, None, None, enabled=enabled, name=name)
     attrs = state.attributes
     return control.Heater(
         entity_id, True, state.state, _float(attrs.get(ATTR_TEMPERATURE)),
         _float(attrs.get("min_temp")), _float(attrs.get("max_temp")),
-        _float(attrs.get("target_temp_step")), enabled,
+        _float(attrs.get("target_temp_step")), enabled, name,
     )
 
 

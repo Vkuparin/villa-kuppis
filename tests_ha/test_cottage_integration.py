@@ -118,7 +118,7 @@ async def test_expired_target_falls_back(hass, calls, freezer: FrozenDateTimeFac
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
     assert status(hass).attributes["mode"] == "fallback"
-    assert status(hass).attributes["reason"] == "the target expired"
+    assert status(hass).attributes["reason"] == "tavoite vanheni"
     assert sent(calls) == [("climate.mill_1", 7.0), ("climate.mill_2", 7.0)]
 
 

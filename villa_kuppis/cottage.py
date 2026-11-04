@@ -181,6 +181,37 @@ def heating_share(setpoint: float, room_c: float, hold: float | None = None) -> 
     return min(1.0, max(0.0, share))
 
 
+_LEGACY_REASONS = (
+    (r"the target expired", "tavoite vanheni"),
+    (r"no target from Villa Kuppis", "Villa Kuppis ei ole antanut tavoitetta"),
+    (r"(\S+) changed by hand", r"\1: säätö käsin"),
+    (r"frost guard heats switched-off heaters", "pakkasvahti lämmittää pois kytkettyjä lämmittimiä"),
+    (r"; room ([\d.,-]+) °C, frost guard on", r"; huone \1 °C, pakkasvahti päällä"),
+    (r"room ([\d.,-]+) °C, target", r"huone \1 °C, tavoite"),
+    (r"(\S+) does not take off", r"\1 ei suostu sammumaan"),
+    (r"(\S+) does not take ([\d.,-]+) °C", r"\1 ei ota lämpötilaa \2 °C"),
+    (r"no room temperature", "huoneen lämpötilaa ei saada"),
+    (r"implausible room temperature", "epäuskottava huonelämpötila"),
+    (r"room temperature is stale", "huoneen lämpötila on vanhentunut"),
+)
+
+
+def finnish_reason(text, labels: dict | None = None):
+    """Event and status reasons in Finnish, for rows written by older integrations.
+
+    Drops the redundant "(muuttaja: ...)" tail and shows device names, not entity ids.
+    """
+    if not isinstance(text, str) or not text:
+        return text
+    text = re.sub(r"\s*\(muuttaja: [^)]*\)", "", text)
+    for pattern, repl in _LEGACY_REASONS:
+        text = re.sub(pattern, repl, text)
+    for entity_id, label in (labels or {}).items():
+        if label:
+            text = text.replace(entity_id, label)
+    return text
+
+
 # --- site configuration ------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -1270,8 +1301,7 @@ class CottageSite:
             reason = attrs.get("reason") if isinstance(attrs.get("reason"), str) else ""
             if mode == "manual":
                 actor = ACTOR_MANUAL
-                by = attrs.get("manual_by")
-                detail = reason if not by else f"{reason} (muuttaja: {by})".strip()
+                detail = reason
             else:
                 actor, detail = ACTOR_CONTROLLER, reason
             self._store.add_event(ts, SITE_ID, binding.room, actor, "mode",
@@ -1334,6 +1364,11 @@ class CottageSite:
                             "valid_until", "manual_until", "manual_by", "disabled_heaters",
                             "chosen_sensor", "alarm")}}
             st = room["status"]
+            if st:
+                labels = {h["entity_id"]: h["label"] for h in room["heaters"]}
+                st["reason"] = finnish_reason(st.get("reason"), labels)
+                if st.get("manual_by"):
+                    st["manual_by"] = labels.get(st["manual_by"], st["manual_by"])
             if st and st.get("mode") == "manual" and st.get("target") is None:
                 # Integration before 0.7.2 reports no target during Käsiohjaus.
                 held = [h["setpoint"] for h in room["heaters"]
@@ -1383,8 +1418,15 @@ class CottageSite:
                          "room_temp": "Huonelämpötila (ALPSTUGA)"}
         return out
 
+    def _labels(self) -> dict:
+        return {b.entity_id: b.label for b in self._bindings() if b.label}
+
     def events(self, limit: int = 100) -> list[dict]:
-        return self._store.events(limit)
+        labels = self._labels()
+        rows = self._store.events(limit)
+        for row in rows:
+            row["detail"] = finnish_reason(row.get("detail"), labels)
+        return rows
 
 
 # --- demo ---------------------------------------------------------------------------------------
@@ -1494,12 +1536,12 @@ class FakeSiteGateway:
         }
         status = {
             "large-status": (19.0, {
-                "mode": "follow", "reason": f"room {large_temp:g} °C, target 19 °C",
+                "mode": "follow", "reason": f"huone {large_temp:g} °C, tavoite 19 °C",
                 "drive": "boost" if large_temp < 19.0 else "low", "revision": 1,
                 "requested_target": 19.0, "valid_until": (now + timedelta(minutes=40)).isoformat(),
                 "manual_until": None, "manual_by": None}),
             "small-status": (7.0, {
-                "mode": "fallback", "reason": "no target from Villa Kuppis",
+                "mode": "fallback", "reason": "Villa Kuppis ei ole antanut tavoitetta",
                 "drive": None, "revision": None, "requested_target": None,
                 "valid_until": None, "manual_until": None, "manual_by": None}),
         }
@@ -1512,7 +1554,7 @@ class FakeSiteGateway:
                 sensor = f"{room}-status"
                 temp = large_temp if room == "large" else small_temp
                 status[sensor] = (max(write["target"], 7.0), {
-                    "mode": "follow", "reason": f"room {temp:g} °C, target {write['target']:g} °C",
+                    "mode": "follow", "reason": f"huone {temp:g} °C, tavoite {write['target']:g} °C",
                     "drive": "boost" if temp < write["target"] else "low",
                     "revision": write["revision"], "requested_target": write["target"],
                     "valid_until": write["valid_until"].isoformat(),

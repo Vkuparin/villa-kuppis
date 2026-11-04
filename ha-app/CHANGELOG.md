@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.43
+
+- Historian Tulos-tekstit ovat nyt kokonaan suomeksi (esim. "tavoite vanheni", "Kammari 1000W patteri: säätö käsin"), laitteista näkyy nimi eikä entiteetin tunnus, ja "muuttaja"-toisto on poistettu. Vanhat tapahtumat käännetään näytettäessä. Mökin integraatio 0.7.3: päivitä install.sh:lla, jotta uudet syyt tulevat suomeksi.
+
 ## 0.4.42
 
 - Korjattu: Käsiohjauksen aikana mökin Tavoite ja historian Voimassa oleva tavoite -viiva näyttävät nyt käsin asetetun lämpötilan eivätkä "–" tai vanhaa arvoa. Mökin integraatio 0.7.2: päivitä install.sh:lla, jotta historia tallentaa arvon.

@@ -113,6 +113,11 @@ class Heater:
     max_temp: float | None = None
     step: float | None = None
     enabled: bool = True             # False: switched off in Villa Kuppis
+    name: str = ""                   # friendly name for reasons; entity_id if empty
+
+    @property
+    def label(self) -> str:
+        return self.name or self.entity_id
 
 
 @dataclass
@@ -170,11 +175,11 @@ def heater_setpoint(heater: Heater, value: float, settings: Settings) -> float:
 
 def sensor_valid(sensor: Sensor | None, now: datetime, settings: Settings) -> tuple[bool, str]:
     if sensor is None or sensor.value is None or not math.isfinite(sensor.value):
-        return False, "no room temperature"
+        return False, "huoneen lämpötilaa ei saada"
     if not settings.sensor_min <= sensor.value <= settings.sensor_max:
-        return False, f"implausible room temperature {sensor.value:g} °C"
+        return False, f"epäuskottava huonelämpötila {sensor.value:g} °C"
     if sensor.reported_at is None or now - sensor.reported_at > settings.sensor_max_age:
-        return False, "room temperature is stale"
+        return False, "huoneen lämpötila on vanhentunut"
     return True, ""
 
 
@@ -323,9 +328,9 @@ def _notes(heaters, memory: RoomMemory, settings: Settings) -> str:
         hm = memory.heaters.get(heater.entity_id)
         if heater.available and hm is not None and hm.unconfirmed >= settings.unconfirmed_after:
             if hm.sent_mode == OFF and heater.mode != OFF:
-                out.append(f"{heater.entity_id} does not take off")
+                out.append(f"{heater.label} ei suostu sammumaan")
             elif hm.sent_setpoint is not None:
-                out.append(f"{heater.entity_id} does not take {hm.sent_setpoint:g} °C")
+                out.append(f"{heater.label} ei ota lämpötilaa {hm.sent_setpoint:g} °C")
     return "; ".join(out)
 
 
@@ -333,7 +338,7 @@ def _decision(mode: str, reason: str, target, drive, cmds, heaters, memory: Room
               settings: Settings, frost: bool) -> Decision:
     extra = [reason]
     if frost and any(not h.enabled for h in heaters):
-        extra.append("frost guard heats switched-off heaters")
+        extra.append("pakkasvahti lämmittää pois kytkettyjä lämmittimiä")
     notes = _notes(heaters, memory, settings)
     if notes:
         extra.append(notes)
@@ -360,9 +365,11 @@ def decide(now: datetime, target: Target | None, sensor: Sensor | None,
                              include_disabled=True, raise_only=True)
         else:
             cmds = _off_commands(heaters, memory, settings, now)
-        reason = f"{memory.manual_by} changed by hand"
+        by = next((h.label for h in heaters if h.entity_id == memory.manual_by),
+                  memory.manual_by)
+        reason = f"{by}: säätö käsin"
         if cold:
-            reason += f"; room {room:g} °C, frost guard on"
+            reason += f"; huone {room:g} °C, pakkasvahti päällä"
         held = [h.setpoint for h in heaters
                 if h.enabled and h.available and h.mode != OFF and h.setpoint is not None]
         # The target in force is what the person set, not "nothing".
@@ -372,7 +379,7 @@ def decide(now: datetime, target: Target | None, sensor: Sensor | None,
 
     if target is None or now >= target.valid_until:
         memory.drive = memory.drive_since = None
-        reason = "no target from Villa Kuppis" if target is None else "the target expired"
+        reason = "Villa Kuppis ei ole antanut tavoitetta" if target is None else "tavoite vanheni"
         heat_all = settings.fallback_heats_disabled
         frost = _frost(ok, room, memory, settings)
         cmds = _commands(heaters, settings.safe_setpoint, memory, settings, now,
@@ -404,5 +411,5 @@ def decide(now: datetime, target: Target | None, sensor: Sensor | None,
     desired = value + settings.boost if want == "high" else settings.low_setpoint
     cmds = _commands(heaters, desired, memory, settings, now)
     cmds += _disabled_commands(heaters, frost, memory, settings, now)
-    return _decision("follow", f"room {room:g} °C, target {value:g} °C", value, want, cmds,
+    return _decision("follow", f"huone {room:g} °C, tavoite {value:g} °C", value, want, cmds,
                      heaters, memory, settings, frost)

@@ -291,7 +291,7 @@ class ViewTests(unittest.IsolatedAsyncioTestCase):
                           status_attrs("follow", "room 18.4 °C, target 19 °C"), push=False)
         self.ha.set_state("sensor.small_alpstuga_t", "7.2", temperature, push=False)
         self.ha.set_state("sensor.villa_kuppis_small_target", "7.0",
-                          {**status_attrs("fallback", "no target from Villa Kuppis"),
+                          {**status_attrs("fallback", "Villa Kuppis ei ole antanut tavoitetta"),
                            "alarm": {"enabled": True, "phones": ["ville_s24"],
                                      "silent_minutes": 60, "heard": None}}, push=False)
         self.store = BindingStore(Path(self.tmp.name) / cottage.SITES_DB)
@@ -365,7 +365,7 @@ class ViewTests(unittest.IsolatedAsyncioTestCase):
         status = large["status"]
         self.assertEqual((status["mode"], status["target"], status["revision"],
                           status["reason"], status["status"]),
-                         ("follow", 19.0, 7, "room 18.4 °C, target 19 °C", "ok"))
+                         ("follow", 19.0, 7, "huone 18.4 °C, tavoite 19 °C", "ok"))
         self.assertIsNotNone(status["source_ts"])
         small = self.room("small")
         self.assertEqual((small["status"]["mode"], small["status"]["target"]), ("fallback", 7.0))
@@ -446,11 +446,11 @@ class ViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.site.events(), [])      # the first reading is no change
         entity = "sensor.villa_kuppis_large_target"
         self.clock.advance(60)
-        await self.push(entity, "7.0", status_attrs("fallback", "the target expired"))
+        await self.push(entity, "7.0", status_attrs("fallback", "tavoite vanheni"))
         self.site.sample()
         self.clock.advance(60)
         await self.push(entity, "unknown", status_attrs(
-            "manual", "climate.large_mill_1 changed by hand", manual_by="climate.large_mill_1",
+            "manual", "climate.large_mill_1: säätö käsin", manual_by="climate.large_mill_1",
             manual_until=(self.clock() + timedelta(hours=4)).isoformat()))
         self.site.sample()
         self.clock.advance(60)
@@ -468,8 +468,9 @@ class ViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([(e["requested"], e["actor"]) for e in events], [
             ("fallback", ACTOR_CONTROLLER), ("manual", ACTOR_MANUAL),
             ("thermostat", ACTOR_CONTROLLER), ("follow", ACTOR_CONTROLLER)])
-        self.assertIn("climate.large_mill_1", events[1]["detail"])
-        self.assertEqual(events[0]["detail"], "the target expired")
+        self.assertEqual(events[1]["detail"], "Mill 1: säätö käsin")
+        self.assertNotIn("muuttaja", events[1]["detail"])
+        self.assertEqual(events[0]["detail"], "tavoite vanheni")
         self.assertEqual((events[0]["site"], events[0]["unit"], events[0]["unit_name"],
                           events[0]["result"]),
                          ("cottage", "cottage:large", "Mökki", "observed"))

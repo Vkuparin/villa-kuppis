@@ -167,7 +167,7 @@ class WatchdogTests(unittest.TestCase):
         sim = Sim(large_room(), target=20.0, valid_hours=6)
         sim.run(18 * 60)
         self.assertEqual(sim.decisions[-1][1].mode, "fallback")
-        self.assertEqual(sim.decisions[-1][1].reason, "the target expired")
+        self.assertEqual(sim.decisions[-1][1].reason, "tavoite vanheni")
         self.assertTrue(all(h.setpoint == SETTINGS.safe_setpoint for h in sim.room.heaters))
         # The heaters' thermostats hold the room near the safe setpoint.
         late = sim.temps_since(START + timedelta(hours=16))
@@ -187,7 +187,7 @@ class WatchdogTests(unittest.TestCase):
         sim.run(90)
         self.assertEqual(sim.decisions[5 * 60 + 45][1].effective_target, 10.0)
         self.assertEqual(sim.decisions[-1][1].mode, "fallback")
-        self.assertEqual(sim.decisions[-1][1].reason, "the target expired")
+        self.assertEqual(sim.decisions[-1][1].reason, "tavoite vanheni")
 
     def test_no_target_since_start_is_fallback(self):
         sim = Sim(large_room(), target=None)
@@ -203,7 +203,7 @@ class WatchdogTests(unittest.TestCase):
         sim.sensor_ok = False
         sim.run(60)
         self.assertEqual(sim.decisions[-1][1].mode, "thermostat")
-        self.assertIn("stale", sim.decisions[-1][1].reason)
+        self.assertIn("vanhentunut", sim.decisions[-1][1].reason)
         self.assertTrue(all(h.setpoint == 16.0 for h in sim.room.heaters))
 
     def test_implausible_sensor_value_is_not_followed(self):
@@ -211,7 +211,7 @@ class WatchdogTests(unittest.TestCase):
         sim.sensor_override = control.Sensor(85.0, START)
         sim.run(2)
         self.assertEqual(sim.decisions[-1][1].mode, "thermostat")
-        self.assertIn("implausible", sim.decisions[-1][1].reason)
+        self.assertIn("epäuskottava", sim.decisions[-1][1].reason)
 
     def test_restart_with_empty_memory_is_not_a_manual_change(self):
         sim = Sim(large_room(), target=18.0)
@@ -337,7 +337,7 @@ class FrostGuardTests(unittest.TestCase):
         self.assertEqual(heater.mode, "heat")
         self.assertEqual(heater.setpoint, SETTINGS.safe_setpoint)
         self.assertGreater(min(sim.temps_since(START + timedelta(hours=6))), 3.0)
-        self.assertIn("frost guard", sim.decisions[-1][1].reason)
+        self.assertIn("pakkasvahti", sim.decisions[-1][1].reason)
         self.assertNotIn("manual", sim.modes_since(START))
         sim.room.temp = 15.0                     # warmed by something else
         sim.run(10)
@@ -363,7 +363,7 @@ class FrostGuardTests(unittest.TestCase):
         self.assertEqual(sim.decisions[-1][1].mode, "manual")
         self.assertEqual(heater.mode, "heat")
         self.assertEqual(heater.setpoint, SETTINGS.safe_setpoint)
-        self.assertIn("frost guard", sim.decisions[-1][1].reason)
+        self.assertIn("pakkasvahti", sim.decisions[-1][1].reason)
         self.assertGreater(min(sim.temps_since(START + timedelta(hours=2))), 3.0)
 
     def test_frost_guard_never_turns_a_persons_setpoint_down(self):
@@ -408,7 +408,7 @@ class DeviceFitTests(unittest.TestCase):
         sim = Sim(large_room(temp=10.0), target=18.0)
         sim.room.heaters[0].ignore_commands = True
         sim.run(30)
-        self.assertIn("climate.mill_1 does not take 21 °C", sim.decisions[-1][1].reason)
+        self.assertIn("climate.mill_1 ei ota lämpötilaa 21 °C", sim.decisions[-1][1].reason)
         self.assertNotIn("mill_2", sim.decisions[-1][1].reason)
 
 
