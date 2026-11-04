@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.41
+
+- ALPSTUGA-anturien kosteus, lämpötila, CO₂ ja PM2,5 näkyvät nyt myös Laitteet-korteilla ja historiassa, ei vain huonekortilla.
+
 ## 0.4.40
 
 - Laitekorttien englanninkieliset nimet ja tilat näkyvät suomeksi (esim. "Kammari 1000W lämpötila", "Ilmanlaatu", "Hyvä", "Latausnopeus").

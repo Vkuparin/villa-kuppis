@@ -84,6 +84,13 @@ class BuildTest(unittest.TestCase):
         shown = [d["entity_id"] for a in out["areas"] for d in a["devices"]]
         self.assertEqual(shown, ["switch.plug"])
 
+    def test_bound_sensors_stay_visible(self):
+        reg = registry([entry("sensor.hum", area="olohuone"), entry("climate.pump", area="olohuone")])
+        states = {e: state(e, "50") for e in ("sensor.hum", "climate.pump")}
+        out = build(reg, states, skip_entities={"sensor.hum", "climate.pump"})
+        shown = [d["entity_id"] for a in out["areas"] for d in a["devices"]]
+        self.assertEqual(shown, ["sensor.hum"])
+
     def test_automations_are_listed_apart(self):
         reg = registry([entry("automation.lights")])
         out = build(reg, {"automation.lights": state("automation.lights", "on", friendly_name="Valot",

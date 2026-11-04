@@ -266,7 +266,9 @@ def build(registry: dict | None, states: dict[str, dict], skip_entities=()) -> d
                 "name": _name(state, entry, None), "available": raw not in UNAVAILABLE,
                 "on": raw == "on", "last_triggered": attrs.get("last_triggered")})
             continue
-        if (domain not in DOMAINS or entity_id in skip
+        # Bound sensors (the cottage rooms' ALPSTUGA readings) stay visible: the
+        # device cards show them with history; only controlled entities are skipped.
+        if (domain not in DOMAINS or (entity_id in skip and domain != "sensor")
                 or entry.get("entity_category") in SKIP_CATEGORIES
                 or entry.get("platform") in SKIP_PLATFORMS):
             continue
