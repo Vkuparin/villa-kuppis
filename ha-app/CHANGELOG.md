@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.48
+
+- Korjattu: mökin tavoitelaskenta kaatui joka minuutti 31.10. lähtien (oppimisen aloitusajan aikaleimavirhe), joten mökille ei lähtenyt tavoitteita eikä vierailun lämmitystä, ja huoneiden oppimisnäkymä antoi virheen. Vierailun aloitus ja lopetus vastaavat taas heti eivätkä näytä "Yhteys palveluun katkesi".
+
 ## 0.4.47
 
 - Mökin huoneen tavoitteen voi asettaa käsin: napauta huonekortin Tavoite-lukemaa ja säädä liukusäädintä (5–25 °C, lähtee kun päästät irti). Huone pysyy siinä myös vierailun ja Automaatio pois -tilan aikana, kunnes painat "Palauta automaatio". Käsin asettaminen lopettaa myös pattereiden käsiohjaustauon.

@@ -760,7 +760,7 @@ class CottageSite:
             try:
                 self.tick_targets()
             except Exception as error:
-                logging.error("Cottage target tick failed: %s", type(error).__name__)
+                logging.error("Cottage target tick failed: %s: %s", type(error).__name__, error)
             after = getattr(self, "_after_tick", None)
             if after is not None:
                 try:
@@ -1147,9 +1147,14 @@ class CottageSite:
         try:
             self.tick_targets()
         except Exception as error:
-            logging.error("Cottage target tick after a visit change failed: %s",
-                          type(error).__name__)
-            self._refresh_plan()
+            logging.exception("Cottage target tick after a visit change failed: %s",
+                              type(error).__name__)
+            try:
+                self._refresh_plan()
+            except Exception:
+                # The visit change is saved; answer with it instead of
+                # dropping the connection ("Yhteys palveluun katkesi").
+                logging.exception("Cottage plan refresh after a visit change failed")
 
     def _plan_view(self, room_id: str) -> dict | None:
         sender = self._sender
@@ -1217,8 +1222,11 @@ class CottageSite:
             return []
         since = self.learning_since(room_id)
         if since is not None:
-            start = max(_to_epoch(start), int(since.timestamp()))
-            if start >= _to_epoch(end):
+            # Stays a timestamp the store accepts (an int start broke every
+            # target tick from the first learning restart on).
+            start = datetime.fromtimestamp(max(_to_epoch(start), int(since.timestamp())),
+                                           timezone.utc)
+            if _to_epoch(start) >= _to_epoch(end):
                 return []
         return self._store.learning_readings(SITE_ID, found["temperature"],
                                              found["status"], start, end, heaters)

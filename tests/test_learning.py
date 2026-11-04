@@ -282,6 +282,23 @@ class CottageLearningTests(unittest.TestCase):
         self.assertEqual(site.learning_since("large"), self.now)
         self.assertEqual(site._store.events(1)[0]["action"], "learning")
 
+    def test_fresh_start_keeps_the_history_after_it(self):
+        # A restart inside the window: the rows after it still come back
+        # (an int start once raised TypeError in every target tick).
+        rows, _out = cottage_rows(days=2)
+        self.insert(rows)
+        start = datetime.fromtimestamp(START, timezone.utc)
+        end = start + timedelta(days=2)
+        site = self.service.cottage
+        every = site.learning_readings("large", start, end)
+        saved, self.now = self.now, start + timedelta(days=1)
+        site.restart_learning("large", "test")
+        self.now = saved
+        later = site.learning_readings("large", start, end)
+        self.assertTrue(0 < len(later) < len(every))
+        self.assertTrue(all(r.ts >= int((start + timedelta(days=1)).timestamp()) for r in later))
+        self.service.room_rates()                 # learns from it without raising
+
     def test_cottage_rooms_learn_their_heating_rates(self):
         rows, out = cottage_rows()
         self.insert(rows)

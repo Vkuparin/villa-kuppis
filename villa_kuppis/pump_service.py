@@ -98,7 +98,9 @@ def utc_now() -> datetime:
 
 
 def _to_epoch(value) -> int:
-    """datetime or ISO-8601 (UTC) string -> unix seconds (naive = UTC)."""
+    """datetime, ISO-8601 (UTC) string or unix seconds -> unix seconds (naive = UTC)."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return int(value)
     if isinstance(value, datetime):
         dt = value
     else:
