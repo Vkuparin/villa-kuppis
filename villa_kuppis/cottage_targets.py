@@ -34,6 +34,11 @@ is ``heat_base_c``. A visit heat-up uses
 the optimizer only in ``Optimoitu`` rooms, and plans with
 ``VISIT_HEAT_MARGIN`` of the learned heating rate so the room is warm by
 the arrival even if the heaters are slower than learned.
+
+A hand-set room target ("Tavoite" on the room card) replaces the room's
+whole plan, visit included, until "Palauta automaatio" removes it. It is
+sent with ``Automaatio`` off too: a person asked for it, so it is not
+automation.
 """
 
 from __future__ import annotations
@@ -75,7 +80,7 @@ class RoomTarget:
     period_ts: int
     target_c: float
     price_c_kwh: Decimal | None
-    reason: str                 # "base" | "threshold" | "noprice" | "optimized" | "visit"
+    reason: str                 # "base" | "threshold" | "noprice" | "optimized" | "visit" | "hand"
 
 
 def current_targets(overrides: Mapping, periods: Sequence[Period], rooms: Sequence[str],
@@ -149,6 +154,7 @@ class CottageTargetSender:
                  models: Callable[[], tuple] | None = None,
                  room_temps: Callable[[], Mapping[str, float]] | None = None,
                  room_humidity: Callable[[], Mapping[str, float]] | None = None,
+                 hand_targets: Callable[[], Mapping[str, float]] | None = None,
                  valid_minutes: float = VALID_MINUTES,
                  retry_seconds: float = RETRY_SECONDS):
         self._gateway = gateway
@@ -164,6 +170,7 @@ class CottageTargetSender:
         self._models = models
         self._room_temps = room_temps
         self._room_humidity = room_humidity
+        self._hand_targets = hand_targets        # () -> {room: hand-set °C}
         self.damp: set[str] = set()              # rooms the humidity guard heats
         self._optimized: dict[str, tuple] = {}   # room -> (key, HeatPlan or None)
         self._valid_minutes = valid_minutes
@@ -185,10 +192,23 @@ class CottageTargetSender:
         self.schedules = self.plans()
         return {room: steps[0] for room, steps in self.schedules.items()}
 
+    def _hand(self) -> dict[str, float]:
+        hand = self._hand_targets() if self._hand_targets is not None else {}
+        return {room: float(value) for room, value in hand.items() if room in self._rooms}
+
     def plans(self) -> dict[str, list[RoomTarget]]:
         """Each room's targets from the current period to the end of the
         known prices: the economic plan, replaced by an active visit's
-        target from its heat-up start on (card F4.3)."""
+        target from its heat-up start on (card F4.3), and a hand-set
+        target over both."""
+        out = self._plans()
+        for room, value in self._hand().items():
+            if room in out:
+                out[room] = [RoomTarget(room, t.period_ts, value, t.price_c_kwh, "hand")
+                             for t in out[room]]
+        return out
+
+    def _plans(self) -> dict[str, list[RoomTarget]]:
         now = self._now()
         overrides = self._overrides()
         factor = Decimal(str(app_settings.vat_factor(overrides, SITE)))
@@ -344,7 +364,7 @@ class CottageTargetSender:
                 done.add(room)
         return done
 
-    def _release(self) -> list[dict]:
+    def _release(self, keep=()) -> list[dict]:
         """Automaatio off: hand each room back to its fallback, once.
 
         A room this sender has not written yet (Villa Kuppis restarted) is
@@ -357,6 +377,8 @@ class CottageTargetSender:
         now_ts = int(now.timestamp())
         out = []
         for room, device_id in self._rooms.items():
+            if room in keep:
+                continue
             previous = self._sent.get(room)
             if previous is None:
                 previous = (RELEASE_TARGET, now_ts - now_ts % INTERVAL_SECONDS, None, now)
@@ -382,17 +404,28 @@ class CottageTargetSender:
         return self.last
 
     def tick(self) -> list[dict]:
-        """Send what is due; returns the commands submitted this tick."""
+        """Send what is due; returns the commands submitted this tick.
+
+        With ``Automaatio`` off only hand-set targets are sent; the other
+        rooms are released."""
         if not self._automation_on():
-            self.preview()
-            return self._release()
+            targets = self.preview()
+            hand = self._hand()
+            out = self._release(keep=hand)
+            if hand and self._gateway.health()["state"] in ("ok", "stale"):
+                out += self._send({room: targets[room] for room in hand if room in targets})
+            return out
         if self._gateway.health()["state"] not in ("ok", "stale"):
             return []   # retried on the first tick after the reconnect
+        targets = self.targets()
+        self.last.update(targets)
+        return self._send(targets)
+
+    def _send(self, targets: Mapping[str, RoomTarget]) -> list[dict]:
         now = self._now()
         out = []
         snapshot = self._gateway.snapshot()
-        for room, target in self.targets().items():
-            self.last[room] = target
+        for room, target in targets.items():
             device_id = self._rooms[room]
             revision = target.period_ts
             previous = self._sent.get(room)

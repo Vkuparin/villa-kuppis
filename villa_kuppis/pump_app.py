@@ -20,6 +20,9 @@ fully offline) plus a small JSON API on top of PumpService:
 * POST /api/cottage/heater  {"device_id", "enabled"}: switch one cottage heater off or on
 * POST /api/cottage/room_sensor  {"room", "entity_id"}: a cottage room's temperature sensor (null: default)
 * POST /api/cottage/clear_manual  {"room"}: end a cottage room's manual pause
+  and hand-set target
+* POST /api/cottage/room_target  {"room", "target"}: hold a cottage room at a
+  hand-set target until clear_manual
 * POST /api/cottage/learning/restart  {"room"}: learn the room again from now on
 * POST /api/alerts/test  {"site"}: send a test phone notice
 * GET  /api/sites     connection health of each Home Assistant site
@@ -877,6 +880,7 @@ function changeText(action, requested) {
     case "room_sensor": return "Huoneanturi → " + requested;
     case "learning": return "Oppiminen aloitettu alusta";
     case "clear_manual": return "Käsiohjaus lopetettu, automaatio jatkuu";
+    case "hand_target": return "Tavoite käsin → " + fmtTemp(parseFloat(requested));
     case "fan": return "Puhallus → " + fanName(requested);
     case "power": return requested ? "Laitteen päälle" : "Laitteen pois päältä";
     case "device": return requested;
@@ -2290,7 +2294,7 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
                              "version": os.environ.get("VK_VERSION", "")})
         elif parts.path in ("/api/command", "/api/prices/refresh", "/api/visit/end",
                             "/api/visit/update",
-                            "/api/cottage/heater", "/api/cottage/clear_manual",
+                            "/api/cottage/heater", "/api/cottage/clear_manual", "/api/cottage/room_target",
                             "/api/cottage/learning/restart", "/api/alerts/test",
                             "/api/devices/command",
                             "/api/devices/layout", "/api/devices/lights_off",
@@ -2377,6 +2381,15 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
             if body is not None:
                 try:
                     self._json(200, cottage.clear_manual(body.get("room"), identity["actor"]))
+                except HeaterSwitchError as error:
+                    self._json(400, {"error": "bad_body", "detail": str(error)})
+        elif parts.path == "/api/cottage/room_target":
+            cottage = self._cottage_or_error()
+            body = self._read_json_object() if cottage is not None else None
+            if body is not None:
+                try:
+                    self._json(200, cottage.set_room_target(body.get("room"), body.get("target"),
+                                                            identity["actor"]))
                 except HeaterSwitchError as error:
                     self._json(400, {"error": "bad_body", "detail": str(error)})
         elif parts.path == "/api/cottage/learning/restart":

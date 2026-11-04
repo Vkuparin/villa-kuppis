@@ -78,7 +78,8 @@ HEARTBEAT_EVERY = timedelta(minutes=5)   # the cottage alarm waits for 60 min of
 DEFAULT_TARGET_INTERVAL = 60.0     # price targets are sent at most this often
 VISITS_DB = "visits.db"
 PLAN_REASONS = {"base": "Perustaso", "threshold": "Hintaraja", "noprice": "Ei hintaa",
-                "optimized": "Optimoitu", "visit": "Vierailu", "humidity": "Kosteusvahti"}
+                "optimized": "Optimoitu", "visit": "Vierailu", "humidity": "Kosteusvahti",
+                "hand": "Käsin asetettu"}
 VISIT_ERRORS = (
     ("arrival time needs", "Saapumisajalla on oltava aikavyöhyke."),
     ("arrival time must be at most a day ago", "Saapumisaika voi olla enintään vuorokauden takana."),
@@ -351,6 +352,14 @@ CREATE TABLE IF NOT EXISTS site_learning (
     since_utc INTEGER NOT NULL,
     PRIMARY KEY (site_id, room)
 );
+CREATE TABLE IF NOT EXISTS site_hand_target (
+    site_id TEXT NOT NULL,
+    room TEXT NOT NULL,
+    target_c REAL NOT NULL,
+    set_at_utc INTEGER NOT NULL,
+    set_by TEXT NOT NULL,
+    PRIMARY KEY (site_id, room)
+);
 """
 
 
@@ -524,6 +533,28 @@ class CottageStore:
                 "INSERT INTO site_learning (site_id, room, since_utc) VALUES (?, ?, ?) "
                 "ON CONFLICT (site_id, room) DO UPDATE SET since_utc = excluded.since_utc",
                 (site_id, room, ts))
+
+    def hand_targets(self, site_id: str) -> dict[str, dict]:
+        """Each room's hand-set target: {room: {target, set_at, set_by}}."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT room, target_c, set_at_utc, set_by FROM site_hand_target "
+                "WHERE site_id = ?", (site_id,)).fetchall()
+        return {r[0]: {"target": r[1], "set_at": r[2], "set_by": r[3]} for r in rows}
+
+    def set_hand_target(self, site_id: str, room: str, target: float | None,
+                        ts: int, actor: str) -> None:
+        """Store a room's hand-set target; None removes it."""
+        with self._lock, self._conn:
+            if target is None:
+                self._conn.execute("DELETE FROM site_hand_target WHERE site_id = ? AND room = ?",
+                                   (site_id, room))
+            else:
+                self._conn.execute(
+                    "INSERT INTO site_hand_target (site_id, room, target_c, set_at_utc, set_by) "
+                    "VALUES (?, ?, ?, ?, ?) ON CONFLICT (site_id, room) DO UPDATE SET "
+                    "target_c = excluded.target_c, set_at_utc = excluded.set_at_utc, "
+                    "set_by = excluded.set_by", (site_id, room, target, ts, actor))
 
     def events(self, limit: int = 100) -> list[dict]:
         with self._lock:
@@ -720,7 +751,8 @@ class CottageSite:
         self._targets_cfg = {"prices_db": Path(prices_db), "overrides": overrides,
                              "automation_on": automation_on, "models": models,
                              "room_temps": self.room_temperatures,
-                             "room_humidity": self.room_humidity}
+                             "room_humidity": self.room_humidity,
+                             "hand_targets": self.hand_targets}
         self._after_tick = after_tick
 
     def _target_loop(self) -> None:
@@ -858,23 +890,63 @@ class CottageSite:
                                   ROOMS[room])
         return cmd
 
+    def hand_targets(self) -> dict[str, float]:
+        """Each room's hand-set target (°C)."""
+        return {room: row["target"] for room, row in self._store.hand_targets(SITE_ID).items()}
+
+    def set_room_target(self, room, target, actor: str) -> dict:
+        """Hold a room at a hand-set target until "Palauta automaatio".
+
+        A manual pause in the cottage (someone turned a heater) ends with
+        it, since the person now says what the room should be. The target
+        goes out at once. Raises ``HeaterSwitchError`` for a bad room or
+        target or when the room status sensor is not bound.
+        """
+        if room not in ROOMS:
+            raise HeaterSwitchError("Tuntematon mökin huone.")
+        if (isinstance(target, bool) or not isinstance(target, (int, float))
+                or not MIN_TARGET <= target <= MAX_TARGET):
+            raise HeaterSwitchError(f"Tavoitteen on oltava {MIN_TARGET:g}–{MAX_TARGET:g} °C.")
+        target = round(float(target) * 2) / 2
+        status = self._status_binding(room)
+        now = int(self._now().timestamp())
+        self._store.set_hand_target(SITE_ID, room, target, now, actor)
+        self._store.add_event(now, SITE_ID, room, actor, "hand_target", None,
+                              f"{target:g}", ROOMS[room])
+        state = (self._gateway.snapshot().get(status.device_id) or {}).get("attributes") or {}
+        if state.get("mode") == "manual":
+            self._gateway.submit_service(status.device_id, INTEGRATION_DOMAIN, "clear_manual",
+                                         {"room": room}, actor, manual_cleared)
+        sent = self.tick_targets()
+        cmd = next((c for c in sent if c["value"]["room"] == room), None)
+        return cmd or {"state": "confirmed", "room": room, "target": target}
+
+    def _status_binding(self, room: str) -> Binding:
+        status = next((b for b in self._bindings()
+                       if b.room == room and role_of(b) == "status"), None)
+        if status is None:
+            raise HeaterSwitchError("Huoneen tilatietoa ei ole liitetty.")
+        return status
+
     def clear_manual(self, room, actor: str) -> dict:
-        """End a room's manual pause at once ("Palauta automaatio").
+        """End a room's manual pause and hand-set target at once
+        ("Palauta automaatio").
 
         Raises ``HeaterSwitchError`` when the room status sensor is not bound.
         """
         if room not in ROOMS:
             raise HeaterSwitchError("Tuntematon mökin huone.")
-        status = next((b for b in self._bindings()
-                       if b.room == room and role_of(b) == "status"), None)
-        if status is None:
-            raise HeaterSwitchError("Huoneen tilatietoa ei ole liitetty.")
+        status = self._status_binding(room)
+        had_hand = room in self._store.hand_targets(SITE_ID)
+        self._store.set_hand_target(SITE_ID, room, None, 0, actor)
         cmd = self._gateway.submit_service(status.device_id, INTEGRATION_DOMAIN,
                                            "clear_manual", {"room": room}, actor,
                                            manual_cleared)
         if cmd["state"] != "failed":
             self._store.add_event(int(self._now().timestamp()), SITE_ID, room, actor,
                                   "clear_manual", None, "auto", ROOMS[room])
+        if had_hand:
+            self.tick_targets()     # back to the plan (or the fallback) at once
         return cmd
 
     def active_visit(self):
@@ -1329,9 +1401,10 @@ class CottageSite:
         rooms = []
         with self._target_lock:
             self._collect()
+        hand = self._store.hand_targets(SITE_ID)
         for room_id, name in ROOMS.items():
             room = {"id": room_id, "name": name, "heaters": [], "status": None,
-                    "plan": self._plan_view(room_id),
+                    "plan": self._plan_view(room_id), "hand": hand.get(room_id),
                     **{role: None for role in SENSOR_ROLES}}
             statuses = []
             for binding in sorted((b for b in bindings if b.room == room_id),
@@ -1641,6 +1714,14 @@ section.cottage[hidden] { display: none; }
             margin-bottom: .5rem; }
 .cot-side { display: flex; flex-direction: column; gap: .5rem; min-width: 0; }
 .cot-side .fld b { font-size: 1.05rem; font-variant-numeric: tabular-nums; }
+.cot-side button.tgt-btn { min-height: 36px; min-width: 0; padding: 0 .1rem; border: 0;
+  border-bottom: 1px dashed var(--text3); border-radius: 0; background: none; color: var(--text);
+  font-size: 1.05rem; font-weight: 700; font-variant-numeric: tabular-nums; text-align: left;
+  width: fit-content; align-self: flex-start; cursor: pointer; }
+.cot-side button.tgt-btn.old { color: var(--text3); text-decoration: line-through; }
+.heater-sw.tgt-edit { grid-template-columns: minmax(0, 1fr) auto; }
+.heater-sw.tgt-edit input[type=range] { grid-column: 1 / -1; width: 100%; min-height: 28px;
+  accent-color: var(--heat); }
 .cot-stats { display: flex; flex-wrap: wrap; gap: .4rem; margin: .2rem 0 .5rem; }
 .cot-stats span { padding: .3rem .6rem; border-radius: 999px; background: var(--surface2);
                   font-size: .8rem; color: var(--text2); font-variant-numeric: tabular-nums; }
@@ -1784,6 +1865,8 @@ function vkHeaterSwitch(heater, onChange) {
   var $rooms = document.getElementById("cottage-rooms");
   var AUTOMATION_ON = true;
   var ROOM_NAMES = { large: "Mökki", small: "Kammari" };
+  // The hand-set target slider: open for one room; refreshes wait while it is held.
+  var EDIT_ROOM = null, HELD = false, PENDING = null;
   var ACK_LATE_MS = 45 * 60000;        // targets go out every quarter hour
   var PAGE_STARTED = Date.now();
   var num = new Intl.NumberFormat("fi-FI", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
@@ -1862,8 +1945,17 @@ function vkHeaterSwitch(heater, onChange) {
       if (plan && plan.acked_at) tip.push("Mökki vahvisti tavoitteen klo " + clock.format(new Date(plan.acked_at)) + ".");
       if (st.valid_until && st.mode !== "fallback" && st.mode !== "manual")
         tip.push("Voimassa klo " + clock.format(new Date(st.valid_until)) + " asti.");
-      if (!AUTOMATION_ON) tip.push("Automaatio on pois päältä, joten tavoitetta ei lähetetä mökille.");
-      f1.appendChild(el("b", "value" + (ok ? "" : " old"), st.target === null ? "–" : temp(st.target), tip.join(" ")));
+      if (!AUTOMATION_ON && !room.hand) tip.push("Automaatio on pois päältä, joten tavoitetta ei lähetetä mökille.");
+      tip.push("Napauta asettaaksesi huoneen tavoitteen käsin.");
+      var tbtn = el("button", "value tgt-btn" + (ok ? "" : " old"),
+        st.target === null ? "–" : temp(st.target), tip.join(" "));
+      tbtn.type = "button";
+      tbtn.setAttribute("aria-expanded", EDIT_ROOM === room.id ? "true" : "false");
+      tbtn.addEventListener("click", function () {
+        EDIT_ROOM = EDIT_ROOM === room.id ? null : room.id;
+        if (window.vkCottageData) render(window.vkCottageData);
+      });
+      f1.appendChild(tbtn);
       if (plan && plan.reason_text) f1.appendChild(el("span", "fld-l", plan.reason_text));
       if (plan && AUTOMATION_ON && st.target !== null && Math.abs(plan.target - st.target) >= 0.05)
         f1.appendChild(el("span", "fld-l", "→ " + temp(plan.target),
@@ -1872,6 +1964,7 @@ function vkHeaterSwitch(heater, onChange) {
     }
     main.appendChild(side);
     c.appendChild(main);
+    if (st && EDIT_ROOM === room.id) c.appendChild(targetSlider(room));
     var stats = el("div", "cot-stats");
     [sensorChip("Kosteus", room.humidity, function (v) { return num.format(v) + " %"; }),
      sensorChip("CO₂", room.co2, function (v) { return Math.round(v) + " ppm"; }),
@@ -1902,13 +1995,17 @@ function vkHeaterSwitch(heater, onChange) {
         c.appendChild(row("Mökki ei ole vahvistanut tavoitetta", acked === null ? "ei vielä" : when(plan.acked_at), false,
           "Mökin ohjain vahvistaa jokaisen Villa Kuppiksen lähettämän tavoitteen, yleensä vartin välein. " +
           "Jos vahvistuksia ei tule, mökki seuraa viimeisintä saamaansa suunnitelmaa ja sen jälkeen turvalämpöä."));
-      if (st.mode === "manual" && st.manual_until) {
-        // One tap ends the pause; the room follows Villa Kuppis again.
+      if (room.hand || (st.mode === "manual" && st.manual_until)) {
+        // One tap ends the pause or the hand-set target; the room follows Villa Kuppis again.
         var resume = el("div", "heater-sw resume");
-        resume.appendChild(el("span", "hs-name", "Käsiohjaus päättyy klo " +
-          clock.format(new Date(st.manual_until)), st.manual_by ? "Muutettu: " + st.manual_by : ""));
+        resume.appendChild(room.hand
+          ? el("span", "hs-name", "Tavoite asetettu käsin: " + temp(room.hand.target),
+            "Asettanut " + room.hand.set_by + ". Huone pysyy tässä, kunnes palautat automaation.")
+          : el("span", "hs-name", "Käsiohjaus päättyy klo " +
+            clock.format(new Date(st.manual_until)), st.manual_by ? "Muutettu: " + st.manual_by : ""));
         var rbtn = el("button", "", "Palauta automaatio",
-          "Lopettaa käsiohjauksen heti; mökin ohjain jatkaa Villa Kuppiksen tavoitteella.");
+          "Lopettaa käsiohjauksen heti; mökin ohjain jatkaa Villa Kuppiksen tavoitteella" +
+          (AUTOMATION_ON ? "." : " (Automaatio pois: turvalämpö)."));
         rbtn.type = "button";
         rbtn.addEventListener("click", function () {
           rbtn.disabled = true;
@@ -1935,6 +2032,43 @@ function vkHeaterSwitch(heater, onChange) {
     });
     return c;
   }
+  // A slider sends the room's hand-set target when released (5–25 °C).
+  function targetSlider(room) {
+    var start = room.hand ? room.hand.target : (room.status.target !== null ? room.status.target :
+      (room.plan ? room.plan.target : 20));
+    var wrap = el("div", "heater-sw tgt-edit");
+    var label = el("span", "hs-name", "Tavoite käsin",
+      "Huone pidetään tässä lämpötilassa, myös vierailun ja Automaatio pois -tilan aikana, " +
+      "kunnes palautat automaation. Muutos lähtee, kun päästät irti.");
+    var val = el("span", "hs-val", temp(start));
+    var r = el("input");
+    r.type = "range"; r.min = 5; r.max = 25; r.step = 0.5; r.value = start;
+    r.setAttribute("aria-label", "Huoneen " + room.name + " tavoite käsin");
+    r.addEventListener("pointerdown", function () { HELD = true; });
+    r.addEventListener("input", function () { val.textContent = temp(Number(r.value)); });
+    r.addEventListener("change", function () {
+      HELD = false;
+      var msg = el("span", "hs-msg", "Lähetetään…");
+      wrap.appendChild(msg);
+      fetch("api/cottage/room_target", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ room: room.id, target: Number(r.value) }) })
+        .then(function (res) { return res.json().then(function (j) { return [res.ok, j]; }); })
+        .then(function (res) {
+          if (!res[0] || res[1].state === "failed") {
+            msg.className = "hs-msg err";
+            msg.textContent = res[0] ? "Tavoitteen lähetys ei onnistunut." : (res[1].detail || "Tavoite hylättiin.");
+            return;
+          }
+          EDIT_ROOM = null;
+          load();
+        }).catch(function () { msg.className = "hs-msg err"; msg.textContent = "Yhteys palveluun katkesi."; });
+    });
+    r.addEventListener("blur", function () { HELD = false; });
+    wrap.appendChild(label);
+    wrap.appendChild(val);
+    wrap.appendChild(r);
+    return wrap;
+  }
   // The cottage's own alarm only shows here when it needs a look; Asetukset
   // tells whether it is ready.
   var HEARD_LATE_MS = 20 * 60000;      // heartbeats every 5 min, seen to 5 min
@@ -1949,6 +2083,8 @@ function vkHeaterSwitch(heater, onChange) {
       "että Villa Kuppis ei vastaa.";
   }
   function render(data) {
+    if (HELD) { PENDING = data; return; }   // the slider is held: draw after release
+    PENDING = null;
     if (!data.configured) { $section.hidden = true; return; }
     $section.hidden = false;
     AUTOMATION_ON = data.automation_on !== false;
@@ -1959,8 +2095,10 @@ function vkHeaterSwitch(heater, onChange) {
     $conn.hidden = data.site.connection === "ok";     // the header already says ok
     $conn.title = data.site.error || "Viimeisin yhteys: " + when(data.site.last_contact);
     var missing = data.site.missing_bindings || [];
+    var anyHand = data.rooms.some(function (r) { return r.hand; });
     $note.textContent = (AUTOMATION_ON ? "" : "Automaatio on pois päältä: mökille ei lähetetä " +
-      "tavoitteita, ja patterit siirtyvät turvalämpöön noin minuutin kuluttua. ") +
+      (anyHand ? "muita kuin käsin asetettuja tavoitteita" : "tavoitteita") +
+      ", ja muut patterit siirtyvät turvalämpöön noin minuutin kuluttua. ") +
       (missing.length ? "Home Assistantista puuttuu liitettyjä laitteita: " +
       missing.join(", ") + ". " : "") + alarmNote(data);
     $rooms.textContent = "";

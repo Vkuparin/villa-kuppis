@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.47
+
+- Mökin huoneen tavoitteen voi asettaa käsin: napauta huonekortin Tavoite-lukemaa ja säädä liukusäädintä (5–25 °C, lähtee kun päästät irti). Huone pysyy siinä myös vierailun ja Automaatio pois -tilan aikana, kunnes painat "Palauta automaatio". Käsin asettaminen lopettaa myös pattereiden käsiohjaustauon.
+
 ## 0.4.45
 
 - Kodin tapahtumien Tulos-tekstit, komentovirheiden selitteet (esim. "Arvon on oltava 18–30.") ja yhteysvirheet näkyvät nyt suomeksi, myös vanhoissa tapahtumissa. "web"-toimija näkyy nimellä "Verkkosovellus". Muu käyttöliittymä oli jo suomeksi; jäljellä ovat vain omat laitteiden nimet ja tuotenimet (esim. Mill, ALPSTUGA, MELCloud Home, Home Assistant).

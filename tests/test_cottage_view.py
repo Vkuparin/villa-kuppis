@@ -677,6 +677,23 @@ class ServiceHttpTests(unittest.TestCase):
         self.assertEqual(small["since"], body["since"])
         self.assertEqual(self.post(server, "/api/cottage/learning/restart", {"room": "x"})[0], 400)
 
+    def test_hand_target_is_set_shown_and_cleared_from_the_web(self):
+        service = self.make_service()
+        server = self.serve(service)
+        status, _ = self.post(server, "/api/cottage/room_target", {"room": "small", "target": 18.3})
+        self.assertEqual(status, 200)
+        _, body = self.get(server, "/api/cottage")
+        small = next(r for r in body["rooms"] if r["id"] == "small")
+        self.assertEqual(small["hand"]["target"], 18.5)       # 0.5 °C steps
+        _, events = self.get(server, "/api/events")
+        self.assertEqual((events[0]["action"], events[0]["requested"]), ("hand_target", "18.5"))
+        for bad in ({"room": "small", "target": 30}, {"room": "small", "target": True},
+                    {"room": "sauna", "target": 20}):
+            self.assertEqual(self.post(server, "/api/cottage/room_target", bad)[0], 400)
+        self.post(server, "/api/cottage/clear_manual", {"room": "small"})
+        _, body = self.get(server, "/api/cottage")
+        self.assertIsNone(next(r for r in body["rooms"] if r["id"] == "small")["hand"])
+
     def test_heaters_without_integration_support_have_no_switch(self):
         service = self.make_service()
         server = self.serve(service)

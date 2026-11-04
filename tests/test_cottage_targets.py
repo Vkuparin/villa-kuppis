@@ -164,6 +164,33 @@ class TargetTests(IsolatedAsyncioTestCase):
         self.assertEqual(self.sender.tick(), [])
         self.assertEqual(len(self.ha.targets), 2)
 
+    async def test_hand_target_wins_and_is_sent_with_automation_off(self):
+        hand = {}
+        self.sender._hand_targets = lambda: hand
+        self.ha.schedules = True
+        await self.settle(self.sender.tick())
+        hand["large"] = 19.5
+        sent = self.sender.tick()
+        self.assertEqual([c["value"]["room"] for c in sent], ["large"])
+        await self.settle(sent)
+        t = self.ha.targets[-1]
+        self.assertEqual((t["room"], t["target"]), ("large", 19.5))
+        # The whole schedule holds it: an outage does not drop the room to the plan.
+        self.assertTrue(all(step["target"] == 19.5 for step in t["schedule"]))
+        self.assertEqual(self.sender.last["large"].reason, "hand")
+        # Automaatio off: the hand room keeps its target, the other is released.
+        self.automation = False
+        self.clock.advance(INTERVAL_SECONDS)
+        sent = self.sender.tick()
+        await self.settle(sent)
+        latest = {t["room"]: t["target"] for t in self.ha.targets[-2:]}
+        self.assertEqual(latest, {"large": 19.5, "small": 0.0})
+        # Removing it with Automaatio off releases the room.
+        del hand["large"]
+        sent = self.sender.tick()
+        self.assertEqual([(c["value"]["room"], c["value"]["target"]) for c in sent],
+                         [("large", 0.0)])
+
     async def test_refused_release_is_not_repeated(self):
         self.ha.revisions = {"large": self.day_start + 10 * INTERVAL_SECONDS}
         self.automation = False
