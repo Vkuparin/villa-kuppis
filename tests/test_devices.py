@@ -52,6 +52,7 @@ class FinnishNameTest(unittest.TestCase):
         self.assertEqual(finnish_name("Makuuhuone Standby"), "Makuuhuone valmiustila")
         self.assertEqual(finnish_name("Makuuhuone Energy consumed (monthly)"),
                          "Makuuhuone energiankulutus (kuukausi)")
+        self.assertEqual(finnish_name("Eteinen Indoor temperature"), "Eteinen sisälämpötila")
         self.assertEqual(finnish_name("Archer BE230 Download speed"), "Archer BE230 latausnopeus")
         self.assertEqual(finnish_name("Olohuone"), "Olohuone")
 

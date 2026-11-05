@@ -240,7 +240,13 @@ SCRIPT = r"""
     unknown: "Tuntematon", on: "Päällä", off: "Pois", open: "Auki", closed: "Kiinni",
     home: "Kotona", not_home: "Poissa", idle: "Lepotilassa", heat: "Lämmitys", cool: "Viilennys",
     detected: "Havaittu", clear: "Ei havaintoa", connected: "Yhdistetty", disconnected: "Ei yhteyttä",
-    charging: "Latautuu", low: "Matala", normal: "Normaali", high: "Korkea"};
+    charging: "Latautuu", low: "Matala", normal: "Normaali", high: "Korkea",
+    standby: "Valmiustila", heating: "Lämmittää", cooling: "Jäähdyttää", drying: "Kuivaa",
+    dry: "Kuivaus", fan: "Puhallus", fan_only: "Puhallus", auto: "Automaattinen",
+    heat_cool: "Automaattinen", none: "Ei mitään", ok: "Kunnossa", error: "Vika",
+    true: "Kyllä", false: "Ei", available: "Saatavilla", unavailable: "Ei saatavilla",
+    online: "Yhteys", offline: "Ei yhteyttä", active: "Aktiivinen", inactive: "Ei aktiivinen",
+    locked: "Lukittu", unlocked: "Auki", playing: "Toistaa", paused: "Tauolla"};
   function stateWord(s) {
     var k = String(s).toLowerCase().replace(/ /g, "_");
     return STATES[k] || String(s);

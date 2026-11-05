@@ -3,6 +3,7 @@
 ## 0.4.55
 
 - Lämpöpumppujen laitekorttien nimet suomeksi Koti-välilehdellä: "Room temperature" on "huonelämpötila", "Outdoor temperature" "ulkolämpötila", "Standby" "valmiustila" ja "Energy consumed (monthly)" "energiankulutus (kuukausi)".
+- Laitteiden tekstitilat (esim. "standby", "heating", "none") näkyvät suomeksi, ja kodin muiden käyttöliittymätekstien englanti tarkistettiin: kaikki muu oli jo suomeksi.
 
 ## 0.4.54
 

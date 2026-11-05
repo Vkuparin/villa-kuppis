@@ -142,7 +142,10 @@ NAME_TAILS = {
     # MELCloud Home (heat pump) entities
     "room temperature": "huonelämpötila", "outdoor temperature": "ulkolämpötila",
     "standby": "valmiustila", "energy consumed (monthly)": "energiankulutus (kuukausi)",
-    "energy consumed": "energiankulutus", "error state": "vikatila", "error": "vika",
+    "energy consumed": "energiankulutus", "energy consumed (daily)": "energiankulutus (päivä)",
+    "energy consumed (yearly)": "energiankulutus (vuosi)",
+    "energy produced": "energiantuotto", "power consumption": "tehonkulutus",
+    "indoor temperature": "sisälämpötila", "target": "tavoite", "mode": "toimintatila", "error state": "vikatila", "error": "vika",
     "connection": "yhteys", "set temperature": "asetuslämpötila",
     "operation mode": "toimintatila", "fan speed": "puhaltimen nopeus",
     "vane position": "ilmavirran suunta", "vertical vane": "pystysuunta",
