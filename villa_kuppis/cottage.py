@@ -1085,12 +1085,13 @@ class CottageSite:
                         + f". Tavoite {deg_text(goal)}."))
         late = [r for r, p in progress.items() if p["late"] and not p["reached"]]
         if late:
+            arrival = visit.arrival.astimezone(HELSINKI)
             out.append((visit.visit_id, "late", "Mökki ei ehdi lämmetä ajoissa",
                         f"{names(late)}: " + ", ".join(
                             deg_text(progress[r]["value"]) if progress[r]["fresh"] else "ei lukemaa"
                             for r in late)
                         + f". Tavoite {deg_text(goal)} saapumiseen "
-                        + visit.arrival.astimezone(HELSINKI).strftime("%-d.%-m. klo %H.%M")
+                        + f"{arrival.day}.{arrival.month}. klo {arrival:%H.%M}"
                         + " mennessä ei ehkä toteudu."))
         if visit.departure is None and now >= visit.arrival + VISIT_LEFT_AFTER:
             night = "" if visit.night_c is None else f" (yöllä {deg_text(visit.night_c)})"

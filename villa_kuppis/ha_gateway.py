@@ -830,7 +830,9 @@ class HomeAssistantGateway:
 
         ``confirm`` receives the device's reading (with ``attributes`` for a
         sensor) and returns True once the call has taken effect. The call
-        targets the device's entity only with ``target_entity``.
+        targets the device's entity only with ``target_entity``. The service
+        is called even if the reading already matches: the request may also
+        change a schedule or extend its validity.
         """
         cmd = Command(uuid.uuid4().hex, self.site_id, device_id, f"{domain}.{service}",
                       dict(data), actor, created_at=self._now().isoformat())
@@ -859,7 +861,9 @@ class HomeAssistantGateway:
             ok, detail = check(state) if state else (False, "the device has not reported its state")
             if not ok:
                 return self._finish_locked(cmd, "failed", detail)
-            if cmd.confirmed_by(state):
+            # A service may change more than its read-back predicate checks
+            # (for example a cottage target's future schedule or expiry).
+            if cmd._service is None and cmd.confirmed_by(state):
                 return self._finish_locked(cmd, "confirmed", "already at the requested value")
             out = self._activate_locked(cmd)
         return self._launch(cmd, binding, loop, out)

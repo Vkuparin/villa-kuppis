@@ -29,4 +29,6 @@ Ideas the owner agreed to that have no release yet. Add a feature heading and th
 
 | ID | Task and Done when | Agent | Depends on | Status |
 | --- | --- | --- | --- | --- |
-| B1.1 | Fix device-rule command recovery and triggers across missing readings. Done when offline regressions and the affected tests pass. | Tier 2 | | In progress: Codex, main; reproduce asynchronous command failures and false sensor/presence edges, then fix and run focused checks. |
+| B1.1 | Fix device-rule command recovery and triggers across missing readings. Done when offline regressions and the affected tests pass. | Tier 2 | | Done: eb3fbff; 18 rule tests, 26 device tests, document and whitespace checks passed. Also closed the gateway test fixture's SQLite connection before Windows cleanup. Offline only. |
+| B1.2 | Send changed cottage schedules even when the current target stays the same. Done when a changed future target reaches the local fake Home Assistant within the same price period and affected tests pass. | Tier 2 | | In progress: Codex, main; reproduce stale cached schedules after settings changes, then fix sender deduplication. |
+| B1.3 | Fix visit notices and affected test cleanup on Windows. Done when cottage view and visit API tests pass. | Tier 2 | | In progress: Codex, main; replace the unsupported date format and close databases before removing temporary folders. |

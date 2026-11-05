@@ -8,6 +8,7 @@ localhost HTTP server over the offline demo service.
 from __future__ import annotations
 
 import asyncio
+from contextlib import ExitStack
 import json
 import tempfile
 import threading
@@ -332,16 +333,16 @@ class VisitApiTests(unittest.TestCase):
         self.assertEqual(rooms()["small"]["hand"]["target"], 16.0)
 
     def test_without_a_cottage_the_visit_paths_are_404(self):
-        with tempfile.TemporaryDirectory() as temp:
+        with tempfile.TemporaryDirectory() as temp, ExitStack() as cleanup:
             from villa_kuppis.pump_probe import FakeClient, _unit_payload
             from villa_kuppis.pump_service import PumpService
             service = PumpService(temp, client=FakeClient([_unit_payload("u1", "Y")]))
             server = PumpAppServer(service, host="127.0.0.1", port=0)
             threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05},
                              daemon=True).start()
-            self.addCleanup(service.close)
-            self.addCleanup(server.server_close)
-            self.addCleanup(server.shutdown)
+            cleanup.callback(service.close)
+            cleanup.callback(server.server_close)
+            cleanup.callback(server.shutdown)
             base = f"http://127.0.0.1:{server.server_address[1]}"
             for path, data in (("/api/visit", None), ("/api/visit", b"{}"),
                                ("/api/visit/update", b"{}"), ("/api/visit/end", b"{}")):

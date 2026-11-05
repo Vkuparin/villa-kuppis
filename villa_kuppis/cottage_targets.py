@@ -191,6 +191,7 @@ class CottageTargetSender:
         self._retry = timedelta(seconds=retry_seconds)
         # room -> (target, revision, request_id, sent_at)
         self._sent: dict[str, tuple] = {}
+        self._sent_data: dict[str, dict] = {}  # includes the future schedule and validity
         self.last: dict[str, RoomTarget] = {}
         self.schedules: dict[str, list[RoomTarget]] = {}
 
@@ -436,6 +437,7 @@ class CottageTargetSender:
                  "valid_minutes": RELEASE_MINUTES},
                 ACTOR, acknowledged(RELEASE_TARGET, revision))
             self._sent[room] = (None, revision, cmd["request_id"], now)
+            self._sent_data.pop(room, None)
             out.append(cmd)
         return out
 
@@ -469,20 +471,22 @@ class CottageTargetSender:
         for room, target in targets.items():
             device_id = self._rooms[room]
             revision = target.period_ts
-            previous = self._sent.get(room)
-            if previous is not None and previous[:2] == (target.target_c, revision):
-                state = self._gateway.command(previous[2]) or {}
-                if state.get("state") in ("pending", "confirmed"):
-                    continue
-                if now - previous[3] < self._retry:
-                    continue
             data = {"room": room, "target": target.target_c, "revision": revision,
                     "valid_minutes": self._valid_minutes}
             if takes_schedule(snapshot.get(device_id)):
                 data["schedule"] = schedule(self.schedules.get(room) or [])
+            previous = self._sent.get(room)
+            if previous is not None:
+                state = self._gateway.command(previous[2]) or {}
+                if state.get("state") == "pending":
+                    continue
+                if self._sent_data.get(room) == data and (
+                        state.get("state") == "confirmed" or now - previous[3] < self._retry):
+                    continue
             cmd = self._gateway.submit_service(
                 device_id, DOMAIN, "set_target", data,
                 ACTOR, acknowledged(target.target_c, revision))
             self._sent[room] = (target.target_c, revision, cmd["request_id"], now)
+            self._sent_data[room] = data
             out.append(cmd)
         return out

@@ -82,6 +82,7 @@ class FakeCottageHA(FakeHA):
 class TargetTests(IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)   # after later VisitStore cleanups on Windows
         data = Path(self.tmp.name)
         start, end = helsinki_day_bounds(DAY)
         count = (end - start) // INTERVAL_SECONDS
@@ -118,12 +119,20 @@ class TargetTests(IsolatedAsyncioTestCase):
         await asyncio.wait_for(self.task, 3.0)
         await self.ha.stop()
         self.bindings.close()
-        self.tmp.cleanup()
 
     async def settle(self, sent):
         for cmd in sent:
             if cmd["state"] == "pending":
                 await self.gateway.wait(cmd["request_id"], 3.0)
+
+    async def enable_schedules(self):
+        self.ha.schedules = True
+        for room in ("large", "small"):
+            self.ha.set_state(f"sensor.villa_kuppis_{room}_target", "7.0",
+                              {"mode": "fallback", "revision": None, "schedule_steps": 0})
+        await eventually(lambda: all("schedule_steps" in (
+            self.gateway.snapshot()[f"{room}-status"].get("attributes") or {})
+            for room in ("large", "small")))
 
     async def test_whole_day_applies_the_right_targets_with_acknowledgements(self):
         for i in range(len(self.prices)):
@@ -167,7 +176,7 @@ class TargetTests(IsolatedAsyncioTestCase):
     async def test_hand_target_wins_and_is_sent_with_automation_off(self):
         hand = {}
         self.sender._hand_targets = lambda: hand
-        self.ha.schedules = True
+        await self.enable_schedules()
         await self.settle(self.sender.tick())
         hand["large"] = 19.5
         sent = self.sender.tick()
@@ -336,6 +345,62 @@ class TargetTests(IsolatedAsyncioTestCase):
     async def test_older_integration_gets_the_target_alone(self):
         await self.settle(self.sender.tick())
         self.assertNotIn("schedule", self.ha.targets[-1])
+
+    async def test_changed_future_plan_is_sent_in_the_same_period(self):
+        await self.enable_schedules()
+        await self.settle(self.sender.tick())
+        first = next(t for t in self.ha.targets if t["room"] == "small")
+        self.assertEqual(first["target"], 12.0)
+        self.assertIn(8.0, [s["target"] for s in first["schedule"]])
+        # Only later periods change: the current cheap period stays at 12 °C.
+        self.overrides = {"room:cottage/small": {"heat_rule1_c": 10.0}}
+        updated = self.sender.tick()
+        self.assertEqual([c["value"]["room"] for c in updated], ["small"])
+        await self.settle(updated)
+        sent = self.ha.targets[-1]
+        self.assertEqual((sent["target"], sent["revision"]), (first["target"], first["revision"]))
+        self.assertIn(10.0, [s["target"] for s in sent["schedule"]])
+        self.assertNotIn(8.0, [s["target"] for s in sent["schedule"]])
+        self.assertEqual(self.sender.tick(), [])
+
+    async def test_plan_is_sent_when_integration_gains_schedule_support(self):
+        await self.settle(self.sender.tick())
+        self.assertNotIn("schedule", self.ha.targets[-1])
+        self.ha.schedules = True
+        self.ha.set_state("sensor.villa_kuppis_large_target", "12.0", {
+            "requested_target": 12.0, "revision": self.day_start, "schedule_steps": 0})
+        await eventually(lambda: "schedule_steps" in (
+            self.gateway.snapshot()["large-status"].get("attributes") or {}))
+        updated = self.sender.tick()
+        self.assertEqual([c["value"]["room"] for c in updated], ["large"])
+        await self.settle(updated)
+        self.assertTrue(self.ha.targets[-1]["schedule"])
+        self.assertEqual(self.sender.tick(), [])
+
+    async def test_changed_schedule_waits_for_a_pending_write(self):
+        await self.enable_schedules()
+        self.ha.hang = True
+        pending = self.sender.tick()
+        self.overrides = {"room:cottage/small": {"heat_rule1_c": 10.0}}
+        self.assertEqual(self.sender.tick(), [])
+        await self.settle(pending)
+        self.ha.hang = False
+        updated = self.sender.tick()
+        self.assertEqual([c["value"]["room"] for c in updated], ["small"])
+        await self.settle(updated)
+        self.assertIn(10.0, [s["target"] for s in self.ha.targets[-1]["schedule"]])
+
+    async def test_automation_off_and_on_restores_plan_in_the_same_period(self):
+        await self.enable_schedules()
+        await self.settle(self.sender.tick())
+        self.automation = False
+        await self.settle(self.sender.tick())
+        self.automation = True
+        restored = self.sender.tick()
+        self.assertEqual(len(restored), 2)
+        await self.settle(restored)
+        self.assertTrue(all(t["target"] == 12.0 and t["schedule"] for t in self.ha.targets[-2:]))
+        self.assertEqual(self.sender.tick(), [])
 
     async def test_schedule_holds_a_visit_heat_up(self):
         from villa_kuppis.visit import VisitStore

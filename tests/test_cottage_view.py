@@ -336,7 +336,7 @@ class ViewTests(unittest.IsolatedAsyncioTestCase):
         self.gateway.request_stop()
         await asyncio.wait_for(self.task, 3.0)
         await self.ha.stop()
-        self.site._store.close()
+        self.site.stop()
         self.store.close()
         self.tmp.cleanup()
 
@@ -867,7 +867,8 @@ class VisitProgressTests(unittest.TestCase):
         self.assertTrue(self.site.visit_view()["progress"]["small"]["late"])
         notices = self.site.visit_notices()
         self.assertEqual([n[1] for n in notices], ["late"])
-        self.assertTrue(notices[0][3].startswith("Kammari: 10 °C. Tavoite 21 °C saapumiseen 20.11."))
+        self.assertEqual(notices[0][3], "Kammari: 10 °C. Tavoite 21 °C saapumiseen "
+                         "20.11. klo 18.00 mennessä ei ehkä toteudu.")
 
     def test_no_rise_in_an_hour_or_short_at_arrival_is_late(self):
         self.start(rooms=("large",))
