@@ -90,8 +90,9 @@ class Settings:
     min_command_interval: timedelta = timedelta(seconds=60)
     max_commands_per_hour: int = 12
     confirm_grace: timedelta = timedelta(seconds=120)
-    # A heater that reports no step gets whole degrees: a Mill Gen4 over
-    # Matter took 9.5 °C, reported 9.5 and showed and held 9.0 (5.11.2026).
+    # A heater that reports no step gets whole degrees: a Mill Gen4 took
+    # 9.5 °C over Matter, reported 9.5 and showed 9.0 (5.11.2026), though
+    # its own buttons step 0.5 °C. Its Matter writes lose the half degree.
     default_step: float = 1.0
     fallback_heats_disabled: bool = True
     readback_tolerance: float = 1.0  # a heater may round what it was sent
