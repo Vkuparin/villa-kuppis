@@ -10,6 +10,10 @@ Modes, in precedence order:
 - ``manual``: someone changed a heater (Google Home, the heater itself or
   Home Assistant's UI). The controller leaves the room alone until the
   hold ends or Villa Kuppis clears it, except for the frost guard below.
+  A heater that moves to ``auto`` (its own app's weekly program, as Mill's
+  local connection reports it) is not a person: it is taken back to heat
+  and gets its setpoint again, so a program in the Mill app or its cloud
+  never runs in place of Villa Kuppis.
 - ``fallback``: no valid target (Villa Kuppis, Tailscale or the internet
   is down, and the target and its schedule expired). The heaters' own
   thermostats hold the safe setpoint.
@@ -73,6 +77,7 @@ from datetime import datetime, timedelta
 
 HEAT = "heat"
 OFF = "off"
+AUTO = "auto"   # Mill local: the heater follows its Mill app weekly program
 
 
 @dataclass(frozen=True)
@@ -266,6 +271,8 @@ def _detect_manual(heaters, memory: RoomMemory, settings: Settings, now: datetim
         hm.settle_until = None
         if previous == observed or not heater.enabled:
             continue
+        if heater.mode == AUTO:
+            continue         # the heater's own program took over, not a person
         mode_ours = heater.mode == previous[0] or heater.mode == hm.sent_mode
         setpoint_ours = (_close(heater.setpoint, previous[1], 1e-6)
                          or _close(heater.setpoint, hm.sent_setpoint, _readback(heater, settings)))
@@ -343,9 +350,10 @@ def _commands(heaters, desired: float, memory: RoomMemory, settings: Settings,
             need_setpoint = not (_close(heater.setpoint, want, tol)
                                  or (_close(hm.sent_setpoint, want, 1e-6)
                                      and _close(heater.setpoint, want, _readback(heater, settings))))
-            # A heater turned back on gets its setpoint again: it may
-            # report one setpoint and heat to another.
-            need_setpoint = need_setpoint or (need_mode and heater.mode == OFF)
+            # A heater turned back on, or taken back from its own program,
+            # gets its setpoint again: it may report one setpoint and heat
+            # to another.
+            need_setpoint = need_setpoint or need_mode
             effect = 0 if need_setpoint else _effect(heater, hm, want, settings, now)
             need_setpoint = need_setpoint or effect > 0
         if not (need_mode or need_setpoint):

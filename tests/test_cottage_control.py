@@ -433,6 +433,23 @@ class ManualTests(unittest.TestCase):
                                         if c.entity_id == heater.entity_id})
 
 
+    def test_the_mill_app_program_taking_over_is_undone_not_a_hand_change(self):
+        # Mill's local connection reports its weekly program as "auto": a
+        # program in the Mill app or its cloud must not replace Villa Kuppis.
+        sim = Sim(large_room(), target=18.0)
+        sim.run(3 * 60)
+        heater = sim.room.heaters[0]
+        heater.mode, heater.setpoint = "auto", 22.0
+        changed_at, sent_before = sim.now, len(sim.commands)
+        sim.run(10)
+        self.assertNotIn("manual", sim.modes_since(changed_at))
+        self.assertEqual(heater.mode, "heat")
+        sent = [(c.service, c.value) for _, c in sim.commands[sent_before:]
+                if c.entity_id == heater.entity_id]
+        self.assertIn(("set_hvac_mode", "heat"), sent)
+        self.assertIn("set_temperature", {service for service, _ in sent})
+        self.assertNotEqual(heater.setpoint, 22.0)
+
     def test_hand_change_holds_overnight(self):
         self.assertGreaterEqual(SETTINGS.manual_hold, timedelta(hours=12))
 

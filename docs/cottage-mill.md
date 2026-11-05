@@ -21,6 +21,8 @@ Kammari's Mill (firmware 0x250828-1-g6797788dd, the same on all four), with the 
 - Half degrees are lost over Matter (9.5 °C showed 9.0) although its buttons step 0.5 °C; integration 0.10.0 sends whole degrees.
 - While on Matter, the heater (192.168.50.176) refuses TCP connections on port 80 within milliseconds: no local REST API in this state. It is not in the Mill app.
 - Integration 0.10.1 judges each heater by its own sensor and, when one that should heat does not, lists it in `disobeying`; Villa Kuppis 0.4.53 sends a phone alert.
+- Trial step, about 08:55: Kammari reset and paired in the Mill app, firmware 0x261023. Port 80 now answers: `GET /status` gives `"name": "Mill HeaterGen4Panel"`, `/control-status` gives ambient and set temperature, `current_power`, `operation_mode` ("Weekly program" after pairing) and `connected_to_cloud`, the same API as HA's local client (mill-local 0.5.0). HA's local entity maps Heat to "Control individually" (no program or timers), Auto to "Weekly program" and Off to off, with a 0.1 °C step and `hvac_action` from `current_power`.
+- Integration 0.10.2 takes a heater that moves to Auto (its Mill program) back to Heat with its setpoint, without counting it as a hand change.
 
 ## What Home Assistant supports
 
