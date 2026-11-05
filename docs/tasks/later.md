@@ -24,3 +24,9 @@ Ideas the owner agreed to that have no release yet. Add a feature heading and th
 | ID | Task and Done when | Agent | Depends on | Status |
 | --- | --- | --- | --- | --- |
 | H3.3 | Evaluate local cached price schedules at the cottage (a whole day's plan executed by the cottage Home Assistant during outages). Not implemented automatically. Done when outage tests quantify the value and a scoped decision builds or defers a cottage runner. | Tier 1 | H2.4, H3.2 | Done offline 2026-10-26 (owner approved a scoped build): each `set_target` carries the room's plan over the known prices (changes only) and integration 0.3.0 follows it until it ends; tests in test_cottage_control, test_cottage_targets and tests_ha. Not live-tested. |
+
+## B1. Bug fixes
+
+| ID | Task and Done when | Agent | Depends on | Status |
+| --- | --- | --- | --- | --- |
+| B1.1 | Fix device-rule command recovery and triggers across missing readings. Done when offline regressions and the affected tests pass. | Tier 2 | | In progress: Codex, main; reproduce asynchronous command failures and false sensor/presence edges, then fix and run focused checks. |

@@ -238,14 +238,19 @@ def _anyone_home(states: dict) -> bool | None:
     people = [s.get("state") for e, s in states.items() if e.startswith("person.")]
     if not people:
         return None
-    return any(p == "home" for p in people)
+    if "home" in people:
+        return True
+    if any(p in (None, "unknown", "unavailable") for p in people):
+        return None
+    return False
 
 
 class RuleEngine:
     """Runs one site's rules against its catalog.
 
     ``catalog`` gives ``devices_by_key()``, ``raw_states()`` and
-    ``command(key, action, value, actor)``; ``store`` keeps the rules and
+    ``command(key, action, value, actor)`` and ``command_result(request_id)``;
+    ``store`` keeps the rules and
     their last run; ``automation_on()`` is the site's Automaatio switch;
     ``prices(day)`` the site's prices with VAT as configured.
     """
@@ -259,6 +264,7 @@ class RuleEngine:
         self._now = now
         self._seen: dict[int, object] = {}   # rule id -> last observed value (edges)
         self._retry: dict[int, datetime] = {}  # rule id -> earliest retry of a failed change
+        self._pending: dict[int, tuple] = {}  # rule id -> (wanted state, request id, body)
 
     def status(self, rule: dict, devices: dict, states: dict) -> dict:
         """What the page shows under a rule: its next or current state."""
@@ -308,12 +314,37 @@ class RuleEngine:
             self._store.rule_ran(rule["id"], now, "failed", str(err))
             return {"rule": rule["id"], "key": key, "state": "failed", "detail": str(err)}
         self._store.rule_ran(rule["id"], now, result["state"], result.get("detail") or "")
-        return {"rule": rule["id"], "key": key, "state": result["state"]}
+        return {"rule": rule["id"], "key": key, "state": result["state"],
+                "request_id": result.get("request_id")}
+
+    def _settle(self, rule: dict, now: datetime) -> bool:
+        """Record a scheduled command's result; True while it is pending."""
+        pending = self._pending.get(rule["id"])
+        if pending is None:
+            return False
+        want, request_id, body = pending
+        result = self._catalog.command_result(request_id) or {
+            "state": "unknown", "detail": "Komennon tulosta ei enää löydy."}
+        if result["state"] == "pending":
+            return True
+        del self._pending[rule["id"]]
+        # An edited rule starts afresh, even if an old command finishes later.
+        if body != rule["rule"]:
+            return False
+        self._store.rule_ran(rule["id"], now, result["state"], result.get("detail") or "")
+        if result["state"] == "confirmed":
+            self._store.rule_state(rule["id"], want)
+            rule["last_state"] = want
+        else:
+            self._retry[rule["id"]] = now + RETRY
+        return False
 
     def _run(self, rule: dict, now: datetime, states: dict, devices: dict,
              automation: bool) -> list[dict]:
         body = rule["rule"]
         sun = states.get("sun.sun")
+        if self._settle(rule, now):
+            return []
         if body["kind"] in ("between", "cheapest"):
             if body["kind"] == "between":
                 want = between_on(body, now, sun)
@@ -326,11 +357,13 @@ class RuleEngine:
             if now < self._retry.get(rule["id"], now):
                 return []
             result = self._send(rule, body["key"], "power", want, now)
-            if result["state"] == "failed":
-                self._retry[rule["id"]] = now + RETRY
-            else:
+            if result["state"] == "confirmed":
                 self._retry.pop(rule["id"], None)
                 self._store.rule_state(rule["id"], want)
+            elif result["state"] == "pending":
+                self._pending[rule["id"]] = (want, result["request_id"], body)
+            else:
+                self._retry[rule["id"]] = now + RETRY
             return [result]
         fired = self._fired(rule, body["trigger"], now, states, devices, sun)
         if not fired or not automation:
@@ -362,6 +395,7 @@ class RuleEngine:
         else:
             device = devices.get(trigger["key"])
             if device is None or not device.get("available"):
+                self._seen.pop(rule["id"], None)
                 return False
             if t in ("above", "below"):
                 v = device.get("value") if device.get("value") is not None else device.get("current")

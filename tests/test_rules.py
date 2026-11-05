@@ -92,6 +92,8 @@ class FakeCatalog:
         self.states = {"sun.sun": SUN}
         self.sent = []
         self.fail = False
+        self.pending = False
+        self.commands = {}
 
     def raw_states(self):
         return self.states
@@ -103,7 +105,13 @@ class FakeCatalog:
         if self.fail:
             return {"state": "failed", "detail": "Home Assistant is not connected"}
         self.sent.append((key, action, value, actor))
-        return {"state": "confirmed", "request_id": "r"}
+        request_id = f"r{len(self.sent)}"
+        result = {"state": "pending" if self.pending else "confirmed", "request_id": request_id}
+        self.commands[request_id] = result
+        return result
+
+    def command_result(self, request_id):
+        return self.commands.get(request_id)
 
 
 class EngineTest(unittest.TestCase):
@@ -169,6 +177,124 @@ class EngineTest(unittest.TestCase):
         cur = int(self.now.timestamp()) // 900 * 900
         self.prices = [(cur, 5.0)]
         self.engine.tick()
+        self.engine.tick()
+        self.assertEqual(len(self.catalog.sent), 1)
+
+    def test_pending_change_waits_for_confirmation_and_preserves_manual_changes(self):
+        self.add(FESTIVE)
+        self.catalog.pending = True
+        result = self.engine.tick()[0]
+        self.assertIsNone(self.store.rules("home")[0]["last_state"])
+        self.engine.tick()
+        self.assertEqual(len(self.catalog.sent), 1)
+        self.catalog.commands[result["request_id"]]["state"] = "confirmed"
+        self.engine.tick()
+        self.assertEqual(self.store.rules("home")[0]["last_state"], 0)
+        self.catalog.devices["plug"]["on"] = True   # a later manual change holds
+        self.engine.tick()
+        self.assertEqual(len(self.catalog.sent), 1)
+
+    def test_asynchronous_failure_and_unknown_result_retry_after_delay(self):
+        self.add(FESTIVE)
+        self.catalog.pending = True
+        for state in ("failed", "unknown"):
+            with self.subTest(state=state):
+                result = self.engine.tick()[0]
+                count = len(self.catalog.sent)
+                self.catalog.commands[result["request_id"]].update(state=state, detail="No answer")
+                self.engine.tick()
+                stored = self.store.rules("home")[0]
+                self.assertEqual((stored["last_result"], stored["last_detail"]), (state, "No answer"))
+                self.assertIsNone(stored["last_state"])
+                self.now += timedelta(minutes=1)
+                self.engine.tick()
+                self.assertEqual(len(self.catalog.sent), count)
+                self.now += timedelta(minutes=5)
+
+    def test_pending_result_is_recorded_while_automation_is_off(self):
+        self.add(FESTIVE)
+        self.catalog.pending = True
+        result = self.engine.tick()[0]
+        self.catalog.commands[result["request_id"]].update(state="failed", detail="Refused")
+        self.auto = False
+        self.engine.tick()
+        self.assertEqual(self.store.rules("home")[0]["last_result"], "failed")
+        self.now += timedelta(minutes=6)
+        self.engine.tick()
+        self.assertEqual(len(self.catalog.sent), 1)
+        self.auto = True
+        self.engine.tick()
+        self.assertEqual(len(self.catalog.sent), 2)
+
+    def test_pending_old_target_does_not_hide_the_next_change_point(self):
+        self.add(FESTIVE)
+        self.catalog.pending = True
+        result = self.engine.tick()[0]
+        self.now = local(2026, 11, 20, 15, 31)
+        self.engine.tick()
+        self.assertEqual(len(self.catalog.sent), 1)   # do not overlap device commands
+        self.catalog.commands[result["request_id"]]["state"] = "confirmed"
+        self.engine.tick()
+        self.assertEqual([c[2] for c in self.catalog.sent], [False, True])
+
+    def test_old_confirmation_does_not_apply_to_an_edited_rule(self):
+        rule_id = self.add(FESTIVE)
+        self.catalog.pending = True
+        result = self.engine.tick()[0]
+        self.store.save_rule("home", rule_id, validate({
+            **FESTIVE, "start": {"type": "time", "at": "10:00"}}), self.now)
+        self.catalog.commands[result["request_id"]]["state"] = "confirmed"
+        self.engine.tick()
+        self.assertIsNone(self.store.rules("home")[0]["last_state"])
+        self.assertEqual([c[2] for c in self.catalog.sent], [False, True])
+
+    def test_missing_command_history_is_retried(self):
+        self.add(FESTIVE)
+        self.catalog.pending = True
+        result = self.engine.tick()[0]
+        del self.catalog.commands[result["request_id"]]
+        self.engine.tick()
+        self.assertEqual(self.store.rules("home")[0]["last_result"], "unknown")
+        self.now += timedelta(minutes=5)
+        self.engine.tick()
+        self.assertEqual(len(self.catalog.sent), 2)
+
+    def test_threshold_does_not_fire_on_recovery_from_missing_readings(self):
+        self.add({"kind": "event", "trigger": {"type": "above", "key": "temp", "value": 25},
+                  "actions": [{"key": "plug", "action": "power", "value": True}]})
+        for missing in ("unavailable", "removed"):
+            with self.subTest(missing=missing):
+                self.catalog.devices["temp"] = {"available": True, "value": 20.0}
+                self.engine.tick()
+                if missing == "removed":
+                    del self.catalog.devices["temp"]
+                else:
+                    self.catalog.devices["temp"]["available"] = False
+                self.engine.tick()
+                self.catalog.devices["temp"] = {"available": True, "value": 26.0}
+                self.engine.tick()
+                self.assertEqual(self.catalog.sent, [])
+        self.catalog.devices["temp"]["value"] = 24.0
+        self.engine.tick()
+        self.catalog.devices["temp"]["value"] = 26.0
+        self.engine.tick()
+        self.assertEqual(len(self.catalog.sent), 1)
+
+    def test_presence_unknown_is_not_last_person_leaving(self):
+        self.add({"kind": "event", "trigger": {"type": "leave"},
+                  "actions": [{"key": "plug", "action": "power", "value": False}]})
+        self.catalog.states["person.one"] = {"state": "home"}
+        self.catalog.states["person.two"] = {"state": "not_home"}
+        self.engine.tick()
+        self.catalog.states["person.one"]["state"] = "unavailable"
+        self.engine.tick()
+        self.assertEqual(self.catalog.sent, [])
+        self.catalog.states["person.one"]["state"] = "not_home"
+        self.engine.tick()   # recovery establishes a baseline
+        self.assertEqual(self.catalog.sent, [])
+        self.catalog.states["person.one"]["state"] = "home"
+        self.engine.tick()
+        self.catalog.states["person.one"]["state"] = "not_home"
         self.engine.tick()
         self.assertEqual(len(self.catalog.sent), 1)
 

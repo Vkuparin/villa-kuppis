@@ -311,6 +311,7 @@ class GatewayRegistryTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(self.task, 5)
         await self.ha.stop()
         self.patch.stop()
+        self.store.close()
         self.tmp.cleanup()
 
     async def test_registry_events_and_new_entities_reload_the_registry(self):
@@ -338,6 +339,44 @@ class GatewayRegistryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.ha.calls[-1], ("light", "turn_on", "light.porch", {}))
         missing = self.gateway.submit_entity("light.gone", "light", "turn_on", {}, "Ville")
         self.assertEqual(missing["state"], "failed")
+
+    async def test_rule_retries_a_gateway_failure_and_waits_for_readback(self):
+        from villa_kuppis.rules import RuleEngine, validate
+        store = DeviceStore(Path(self.tmp.name) / "devices.db")
+        try:
+            catalog = DeviceCatalog("cottage", self.gateway, store, now=self.clock)
+            engine = RuleEngine("cottage", catalog, store, automation_on=lambda: True,
+                                prices=lambda day: [], now=self.clock)
+            rule_id = store.save_rule("cottage", None, validate({
+                "kind": "between", "key": "id-light.porch",
+                "start": {"type": "time", "at": "00:00"},
+                "end": {"type": "time", "at": "23:59"}}), self.clock())
+            self.ha.fail["turn_on"] = ("failed", "Device did not respond")
+            first = engine.tick()[0]
+            self.assertEqual(first["state"], "pending")
+            self.assertIsNone(store.rules("cottage")[0]["last_state"])
+            await self.gateway.wait(first["request_id"], 2)
+            engine.tick()
+            self.assertEqual(store.rules("cottage")[0]["last_result"], "failed")
+            self.ha.fail.clear()
+            self.clock.advance(299)
+            self.assertEqual(engine.tick(), [])
+            self.clock.advance(1)
+            retry = engine.tick()[0]
+            self.assertEqual(retry["state"], "pending")
+            result = await self.gateway.wait(retry["request_id"], 2)
+            self.assertEqual(result["state"], "confirmed")
+            self.assertEqual(engine.tick(), [])
+            stored = store.rules("cottage")[0]
+            self.assertEqual((stored["id"], stored["last_state"], stored["last_result"]),
+                             (rule_id, 1, "confirmed"))
+            # A person's later change holds until the rule's next change point.
+            self.ha.set_state("light.porch", "off")
+            await eventually(lambda: self.gateway.raw_states()["light.porch"]["state"] == "off")
+            self.assertEqual(engine.tick(), [])
+            self.assertEqual(len(self.ha.calls), 2)
+        finally:
+            store.close()
 
     async def test_statistics_are_hourly_means(self):
         start_ms = 1793000000000

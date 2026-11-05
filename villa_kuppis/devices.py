@@ -896,6 +896,10 @@ class DeviceCatalog:
                               result["request_id"], result["state"], result.get("detail") or "")
         return result
 
+    def command_result(self, request_id: str) -> dict | None:
+        """Latest gateway result for a rule's asynchronous device command."""
+        return self._source.command(request_id)
+
     def lights_off(self, area_id: str, actor: str) -> None:
         built = self._build()
         area = next((a for a in built["areas"] if a["id"] == area_id), None)
