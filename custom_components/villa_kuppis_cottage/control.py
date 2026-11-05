@@ -21,12 +21,19 @@ Modes, in precedence order:
   ``prop_gain`` times the room's distance from the target, at most
   ``boost`` either way. The trim
   starts from the heaters' own readings and moves ``trim_gain`` per °C of
-  room error every ``trim_interval``, so the heaters' own thermostats hold
-  the room sensor at the target. A setpoint changes by whole steps, at
-  most once per ``min_dwell`` unless it moves by ``big_change``. A heater
-  that misses a command is left near the target, not far above it (a Mill
-  on 5.11.2026 kept heating to an earlier 25 °C high drive after it had
-  taken 5 °C). Turning a heater back on also writes its setpoint again.
+  room error every ``trim_interval`` (at most ``trim_step``), so the
+  heaters' own thermostats hold the room sensor at the target. It learns
+  near the target and while a heater's own reading sits at its setpoint
+  with the room still off target; not while the heaters run flat out or
+  stay off, where it would only wind up. (The gap is not fixed: a Mill
+  read 0.5 °C under the ALPSTUGA in a cold room and 5 °C under it at
+  25 °C.) A setpoint changes by whole steps, at most once per
+  ``min_dwell`` unless it moves by ``big_change``. A heater that misses a
+  command is left near the target, not far above it (a Mill on 5.11.2026
+  kept heating to an earlier 25 °C high drive after it had taken 5 °C).
+  Turning a heater back on also writes its setpoint again, and so does a
+  heater whose own reading keeps rising ``runaway_margin`` over its
+  setpoint; after three such resends in a row the status says so.
 
 A heater switched off in Villa Kuppis (``enabled`` false) is kept off and
 is not a manual change. Before it is turned off it gets the safe setpoint,
@@ -39,7 +46,8 @@ setpoint: switched-off heaters and heaters a person turned down hold the
 safe setpoint. The guard ends ``frost_margin`` above the safe setpoint, so
 a forgotten switch or a manual hold never lets a room freeze.
 
-Setpoints are clamped to each heater's range and rounded to its step. A
+Setpoints are clamped to each heater's range and rounded to its step
+(whole degrees when it reports none, as the Matter Mills do). A
 read-back within ``readback_tolerance`` of the sent value counts as the
 heater's own rounding, not as a manual change, and is not resent.
 A heater gets at most one command per ``min_command_interval`` and at most
@@ -82,7 +90,9 @@ class Settings:
     min_command_interval: timedelta = timedelta(seconds=60)
     max_commands_per_hour: int = 12
     confirm_grace: timedelta = timedelta(seconds=120)
-    default_step: float = 0.5
+    # A heater that reports no step gets whole degrees: a Mill Gen4 over
+    # Matter took 9.5 °C, reported 9.5 and showed and held 9.0 (5.11.2026).
+    default_step: float = 1.0
     fallback_heats_disabled: bool = True
     readback_tolerance: float = 1.0  # a heater may round what it was sent
     frost_margin: float = 1.0        # frost guard ends this far above safe_setpoint
@@ -90,9 +100,16 @@ class Settings:
     trim_gain: float = 0.5           # trim change per °C of room error ...
     trim_interval: timedelta = timedelta(minutes=15)   # ... per interval
     trim_limit: float = 10.0         # the heaters' sensors are at most this far off
-    trim_band: float = 1.0           # the trim learns only this close to the target
+    trim_band: float = 1.0           # the trim learns this close to the target, and
+    hold_window: float = 1.0         # ... while a heater's own reading is this close to its setpoint
+    trim_step: float = 0.5           # the trim moves at most this much per interval
+    stall: float = 0.2               # no own reading: the room moved less than this toward the target
     hold_band: float = 0.5           # no push this close to the target
+    setpoint_deadband: float = 0.75  # the setpoint follows a change this big, so it does not flap
     big_change: float = 2.0          # a setpoint moving this much does not wait min_dwell
+    runaway_margin: float = 2.0      # a heater reading this far over its setpoint ...
+    runaway_rise: float = 0.3        # ... and still rising this much ...
+    runaway_window: timedelta = timedelta(minutes=30)   # ... in this long gets it again
     unconfirmed_after: int = 3       # sends without read-back before the status says so
 
 
@@ -152,6 +169,8 @@ class HeaterMemory:
     unconfirmed: int = 0             # sends in a row the heater did not take
     away: bool = False               # seen unavailable since the last report
     settle_until: datetime | None = None   # back from unavailable: changes are a baseline
+    warm_from: tuple | None = None   # (own reading, time) while it reads over its setpoint
+    runaway: int = 0                 # setpoints resent in a row because it kept warming
 
 
 @dataclass
@@ -164,6 +183,7 @@ class RoomMemory:
     heaters: dict = field(default_factory=dict)
     trim: float | None = None        # heaters' own sensors minus the room sensor, learned
     trim_at: datetime | None = None
+    trim_room: float | None = None   # the room reading at the last trim update
     setpoint: float | None = None    # the follow setpoint last chosen
 
 
@@ -320,6 +340,8 @@ def _commands(heaters, desired: float, memory: RoomMemory, settings: Settings,
             # A heater turned back on gets its setpoint again: it may
             # report one setpoint and heat to another.
             need_setpoint = need_setpoint or (need_mode and heater.mode == OFF)
+            if not need_setpoint and _runaway(heater, hm, want, settings, now):
+                need_setpoint = True
         if not (need_mode or need_setpoint):
             hm.unconfirmed = 0
             continue
@@ -336,6 +358,33 @@ def _commands(heaters, desired: float, memory: RoomMemory, settings: Settings,
             hm.sent_setpoint = want
         _sent(hm, now)
     return out
+
+
+def _runaway(heater: Heater, hm: HeaterMemory, want: float, settings: Settings,
+             now: datetime) -> bool:
+    """True when a heater keeps warming well over the setpoint it reports.
+
+    It may hold another setpoint than it says: a Mill took 5 °C, reported
+    5 °C and kept heating to an earlier 25 °C (5.11.2026). Its setpoint is
+    then sent again; that is harmless when the warmth comes from elsewhere
+    (a fireplace, the sun).
+    """
+    own = heater.current
+    if own is None or heater.mode != HEAT or own < want + settings.runaway_margin:
+        hm.warm_from, hm.runaway = None, 0
+        return False
+    if hm.warm_from is None or own < hm.warm_from[0]:
+        hm.warm_from = (own, now)
+        return False
+    start, since = hm.warm_from
+    if now - since < settings.runaway_window:
+        return False
+    hm.warm_from = (own, now)
+    if own - start < settings.runaway_rise:
+        hm.runaway = 0
+        return False
+    hm.runaway += 1
+    return True
 
 
 def _frost(sensor_ok: bool, room: float | None, memory: RoomMemory,
@@ -370,6 +419,9 @@ def _notes(heaters, memory: RoomMemory, settings: Settings) -> str:
                 out.append(f"{heater.label} ei suostu sammumaan")
             elif hm.sent_setpoint is not None:
                 out.append(f"{heater.label} ei ota lämpötilaa {hm.sent_setpoint:g} °C")
+        elif heater.available and hm is not None and hm.runaway >= 3 and heater.setpoint is not None:
+            out.append(f"{heater.label} lämpenee yli asetuksensa {heater.setpoint:g} °C, "
+                       "asetus lähetetty uudelleen")
     return "; ".join(out)
 
 
@@ -456,11 +508,15 @@ def _follow_setpoint(value: float, room: float, heaters, memory: RoomMemory,
         memory.trim = sum(owns) / len(owns) - room if owns else 0.0
         memory.trim_at = now
     elif memory.trim is not None and now - memory.trim_at >= settings.trim_interval:
-        # Only near the target: far off, the heaters run flat out or not
-        # at all whatever the trim, and it would wind up.
-        if abs(error) <= settings.trim_band:
-            memory.trim += settings.trim_gain * error
+        # Near the target, or while the heaters' own thermostats hold their
+        # setpoint and the room stays off target. Not while they run flat
+        # out or stay off: whatever the trim, it would only wind up.
+        if abs(error) <= settings.trim_band or (
+                abs(error) <= settings.boost and _holding(heaters, error, room, memory, settings)):
+            change = settings.trim_gain * error
+            memory.trim += min(max(change, -settings.trim_step), settings.trim_step)
         memory.trim_at = now
+        memory.trim_room = room
     if memory.trim is not None:
         memory.trim = min(max(memory.trim, -settings.trim_limit), settings.trim_limit)
     trim = memory.trim if memory.trim is not None else 0.0   # no own reading yet
@@ -469,11 +525,12 @@ def _follow_setpoint(value: float, room: float, heaters, memory: RoomMemory,
     push = 0.0 if abs(error) <= settings.hold_band else settings.prop_gain * error
     push = min(max(push, -settings.boost), settings.boost)
     raw = max(value + trim + push, settings.low_setpoint)
-    step = settings.default_step
+    step = max((h.step or settings.default_step for h in heaters if h.enabled),
+               default=settings.default_step)
     last = memory.setpoint
-    # One and a half steps: a value near a rounding edge does not flap.
+    # A value near a rounding edge does not flap.
     if last is None or abs(raw - last) >= settings.big_change or (
-            abs(raw - last) >= 1.5 * step
+            abs(raw - last) >= max(settings.setpoint_deadband, 0.75 * step)
             and (memory.drive_since is None or now - memory.drive_since >= settings.min_dwell)):
         memory.setpoint = round(raw / step) * step
         memory.drive_since = now
@@ -481,3 +538,18 @@ def _follow_setpoint(value: float, room: float, heaters, memory: RoomMemory,
              "low" if error < -settings.hysteresis else "hold")
     memory.drive = drive
     return memory.setpoint, drive
+
+
+def _holding(heaters, error: float, room: float, memory: RoomMemory, settings: Settings) -> bool:
+    """The heaters' own thermostats hold their setpoint, so a room still
+    off target means the trim is off. Heaters without their own reading:
+    the room has stopped moving toward the target."""
+    owns = [h.current for h in heaters
+            if h.enabled and h.available and h.mode == HEAT and h.current is not None]
+    if owns:
+        return memory.setpoint is not None and any(
+            abs(own - memory.setpoint) <= settings.hold_window for own in owns)
+    if memory.trim_room is None:
+        return False
+    toward = (room - memory.trim_room) if error > 0 else (memory.trim_room - room)
+    return toward < settings.stall

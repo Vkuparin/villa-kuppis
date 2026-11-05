@@ -84,6 +84,9 @@ async def test_controller_heats_the_stand_in_room(hass, freezer):
     status = hass.states.get("sensor.villa_kuppis_large_target")
     assert status.attributes["mode"] == "follow"
     assert status.attributes["devices"]["humidity"] == "sensor.sim_alpstuga_large_humidity"
+    assert status.attributes["heater_setpoint"] == (
+        hass.states.get("climate.sim_mill_large_1").attributes["temperature"])
+    assert -1.5 <= status.attributes["sensor_gap"] <= 1.5   # the stand-in reads 0.5 °C warm
     # Without a target the small room holds the 5 °C fallback.
     assert hass.states.get("sensor.villa_kuppis_small_target").attributes["mode"] == "fallback"
     small = float(hass.states.get("sensor.sim_alpstuga_small_temperature").state)

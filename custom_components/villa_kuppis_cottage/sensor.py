@@ -62,6 +62,10 @@ class RoomTargetSensor(SensorEntity):
             "mode": decision.mode if decision else None,
             "reason": decision.reason if decision else None,
             "drive": decision.drive if decision else None,
+            # Follow mode: the setpoint the heaters get, and how much warmer
+            # (+) or colder (-) their own sensors read than the room sensor.
+            "heater_setpoint": memory.setpoint,
+            "sensor_gap": round(memory.trim, 1) if memory.trim is not None else None,
             "room_temperature": room.room_temp,
             "requested_target": target.value if target else None,
             "revision": target.revision if target else None,

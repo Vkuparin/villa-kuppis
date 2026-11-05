@@ -37,10 +37,14 @@ class SimHeater:
     ignore_commands: bool = False
     enabled: bool = True
     own: float | None = None         # its own sensor's reading, set by the room
+    step: float | None = 0.5
+    holds: float | None = None       # heats to this, whatever setpoint it reports
+    sticky: int = 0                  # setpoint writes it takes without holding them
+    duty: float = 0.0                # recent share of time heating
 
     def view(self) -> control.Heater:
         return control.Heater(self.entity_id, self.available, self.mode if self.available else None,
-                              self.setpoint if self.available else None, 5.0, 35.0, 0.5,
+                              self.setpoint if self.available else None, 5.0, 35.0, self.step,
                               self.enabled, current=self.own if self.available else None)
 
 
@@ -48,28 +52,35 @@ class Room:
     """One thermal node, outdoor loss and thermostat heaters."""
 
     BIAS = 1.5   # heater's own sensor reads this much warmer than the room
+    HEAT_GAP = 0.0   # ... and this much more while it heats flat out
 
-    def __init__(self, heaters, temp=7.0, outdoor=-10.0, ua=60.0, capacity=3.0e6, bias=None):
+    def __init__(self, heaters, temp=7.0, outdoor=-10.0, ua=60.0, capacity=3.0e6, bias=None,
+                 heat_gap=None):
         if bias is not None:
             self.BIAS = bias
+        if heat_gap is not None:
+            self.HEAT_GAP = heat_gap
         self.heaters = heaters
         for h in heaters:
             h.own = round(temp + self.BIAS, 1)
         self.temp = temp
         self.outdoor = outdoor
+        self.extra_w = 0.0   # heat from elsewhere (a fireplace, the sun)
         self.ua = ua
         self.capacity = capacity
 
     def step(self, seconds: float) -> None:
-        power = 0.0
+        power = self.extra_w
         for h in self.heaters:
-            own = h.own = round(self.temp + self.BIAS, 1)
+            own = h.own = round(self.temp + self.BIAS + self.HEAT_GAP * h.duty, 1)
+            holds = h.holds if h.holds is not None else h.setpoint
             if h.mode != "heat" or not h.available:
                 h.on = False
-            elif own < h.setpoint - 0.25:
+            elif own < holds - 0.25:
                 h.on = True
-            elif own > h.setpoint + 0.25:
+            elif own > holds + 0.25:
                 h.on = False
+            h.duty += (float(h.on) - h.duty) * seconds / 1800
             power += h.watts if h.on else 0.0
         self.temp += (power - self.ua * (self.temp - self.outdoor)) * seconds / self.capacity
 
@@ -80,6 +91,10 @@ class Room:
                 continue
             if cmd.service == "set_temperature":
                 h.setpoint = cmd.value
+                if h.sticky > 0:
+                    h.sticky -= 1
+                else:
+                    h.holds = None
             elif cmd.service == "set_hvac_mode":
                 h.mode = cmd.value
 
@@ -207,6 +222,78 @@ class RealisticSetpointTests(unittest.TestCase):
         heater = sim.room.heaters[0]
         self.assertGreater(heater.setpoint, heater.own + 1.0)
         self.assertEqual(sim.decisions[-1][1].drive, "high")
+
+    def test_the_trim_recovers_from_a_misleading_start(self):
+        # 5.11.2026: Kammari had heated to 25 °C, the Mill read 5.5 °C under
+        # the ALPSTUGA while the room cooled, and the trim started there.
+        # Held at its setpoint the heater reads 2.5 °C under the room.
+        room = Room([SimHeater("climate.kammari", 1000, step=None)], temp=23.6, outdoor=0.0,
+                    ua=30.0, capacity=0.49e6, bias=-2.5)
+        room.heaters[0].own = 18.1
+        sim = Sim(room, target=18.0)
+        sim.run(24 * 60)
+        self.assertAlmostEqual(sim.memory.trim, -2.5, delta=0.8)
+        settled = sim.temps_since(START + timedelta(hours=14))
+        self.assertGreater(min(settled), 17.3)
+        self.assertLess(max(settled), 18.8)
+
+    def test_a_gap_that_grows_while_heating_still_holds_the_target(self):
+        room = Room([SimHeater("climate.kammari", 1000, step=None)], temp=10.0, outdoor=0.0,
+                    ua=30.0, capacity=0.49e6, bias=-1.0, heat_gap=-3.0)
+        sim = Sim(room, target=21.0)
+        sim.run(24 * 60)
+        settled = sim.temps_since(START + timedelta(hours=10))
+        self.assertGreater(min(settled), 20.2)
+        self.assertLess(max(settled), 21.9)
+
+    def test_whole_degrees_for_a_heater_without_a_step(self):
+        heater = control.Heater("climate.mill", True, "heat", 20.0, 5.0, 35.0, None,
+                                current=17.3)
+        decision = control.decide(START, control.Target(18.0, 1, START + timedelta(hours=1)),
+                                  control.Sensor(19.6, START), [heater], control.RoomMemory())
+        value = next(c.value for c in decision.commands if c.service == "set_temperature")
+        self.assertEqual(value, round(value))
+
+
+class RunawayTests(unittest.TestCase):
+    """A heater that reports one setpoint and heats to another (5.11.2026)."""
+
+    @staticmethod
+    def warm_kammari(sticky):
+        room = Room([SimHeater("climate.kammari", 1000, step=None)], temp=21.0, outdoor=0.0,
+                    ua=30.0, capacity=0.49e6, bias=-2.5)
+        heater = room.heaters[0]
+        heater.setpoint, heater.holds, heater.sticky = 18.0, 25.0, sticky
+        return Sim(room, target=18.0)
+
+    def test_its_setpoint_is_sent_again_and_then_holds(self):
+        sim = self.warm_kammari(sticky=1)   # the first write does not take
+        sim.run(4 * 60)
+        setpoints = [c.value for _, c in sim.commands if c.service == "set_temperature"]
+        self.assertGreaterEqual(len(setpoints), 2)
+        self.assertIsNone(sim.room.heaters[0].holds)
+        temps = sim.temps_since(START)
+        self.assertLess(max(temps), 23.5)
+        self.assertLess(temps[-1], max(temps) - 1.0)
+
+    def test_the_status_says_when_it_keeps_warming(self):
+        sim = self.warm_kammari(sticky=99)
+        sim.run(4 * 60)
+        self.assertIn("lämpenee yli asetuksensa", sim.decisions[-1][1].reason)
+        per_hour = sim.max_commands_per_hour()
+        self.assertLessEqual(per_hour, 4)
+
+    def test_warmth_from_elsewhere_costs_only_a_resend_now_and_then(self):
+        room = Room([SimHeater("climate.kammari", 1000, step=None)], temp=19.0, outdoor=0.0,
+                    ua=30.0, capacity=0.49e6, bias=-2.5)
+        sim = Sim(room, target=18.0)
+        sim.run(60)
+        room.extra_w = 1000.0            # a fireplace
+        sim.run(4 * 60)
+        self.assertGreater(room.temp, 24.0)
+        late = [c for at, c in sim.commands if at >= START + timedelta(hours=1)]
+        self.assertLessEqual(len(late), 12)
+        self.assertNotIn("manual", sim.modes_since(START))
 
 
 class WatchdogTests(unittest.TestCase):

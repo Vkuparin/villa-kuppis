@@ -11,7 +11,7 @@ Every minute, and whenever a sensor or heater reports, each room is in one of fo
 | `manual` | Someone changed a heater by hand (the heater, Google Home or the Home Assistant UI) | Left alone for `manual_hold_minutes`, or until `clear_manual` |
 | `fallback` | No target from Villa Kuppis, or it expired | Own thermostats at `safe_setpoint` |
 | `thermostat` | Valid target, but the ALPSTUGA reading is missing, stale or implausible | Own thermostats at the target |
-| `follow` | Valid target and a fresh room reading | Target + the gap between the heaters' own sensors and the ALPSTUGA (learned slowly), pushed up to `boost` up or down while the room is off target; 0.5 °C steps, minimum dwell, never under `low_setpoint` (from version 0.9.0; earlier target + `boost` or `low_setpoint`) |
+| `follow` | Valid target and a fresh room reading | Target + the gap between the heaters' own sensors and the ALPSTUGA (learned slowly), pushed up to `boost` up or down while the room is off target; the heater's step (whole degrees for the Matter Mills from version 0.10.0), minimum dwell, never under `low_setpoint`. A heater whose own reading keeps rising over its setpoint gets it again (0.10.0). From version 0.9.0; earlier target + `boost` or `low_setpoint` |
 
 Targets below `safe_setpoint` are raised to it and targets above `max_target` are capped. Each heater gets at most one command a minute and `max_commands_per_hour` an hour. The target and its expiry survive a Home Assistant restart; a restart is never taken for a manual change.
 
