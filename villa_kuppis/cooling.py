@@ -14,7 +14,9 @@ One controller per unit then applies the current period (audit 2.1):
    mode is never changed.
 2. The target is the plan's: the maximum, the precooling temperature, the
    optimizer's target or, in away mode (card F6.1), the away maximum. In an
-   expensive period (``off`` in the plan) the target is the maximum.
+   expensive period (``off`` in the plan) the target is the maximum. A day
+   whose outdoor forecast stays under ``PRECOOL_MIN_OUTDOOR_C`` is not
+   precooled: the cheap periods keep the maximum too.
 3. Power, only with ``cool_power``: a unit that is on is switched off once
    the room is ``STOP_BAND_C`` below the target; a unit that is off is
    switched on when the room is above the target. Every power change waits
@@ -74,6 +76,11 @@ ACTOR = "Suunnitelma"
 SITE = "home"
 DEFAULT_INTERVAL = 60.0
 QUIET_FAN = "One"
+# Precooling pays off only on a day warm enough to need cooling. With an
+# outdoor forecast (or reading) for the Helsinki day, all under this, the
+# cheap periods keep the maximum: a cheap autumn day would otherwise cool
+# the rooms to the precooling temperature all day (review 4.11.2026).
+PRECOOL_MIN_OUTDOOR_C = 18.0
 
 
 def in_night(values: dict, now: datetime) -> bool:
@@ -105,11 +112,13 @@ def _setting_values(overrides, room: str) -> dict:
     return {k: v["value"] for k, v in resolved.items()}
 
 
-def build_plan(overrides, unit_ids, periods, away: bool = False) -> dict[str, list[CoolPeriod]]:
+def build_plan(overrides, unit_ids, periods, away: bool = False,
+               cool_days: frozenset = frozenset()) -> dict[str, list[CoolPeriod]]:
     """Cooling plan per unit.
 
     An expensive period is ``off`` (the unit may be switched off) when the
     automation may switch the unit's power; its target is the maximum.
+    ``cool_days`` are Helsinki dates too cool outside to precool.
     """
     if not periods:
         return {}
@@ -131,10 +140,16 @@ def build_plan(overrides, unit_ids, periods, away: bool = False) -> dict[str, li
             else:
                 target = float(room_plan.temperature_c)
                 reason = "precool" if room_plan.reason == "threshold" else "max"
+                if reason == "precool" and _helsinki_date(room_plan.ts_utc) in cool_days:
+                    target, reason = float(values["cool_max_c"]), "max"
             rows.append(CoolPeriod(room_plan.ts_utc, room_plan.price_c_kwh,
                                    target, off, reason))
         out[unit_id] = rows
     return out
+
+
+def _helsinki_date(ts: int) -> date:
+    return datetime.fromtimestamp(ts, timezone.utc).astimezone(HELSINKI).date()
 
 
 def merge_windows(rows: list[CoolPeriod]) -> list[dict]:
@@ -445,7 +460,8 @@ class CoolingAutomation:
             periods += self._periods(today + timedelta(days=1))
         overrides = self._settings.overrides()
         away = self.away()
-        plan = build_plan(overrides, [u["id"] for u in units], periods, away)
+        plan = build_plan(overrides, [u["id"] for u in units], periods, away,
+                          self._cool_days(periods))
         results: dict[str, optimizer.Plan | None] = {}
         if plan and not away:
             for state in units:
@@ -453,6 +469,24 @@ class CoolingAutomation:
                     results[state["id"]] = self._optimize(
                         state, plan, overrides, now)
         return units, plan, results
+
+    def _cool_days(self, periods) -> frozenset:
+        """The planned Helsinki days whose known outdoor temperatures (the
+        forecast and the readings so far) all stay under
+        PRECOOL_MIN_OUTDOOR_C. A day without any is not one of them."""
+        out = set()
+        store = self._service.store
+        for day in sorted({_helsinki_date(p.ts_utc) for p in periods}):
+            start, end = helsinki_day_bounds(day)
+            try:
+                values = [v for _ts, v in store.forecast_rows(SITE, start, end)
+                          + store.outdoor_rows(SITE, start, end)]
+            except Exception as error:      # no forecast: precool as before
+                logging.warning("Outdoor forecast read failed: %s", type(error).__name__)
+                continue
+            if values and max(values) < PRECOOL_MIN_OUTDOOR_C:
+                out.add(day)
+        return frozenset(out)
 
     def _optimize(self, state, plan, overrides, now) -> optimizer.Plan | None:
         """Replace the plan from the current period on with the optimizer's

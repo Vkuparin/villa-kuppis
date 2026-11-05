@@ -1,5 +1,15 @@
 # Muutokset
 
+## 0.4.50
+
+- Vierailulle voi antaa yölämpötilan (Yöllä, oletus 18 °C): saapumisesta lähtien huoneet pidetään siinä yöaikaan (asetukset, oletus klo 22–06) ja muuten tavoitteessa. Tyhjänä tavoite pidetään yölläkin. Huonelämpötila on edelleen ALPSTUGA-anturin.
+- Vierailun lämmitys aloitetaan sääennusteen mukaan: oppimattomalle huoneelle 8 h (+5 °C), 12 h (0 °C) tai 24 h (−5 °C tai kylmempi). Lämpimänä pitämisen hinta arvioidaan ulkolämpötilasta.
+- Korjattu: oppiminen ja Historian energia-arvio katsovat nyt Mill-patterin omaa lämpötilaa (se näyttää lämmittäessä noin 2,5 °C ALPSTUGAa vähemmän), joten lämmitysjaksoja ei enää lueta lämmittämättömiksi. Mökin huoneet oppivat 6 viikon tiedoista ja tarkistetaan enintään 3 viikon takaisella jaksolla.
+- Ilmoitukset: Villa Kuppisissa pois kytketystä patterista ei tule "ei vastaa" -ilmoitusta. Tuuletusmuistutus odottaa yön yli (klo 22–08).
+- Kodin esijäähdytys ei käynnisty päivänä, jonka sääennuste pysyy alle 18 °C:n.
+- Lämmitä kosteaa huonetta on nyt oletuksena päällä mökillä.
+- Mökin integraatio 0.8.0 (päivitä install.sh:lla): käsisäädön tauko 12 h (oli 4 h; asennus vaihtaa vanhan oletuksen), patterin uudelleenyhdistymistä ei enää tulkita käsisäädöksi, ja "Villa Kuppis ei vastaa" -hälytys odottaa 10 minuuttia käynnistyksen jälkeen.
+
 ## 0.4.49
 
 - Käsin asetettu huoneen tavoite ja vierailu eivät enää riitele: uusin valinta voittaa. Vierailun aloitus, tai sen tavoitteen tai huoneiden muutos, poistaa mukana olevien huoneiden käsin asetetun tavoitteen. Vierailun aikana käsin asetettu tavoite voittaa, ja se huone jätetään pois vierailun lämpenemisseurannasta ja ilmoituksista (ei vääriä "ei ehdi lämmetä" -ilmoituksia). Huonekortti näyttää sekä käsin asetetun tavoitteen että pattereiden käsiohjaustauon, ja "Palauta automaatio" lopettaa molemmat.

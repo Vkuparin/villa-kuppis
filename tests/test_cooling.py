@@ -87,6 +87,23 @@ class CoolingTests(ServiceTestCase):
         self.run_plan(service)
         self.assertEqual(self._unit(service, "unit-1")["setpoint"], 21.0)
 
+    def test_a_cool_day_is_not_precooled(self):
+        service, _ = self.start()
+        self.set_prices(30)                       # 3 c/kWh: below 5
+        start, end = helsinki_day_bounds(DAY)
+        # A recorded October day at Kumpula: 8-12 °C.
+        service.store.forecast_upsert("home", [
+            (datetime.fromtimestamp(ts, timezone.utc), 8.0 + 4.0 * (ts - start) / (end - start))
+            for ts in range(start, end, 3600)])
+        self.run_plan(service)
+        self.assertEqual(self._unit(service, "unit-1")["setpoint"], 25.0)
+        self.assertEqual({w["target_c"] for u in service.plan_view()["units"]
+                          for w in u["windows"]}, {25.0})
+        service.store.forecast_upsert("home", [
+            (datetime.fromtimestamp(start + 14 * 3600, timezone.utc), 19.0)])   # warm afternoon
+        self.run_plan(service)
+        self.assertEqual(self._unit(service, "unit-1")["setpoint"], 21.0)
+
     def test_master_switch_off_sends_nothing_and_on_applies_at_once(self):
         service, _ = self.start()
         self.set_prices(100)

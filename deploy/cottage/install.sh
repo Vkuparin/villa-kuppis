@@ -49,9 +49,21 @@ install_package() {
   fi
 }
 
+# 0.8.0: a hand change pauses the room for 12 h (was 4 h). A package that
+# still has the old default gets the new one; any other value is kept.
+migrate_hold() {
+  pkg="$CONFIG/packages/villa_kuppis.yaml"
+  if grep -Eq '^[[:space:]]+manual_hold_minutes:[[:space:]]*240([[:space:]]|$)' "$pkg"; then
+    cp "$pkg" "$pkg.before-0.8.0"
+    sed -i -E 's/^([[:space:]]+manual_hold_minutes:[[:space:]]*)240([[:space:]]|$)/\1720\2/' "$pkg"
+    echo "Changed manual_hold_minutes 240 -> 720 in packages/villa_kuppis.yaml (backup: villa_kuppis.yaml.before-0.8.0)"
+  fi
+}
+
 mkdir -p "$CONFIG/custom_components" "$CONFIG/packages"
 install_component villa_kuppis_cottage
 install_package villa_kuppis.yaml
+migrate_hold
 if [ "$SIMULATOR" = 1 ]; then
   install_component villa_kuppis_simulator
   install_package villa_kuppis_simulator.yaml

@@ -58,7 +58,7 @@ The pumps matter mostly for summer cooling, and they can be tested before the co
 One controller per unit decides each minute (audit 2026-10-20, section 2.1):
 
 1. It leaves the unit alone while the automation is off, the unit is not in cooling mode, a command is waiting for confirmation, or the manual pause is on.
-2. The target is the plan's: the maximum, the precooling temperature in a cheap period, the optimizer's target, or the away maximum. In an expensive period the target is the maximum.
+2. The target is the plan's: the maximum, the precooling temperature in a cheap period, the optimizer's target, or the away maximum. In an expensive period the target is the maximum. A day whose FMI forecast (and readings so far) stay under 18 °C is not precooled: its cheap periods keep the maximum.
 3. With power control on, a unit that is on is switched off once its room is 0.5 °C below the target, and a unit that is off is switched on when its room is above the target. So in an expensive period a precooled room switches off and comes back only above the maximum. Every power change waits the minimum time after the unit's previous one. Nothing is started when there is no need to cool.
 4. A unit that is on gets the target as its setpoint whenever they differ.
 
@@ -78,18 +78,18 @@ One controller per unit decides each minute (audit 2026-10-20, section 2.1):
 
 ## Visit heating
 
-The owner enters an arrival time and a target temperature, e.g. Friday 18:00 and 22 °C. The planner picks the cheapest periods that still reach the target by arrival:
+The owner enters an arrival time, a target temperature and a night target, e.g. Friday 18:00, 22 °C and 18 °C at night. The planner picks the cheapest periods that still reach the target in force at the arrival; from the arrival on the rooms are kept at the night target during the night hours (cottage settings `Vierailun yöajan alku`/`loppu`, default 22:00–06:00) and at the target otherwise. An empty night target keeps the target all night.
 
-- Until each room's heat-up rate is learned, it assumes the heat-up from maintenance temperature takes 12 hours.
-- The start is chosen from up to 4 hours before `arrival − 12 h` so that the heat-up plus holding the warm room until arrival costs least (holding is assumed to take 30 % of full heating). Without prices for the whole window it starts at `arrival − 12 h`. A start that has happened is kept (`villa_kuppis/visit.py`).
+- Until each room's heat-up rate is learned, it assumes the heat-up from maintenance temperature takes 8 hours at +5 °C or warmer, 12 hours at 0 °C and 24 hours at −5 °C or colder (linear in between, by the outdoor forecast 6 hours before the arrival; 12 hours without a forecast). Kammari's 1000 W Mill was fitted on 4.11.2026 at 4 h from 5 to 20.5 °C at +5 °C.
+- The start is chosen from up to 4 hours before `arrival − lead` so that the heat-up plus holding the warm room until arrival costs least (holding is assumed to take `(target − outdoor) / 30` of full heating, between 10 % and 100 %; 30 % without a forecast). Without prices for the whole window it starts at `arrival − lead`. A start that has happened is kept (`villa_kuppis/visit.py`).
 - If arrival is beyond the published prices, it plans with the prices it has and recalculates when the next day's prices arrive.
-- The 12-hour lead is only an assumption: in a hard frost the heaters may not reach the target at all, and the app must not show a visit as on time unless the room temperature shows it.
+- The lead is only an assumption: in a hard frost the heaters may not reach the target at all, and the app must not show a visit as on time unless the room temperature shows it.
 - Villa Kuppis sends the room targets to the cottage Home Assistant as they change, including after each recalculation.
 - The end-visit button, or the optional departure time, returns the cottage to maintenance heating. The plan sent to the cottage already goes back to maintenance at the departure, so it holds even if Villa Kuppis is unreachable then.
 - From the heat-up start the visit card shows each room's warming rate over the last hour and its estimated time at the target (0.5 °C below counts as reached).
 - Phone notices, once per visit and each with its own switch: every room is warm; a room will not be warm by the arrival (by its warming rate, no rise after an hour of heating, or not warm at arrival); a visit without a departure is still on three days after the arrival.
 
-**Humidity guard:** a room over `Kosteusraja` (default 80 %) for a day gets a notice. With `Lämmitä kosteaa huonetta` on, a damp room is kept at least 2 °C above its base level until it is 5 points under the limit (plan reason `Kosteusvahti`). During a visit, after the arrival, a room over 1200 ppm CO2 for 10 minutes gets a reminder to air it.
+**Humidity guard:** a room over `Kosteusraja` (default 80 %) for a day gets a notice. With `Lämmitä kosteaa huonetta` on, a damp room is kept at least 2 °C above its base level until it is 5 points under the limit (plan reason `Kosteusvahti`). During a visit, after the arrival, a room over 1200 ppm CO2 for 10 minutes gets a reminder to air it; at night (22–08) the reminder waits for the morning.
 
 ## Learned room rates
 

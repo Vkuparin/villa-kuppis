@@ -83,7 +83,7 @@ DEFINITIONS: tuple[Definition, ...] = (
                help="Pois: tavoite on aina enimmäislämpötila, eikä hinta vaikuta (sopii lämmityskaudelle, jotta jäähdytys ei kilpaile pattereiden kanssa). Kiinteät rajat: halvalla hinnalla esijäähdytetään, kalliilla tavoite on enimmäislämpötila ja pumppu saa olla sammuksissa. Optimoitu: jäähdytys suunnitellaan koko tunnetulle hintajaksolle huoneen opitun jäähtymisnopeuden ja sääennusteen avulla, eikä tulos ole kiinteitä rajoja kalliimpi. Optimointi alkaa, kun huoneen nopeus on opittu; siihen asti ja poissa-tilassa käytetään kiinteitä rajoja.",
                kinds=("cool",)),
     Definition("precool_c", "Esijäähdytyslämpötila", "Jäähdytys", "number",
-               21.0, "°C", 15, 30, help="Tavoite halvalla hinnalla: huone jäähdytetään etukäteen näin viileäksi, jotta pumppu voi olla kalliilla hinnalla pidempään sammuksissa. Ei voi ylittää enimmäislämpötilaa.",
+               21.0, "°C", 15, 30, help="Tavoite halvalla hinnalla: huone jäähdytetään etukäteen näin viileäksi, jotta pumppu voi olla kalliilla hinnalla pidempään sammuksissa. Päivänä, jonka sääennuste pysyy alle 18 °C:n, ei esijäähdytetä. Ei voi ylittää enimmäislämpötilaa.",
                kinds=("cool",), shown_if=("price_control", _PRICE_ON)),
     Definition("low_price_c_kwh", "Halpa hinta", "Jäähdytys", "number", 5.0,
                "snt/kWh", -50, 500, help="Pörssihinta, jonka alle sähkö on halpaa: silloin huone jäähdytetään esijäähdytyslämpötilaan. Vertailtava hinta on pörssihinta sellaisenaan: siirtoa, veroja ja myyjän marginaalia ei lasketa mukaan. ALV on mukana vain, jos Pörssihinta-asetuksissa on päällä Lisää ALV sähkönhintaan (rajan yksikössä lukee, onko ALV mukana).",
