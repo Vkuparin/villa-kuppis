@@ -74,17 +74,24 @@ SCRIPT = r"""
   }
   function levelOf(v, cut) { return v <= cut[0] ? "lo" : v >= cut[1] ? "hi" : "mid"; }
   var LEVEL_TEXT = { lo: ["ok", "Halpa"], mid: ["warn", "Kohtuullinen"], hi: ["err", "Kallis"] };
-  function priceChart(pts, d0, d1, now, cut) {
+  function priceChart(pts, d0, d1, now, cut, midMs) {
     var W = 600, H = 132, top = 6, bottom = 18;
-    var max = Math.max.apply(null, pts.map(function (p) { return p[1]; }).concat([1]));
-    var min = Math.min.apply(null, pts.map(function (p) { return p[1]; }).concat([0]));
     var span = d1 - d0, step = 900000;
+    // Each day gets its own scale: one expensive tomorrow must not flatten today.
+    function range(day) {
+      var v = pts.filter(function (p) { return (p[0] >= midMs) === day; }).map(function (p) { return p[1]; });
+      return [Math.min.apply(null, v.concat([0])), Math.max.apply(null, v.concat([1]))];
+    }
+    var rg = [range(false), range(true)];
     function X(ms) { return (ms - d0) / span * W; }
-    function Y(v) { return top + (1 - (v - min) / (max - min)) * (H - top - bottom); }
+    function Y(v, ms) {
+      var r = rg[ms >= midMs ? 1 : 0];
+      return top + (1 - (v - r[0]) / (r[1] - r[0])) * (H - top - bottom);
+    }
     var s = '<svg viewBox="0 0 ' + W + " " + H + '" preserveAspectRatio="none" role="img" ' +
       'aria-label="Sähkön hinta tänään ja huomenna">';
     pts.forEach(function (p) {
-      var x0 = X(p[0]), x1 = X(p[0] + step), y = Y(Math.max(p[1], 0)), y0 = Y(Math.min(p[1], 0));
+      var x0 = X(p[0]), x1 = X(p[0] + step), y = Y(Math.max(p[1], 0), p[0]), y0 = Y(Math.min(p[1], 0), p[0]);
       s += '<rect class="b-' + levelOf(p[1], cut) + (p[0] + step <= now ? " past" : "") +
         '" x="' + x0.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' +
         Math.max(0.5, x1 - x0 - 0.8).toFixed(1) + '" height="' + Math.max(0.8, y0 - y).toFixed(1) +
@@ -100,6 +107,9 @@ SCRIPT = r"""
         s += '<line x1="' + x.toFixed(1) + '" x2="' + x.toFixed(1) + '" y1="0" y2="' + (H - bottom) +
           '" stroke="var(--line3)" stroke-dasharray="3 3"/>';
     }
+    s += '<text x="' + (X(d0) + 2).toFixed(1) + '" y="' + (top + 8) + '">max ' + cents.format(rg[0][1]) + " snt</text>";
+    if (pts.some(function (p) { return p[0] >= midMs; }))
+      s += '<text x="' + (X(midMs) + 2).toFixed(1) + '" y="' + (top + 8) + '">max ' + cents.format(rg[1][1]) + " snt</text>";
     if (now > d0 && now < d1)
       s += '<line x1="' + X(now).toFixed(1) + '" x2="' + X(now).toFixed(1) + '" y1="0" y2="' +
         (H - bottom) + '" stroke="var(--text)" stroke-width="1.5"/>';
@@ -146,11 +156,11 @@ SCRIPT = r"""
         (best ? '<span class="kpi-sub">Halvin tuleva tunti klo ' +
           hourFmt.format(new Date(best[0] * 3600000)) + " · " + cents.format(best[1]) + " snt</span>" : "") +
         "</div>" +
-        '<div class="price-chart">' + priceChart(shown, d0, shownEnd, now, cut) +
+        '<div class="price-chart">' + priceChart(shown, d0, shownEnd, now, cut, mid) +
         '<div class="price-legend"><span><i style="background:var(--ok)"></i>Halvin kolmannes</span>' +
         '<span><i style="background:var(--price)"></i>Keskimmäinen</span>' +
         '<span><i style="background:var(--err)"></i>Kallein kolmannes</span></div></div>',
-        "Pörssisähkön hinta. Pylväät ovat 15 minuutin jaksoja; viiva on nyt.");
+        "Pörssisähkön hinta. Pylväät ovat 15 minuutin jaksoja; viiva on nyt. Kummallakin päivällä on oma asteikkonsa.");
     }
     if (tomorrow.length) {
       var tv = tomorrow.map(function (p) { return p[1]; });

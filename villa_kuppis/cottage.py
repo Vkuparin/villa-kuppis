@@ -2175,7 +2175,7 @@ function vkHeaterSwitch(heater, onChange) {
     $conn.title = data.site.error || "Viimeisin yhteys: " + when(data.site.last_contact);
     var missing = data.site.missing_bindings || [];
     $note.textContent = (AUTOMATION_ON ? "" : "Automaatio on pois päältä: mökille lähetetään " +
-      "vain vierailun ja käsin asetetut tavoitteet") +
+      "vain vierailun ja käsin asetetut tavoitteet" +
       ", ja muut patterit siirtyvät turvalämpöön noin minuutin kuluttua. ") +
       (missing.length ? "Home Assistantista puuttuu liitettyjä laitteita: " +
       missing.join(", ") + ". " : "") + alarmNote(data);

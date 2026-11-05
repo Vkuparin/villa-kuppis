@@ -484,6 +484,24 @@ assert.equal(blurred, 1);
         page = raw.decode("utf-8")
         self.assertIn("'<td data-label=\"Milloin\" title=\"' + esc(fmtClock(ev.ts)) + '\">'", page)
 
+    def test_page_inline_scripts_parse(self):
+        # A stray parenthesis in one section (0.4.56) silently killed the whole
+        # Mökki page, so every inline script must at least parse.
+        import shutil
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node not installed")
+        server, _ = self._start_app(FakeClient(make_unit_payloads()))
+        _, _, raw = http("GET", self._url(server, "/"))
+        scripts = re.findall(r"<script[^>]*>(.*?)</script>", raw.decode("utf-8"), re.S)
+        self.assertTrue(scripts)
+        with tempfile.TemporaryDirectory() as tmp:
+            for i, code in enumerate(scripts):
+                path = Path(tmp) / f"s{i}.js"
+                path.write_text(code, encoding="utf-8")
+                done = subprocess.run([node, "--check", str(path)], capture_output=True, text=True)
+                self.assertEqual(done.returncode, 0, done.stderr)
+
     def test_demo_flag(self):
         server, _ = self._start_app(FakeClient(make_unit_payloads()), demo=True)
         _, _, raw = http("GET", self._url(server, "/"))
