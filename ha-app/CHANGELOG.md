@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.54
+
+- Mill Local -laitteen anturien nimet suomeksi: "Current power" on nyt "teho" ja "Control signal" on "ohjaussignaali".
+
 ## 0.4.53
 
 - Uusi ilmoitus (Ilmoitus, kun mökin anturi tai patteri ei toimi): "patteri ei lämmitä", kun mökin patteri kertoo ottaneensa asetuksen mutta sen oma lämpötila ei nouse. Mill-patteri on Matterin kautta joskus jättänyt asetuksen käyttämättä (5.11. yöllä se piti 11 °C, vaikka sille oli lähetetty 19 °C), ja ilmoitus tulee, jos uudelleenlähetys ja patterin sammutus ja käynnistys eivät auta.

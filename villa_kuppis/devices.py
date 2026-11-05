@@ -132,6 +132,13 @@ NAME_TAILS = {
     "volatile organic compounds": "haihtuvat yhdisteet", "tvoc": "haihtuvat yhdisteet",
     "motion": "liike", "door": "ovi", "window": "ikkuna", "occupancy": "läsnäolo",
     "state": "tila", "status": "tila",
+    # Mill Local (Home Assistant core) entities
+    "current power": "teho", "control signal": "ohjaussignaali",
+    "current temperature": "lämpötila", "target temperature": "tavoitelämpötila",
+    "child lock": "lapsilukko", "open window": "avoin ikkuna",
+    "open window detection": "ikkunan avauksen tunnistus", "lock": "lukko",
+    "total energy": "energia yhteensä", "heating": "lämmitys",
+    "heating power": "lämmitysteho", "limited heating": "rajoitettu lämmitys",
 }
 # A device-type word at the end of the base name repeats what the measurement says.
 NAME_BASE_NOISE = (" patteri", " mittari", " anturi", " sensor", " meter")

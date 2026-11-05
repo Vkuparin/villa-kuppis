@@ -45,6 +45,8 @@ class FinnishNameTest(unittest.TestCase):
         from villa_kuppis.devices import finnish_name
         self.assertEqual(finnish_name("Kammari 1000W patteri Temperature"), "Kammari 1000W lämpötila")
         self.assertEqual(finnish_name("Kammari Alpstuga mittari Air quality"), "Kammari Alpstuga ilmanlaatu")
+        self.assertEqual(finnish_name("Kammari 1000W patteri Current power"), "Kammari 1000W teho")
+        self.assertEqual(finnish_name("Kammari 1000W patteri Control signal"), "Kammari 1000W ohjaussignaali")
         self.assertEqual(finnish_name("Archer BE230 Download speed"), "Archer BE230 latausnopeus")
         self.assertEqual(finnish_name("Olohuone"), "Olohuone")
 
