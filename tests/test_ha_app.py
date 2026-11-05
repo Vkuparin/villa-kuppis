@@ -164,8 +164,10 @@ class OptionsTests(unittest.TestCase):
         self.assertEqual(dict(loaded.sites)["home"].url, ha_app.SUPERVISOR_WS)
         self.assertEqual(loaded.data_dir, self.root / "db")
         for name in ("melcloud.json", "home-token", "cottage-token"):
-            mode = stat.S_IMODE((self.root / "secrets" / name).stat().st_mode)
-            self.assertEqual(mode, 0o600, name)
+            path = self.root / "secrets" / name
+            self.assertTrue(path.is_file(), name)
+            if os.name != "nt":   # Windows does not expose POSIX file permissions
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600, name)
         for secret in ("secret-pw-7d3f", "secret-token-a91c", "supervisor-token"):
             self.assertNotIn(secret, json.dumps(config))
 
