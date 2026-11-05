@@ -139,6 +139,14 @@ NAME_TAILS = {
     "open window detection": "ikkunan avauksen tunnistus", "lock": "lukko",
     "total energy": "energia yhteensä", "heating": "lämmitys",
     "heating power": "lämmitysteho", "limited heating": "rajoitettu lämmitys",
+    # MELCloud Home (heat pump) entities
+    "room temperature": "huonelämpötila", "outdoor temperature": "ulkolämpötila",
+    "standby": "valmiustila", "energy consumed (monthly)": "energiankulutus (kuukausi)",
+    "energy consumed": "energiankulutus", "error state": "vikatila", "error": "vika",
+    "connection": "yhteys", "set temperature": "asetuslämpötila",
+    "operation mode": "toimintatila", "fan speed": "puhaltimen nopeus",
+    "vane position": "ilmavirran suunta", "vertical vane": "pystysuunta",
+    "horizontal vane": "vaakasuunta", "swing mode": "heilutus",
 }
 # A device-type word at the end of the base name repeats what the measurement says.
 NAME_BASE_NOISE = (" patteri", " mittari", " anturi", " sensor", " meter")

@@ -47,6 +47,11 @@ class FinnishNameTest(unittest.TestCase):
         self.assertEqual(finnish_name("Kammari Alpstuga mittari Air quality"), "Kammari Alpstuga ilmanlaatu")
         self.assertEqual(finnish_name("Kammari 1000W patteri Current power"), "Kammari 1000W teho")
         self.assertEqual(finnish_name("Kammari 1000W patteri Control signal"), "Kammari 1000W ohjaussignaali")
+        self.assertEqual(finnish_name("Makuuhuone Room temperature"), "Makuuhuone huonelämpötila")
+        self.assertEqual(finnish_name("Eteinen Outdoor temperature"), "Eteinen ulkolämpötila")
+        self.assertEqual(finnish_name("Makuuhuone Standby"), "Makuuhuone valmiustila")
+        self.assertEqual(finnish_name("Makuuhuone Energy consumed (monthly)"),
+                         "Makuuhuone energiankulutus (kuukausi)")
         self.assertEqual(finnish_name("Archer BE230 Download speed"), "Archer BE230 latausnopeus")
         self.assertEqual(finnish_name("Olohuone"), "Olohuone")
 

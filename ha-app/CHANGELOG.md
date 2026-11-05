@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.55
+
+- Lämpöpumppujen laitekorttien nimet suomeksi Koti-välilehdellä: "Room temperature" on "huonelämpötila", "Outdoor temperature" "ulkolämpötila", "Standby" "valmiustila" ja "Energy consumed (monthly)" "energiankulutus (kuukausi)".
+
 ## 0.4.54
 
 - Mill Local -laitteen anturien nimet suomeksi: "Current power" on nyt "teho" ja "Control signal" on "ohjaussignaali".
