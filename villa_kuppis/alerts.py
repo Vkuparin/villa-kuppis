@@ -11,6 +11,9 @@ problem starts, and another when it is over:
 * a cottage room without a fresh temperature reading for an hour, or a
   cottage heater unavailable for 30 minutes (``alert_device``); a heater
   switched off in Villa Kuppis is not reported (the cold alert still is);
+* a cottage heater that should heat and does not, by its own sensor, after
+  the integration sent its setpoint again and switched it off and on
+  (``alert_device``; a Mill took setpoints over Matter and kept another);
 * a home pump unavailable or reporting a device error for 30 minutes
   (``alert_pump``, also per pump).
 
@@ -209,6 +212,17 @@ class AlertMonitor:
                                    (f"{label}: lämpötila-anturi toimii taas",
                                     "Huoneen lämpötila saadaan taas."), SENSOR_AFTER))
             for heater in room.get("heaters") or ():
+                name = heater.get("label") or heater.get("device_id")
+                if heater.get("disobeying") and heater.get("enabled") is not False:
+                    out.append(Problem(
+                        f"device:obey:{heater.get('device_id')}", "alert_device", "cottage",
+                        room["id"],
+                        (f"{label}: patteri {name} ei lämmitä",
+                         "Patteri kertoo ottaneensa asetuksen mutta ei lämmitä, eikä "
+                         "uudelleen lähettäminen auttanut. Säädä patteria sen omista "
+                         "painikkeista tai katkaise siltä hetkeksi virta."),
+                        (f"{label}: patteri {name} lämmittää taas",
+                         "Patteri lämmittää taas asetuksensa mukaan.")))
                 if heater.get("available", True) and heater.get("status") not in (
                         "missing", "unavailable"):
                     continue
@@ -219,7 +233,6 @@ class AlertMonitor:
                     if key in self._open:
                         out.append(self._open[key])
                     continue
-                name = heater.get("label") or heater.get("device_id")
                 out.append(Problem(key, "alert_device",
                                    "cottage", room["id"],
                                    (f"{label}: patteri {name} ei vastaa",

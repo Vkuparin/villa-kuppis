@@ -1,5 +1,10 @@
 # Muutokset
 
+## 0.4.53
+
+- Uusi ilmoitus (Ilmoitus, kun mökin anturi tai patteri ei toimi): "patteri ei lämmitä", kun mökin patteri kertoo ottaneensa asetuksen mutta sen oma lämpötila ei nouse. Mill-patteri on Matterin kautta joskus jättänyt asetuksen käyttämättä (5.11. yöllä se piti 11 °C, vaikka sille oli lähetetty 19 °C), ja ilmoitus tulee, jos uudelleenlähetys ja patterin sammutus ja käynnistys eivät auta.
+- Mökin integraatio 0.10.1 (päivitä install.sh:lla): patteri, joka ei lämpene tai jäähdy asetuksensa mukaan, saa asetuksen uudelleen, ja sitten se sammutetaan ja käynnistetään. Tilassa näkyvät patterien asetus ja anturien ero.
+
 ## 0.4.52
 
 - Mökin tuleva lämmityssuunnitelma päivittyy myös silloin, kun nykyinen tavoite pysyy samana.

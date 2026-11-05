@@ -746,6 +746,29 @@ class ServiceHttpTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("install.sh", error["detail"])
 
+    def test_a_heater_that_does_not_heat_is_marked(self):
+        service = self.make_service()
+        server = self.serve(service)
+        _, body = self.get(server, "/api/cottage")
+        large = next(r for r in body["rooms"] if r["id"] == "large")
+        entity = large["heaters"][0]["entity_id"]
+        self.assertFalse(any(h["disobeying"] for h in large["heaters"]))
+        gateway = service.cottage._gateway
+        original = gateway.snapshot
+
+        def disobeying():
+            out = original()
+            for state in out.values():
+                attrs = state.get("attributes") or {}
+                if "disabled_heaters" in attrs:
+                    attrs["disobeying"] = [entity]
+            return out
+        gateway.snapshot = disobeying
+        _, body = self.get(server, "/api/cottage")
+        large = next(r for r in body["rooms"] if r["id"] == "large")
+        self.assertEqual([h["disobeying"] for h in large["heaters"]],
+                         [h["entity_id"] == entity for h in large["heaters"]])
+
     def test_without_a_cottage_the_paths_are_empty_and_history_is_refused(self):
         server = self.serve(self.make_service(with_cottage=False))
         self.assertEqual(self.get(server, "/api/cottage"),

@@ -12,6 +12,16 @@ The built-in Home Assistant Mill cloud integration is a plausible alternative, b
 | Mill cloud | Built-in HA integration exposes ordinary climate entities | Actual Gen 4 discovery and delivery; cloud feedback can reflect desired state; WAN dependency |
 | Mill local REST | Would keep the controller and heater commands local | Gen 4 compatibility with HA's documented Gen 3 implementation |
 
+## Live findings, 5 November 2026
+
+Kammari's Mill (firmware 0x250828-1-g6797788dd, the same on all four), with the owner at the heater reading its display:
+
+- Over Matter every write is answered "success" and reported back, but some are not applied. Taken: 21:51, 22:19, 03:44, 04:19, 07:41, 07:44, 07:46. Dropped: 01:29 (5 °C, kept heating to 25 °C), 05:04, 05:30, 06:00 (19 °C, held 11 °C while the room fell from 23 to 15 °C), 07:47 and everything after it. The Matter server log looks the same for both.
+- Not a fix: resending the same value, a changed value (20, 23), off and on (`systemMode` 0 then 4), or pressing the heater's buttons just before a write. Pressing its buttons at 07:29 and a power cycle at 03:48 were each followed by writes that took, but not reliably.
+- Half degrees are lost over Matter (9.5 °C showed 9.0) although its buttons step 0.5 °C; integration 0.10.0 sends whole degrees.
+- While on Matter, the heater (192.168.50.176) refuses TCP connections on port 80 within milliseconds: no local REST API in this state. It is not in the Mill app.
+- Integration 0.10.1 judges each heater by its own sensor and, when one that should heat does not, lists it in `disobeying`; Villa Kuppis 0.4.53 sends a phone alert.
+
 ## What Home Assistant supports
 
 HA's [Mill integration](https://www.home-assistant.io/integrations/mill/) offers cloud and local connections through Settings > Devices & services > Add integration > Mill. Cloud setup takes the Mill account's username and password; no HACS component or separate HAOS app is needed. This is Mill's cloud, not a requirement for a Nabu Casa subscription. The [2026.11.0 setup flow](https://github.com/home-assistant/core/blob/2026.11.0/homeassistant/components/mill/config_flow.py) contains both choices.

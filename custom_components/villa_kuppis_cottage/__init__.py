@@ -218,6 +218,7 @@ class Room:
         self.decision: control.Decision | None = None
         self.room_temp: float | None = None
         self.fresh_temp: float | None = None     # for the alarm: a recent reading only
+        self.disobeying: list[str] = []           # heaters that do not heat as told
 
     def _publish(self) -> None:
         self.devices = {**({"temperature": self.sensor} if self.sensor else {}),
@@ -466,6 +467,7 @@ class CottageController:
         if room.decision is None or decision.mode != room.decision.mode:
             _LOGGER.info("%s: %s (%s)", room.name, decision.mode, decision.reason)
         room.decision = decision
+        room.disobeying = [h.entity_id for h in heaters if control.disobeying(h, room.memory)]
         async_dispatcher_send(self.hass, SIGNAL_UPDATE, room.room_id)
         for cmd in decision.commands:
             data = {"entity_id": cmd.entity_id}

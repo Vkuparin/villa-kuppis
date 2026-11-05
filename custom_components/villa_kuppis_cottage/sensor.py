@@ -66,6 +66,9 @@ class RoomTargetSensor(SensorEntity):
             # (+) or colder (-) their own sensors read than the room sensor.
             "heater_setpoint": memory.setpoint,
             "sensor_gap": round(memory.trim, 1) if memory.trim is not None else None,
+            # Heaters that should heat and do not, after a resend and an off
+            # and on (control.disobeying); Villa Kuppis sends a phone alert.
+            "disobeying": room.disobeying,
             "room_temperature": room.room_temp,
             "requested_target": target.value if target else None,
             "revision": target.revision if target else None,

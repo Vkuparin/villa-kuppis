@@ -1505,7 +1505,7 @@ class CottageSite:
                         **{key: attrs.get(key) for key in (
                             "mode", "reason", "drive", "revision", "requested_target",
                             "valid_until", "manual_until", "manual_by", "disabled_heaters",
-                            "chosen_sensor", "alarm")}}
+                            "chosen_sensor", "alarm", "disobeying")}}
             st = room["status"]
             if st:
                 labels = {h["entity_id"]: h["label"] for h in room["heaters"]}
@@ -1524,6 +1524,9 @@ class CottageSite:
                 heater["switchable"] = isinstance(disabled, list)
                 heater["enabled"] = not (isinstance(disabled, list)
                                          and heater["entity_id"] in disabled)
+                # Integration 0.10.1+: should heat and does not (control.disobeying).
+                heater["disobeying"] = heater["entity_id"] in (
+                    (room["status"] or {}).get("disobeying") or ())
             room["state"] = _worst(statuses) if statuses else "unbound"
             rooms.append(room)
         automation = self._targets_cfg["automation_on"]() if self._targets_cfg else False

@@ -31,9 +31,10 @@ Modes, in precedence order:
   ``min_dwell`` unless it moves by ``big_change``. A heater that misses a
   command is left near the target, not far above it (a Mill on 5.11.2026
   kept heating to an earlier 25 °C high drive after it had taken 5 °C).
-  Turning a heater back on also writes its setpoint again, and so does a
-  heater whose own reading keeps rising ``runaway_margin`` over its
-  setpoint; after three such resends in a row the status says so.
+  Turning a heater back on also writes its setpoint again. A heater whose
+  own reading stays ``effect_margin`` over its setpoint without cooling, or
+  under it without warming, gets the setpoint again, then is switched off
+  and on; after three windows in a row the status says so (see ``_effect``).
 
 A heater switched off in Villa Kuppis (``enabled`` false) is kept off and
 is not a manual change. Before it is turned off it gets the safe setpoint,
@@ -108,9 +109,9 @@ class Settings:
     hold_band: float = 0.5           # no push this close to the target
     setpoint_deadband: float = 0.75  # the setpoint follows a change this big, so it does not flap
     big_change: float = 2.0          # a setpoint moving this much does not wait min_dwell
-    runaway_margin: float = 2.0      # a heater reading this far over its setpoint ...
-    runaway_rise: float = 0.3        # ... and still rising this much ...
-    runaway_window: timedelta = timedelta(minutes=30)   # ... in this long gets it again
+    effect_margin: float = 2.0       # a heater reading this far over (under) its setpoint ...
+    effect_move: float = 0.3         # ... that cools (warms) less than this ...
+    effect_window: timedelta = timedelta(minutes=30)   # ... in this long does not obey it
     unconfirmed_after: int = 3       # sends without read-back before the status says so
 
 
@@ -170,8 +171,9 @@ class HeaterMemory:
     unconfirmed: int = 0             # sends in a row the heater did not take
     away: bool = False               # seen unavailable since the last report
     settle_until: datetime | None = None   # back from unavailable: changes are a baseline
-    warm_from: tuple | None = None   # (own reading, time) while it reads over its setpoint
-    runaway: int = 0                 # setpoints resent in a row because it kept warming
+    watch: tuple | None = None       # (own reading, time, "warm"/"cold") while far from its setpoint
+    tries: int = 0                   # windows in a row it did not obey its setpoint
+    kicked_at: datetime | None = None   # switched off and on again by us
 
 
 @dataclass
@@ -259,6 +261,8 @@ def _detect_manual(heaters, memory: RoomMemory, settings: Settings, now: datetim
             continue
         if hm.settle_until is not None and now < hm.settle_until:
             continue         # still catching up after a reconnect
+        if hm.kicked_at is not None and now - hm.kicked_at < settings.confirm_grace:
+            continue         # reporting our off and on
         hm.settle_until = None
         if previous == observed or not heater.enabled:
             continue
@@ -328,6 +332,7 @@ def _commands(heaters, desired: float, memory: RoomMemory, settings: Settings,
             continue
         hm = memory.heaters.setdefault(heater.entity_id, HeaterMemory())
         want = heater_setpoint(heater, desired, settings)
+        effect = 0
         tol = _tolerance(heater, settings)
         need_mode = heater.mode != HEAT
         if raise_only and heater.setpoint is not None and heater.setpoint >= want - tol:
@@ -341,8 +346,8 @@ def _commands(heaters, desired: float, memory: RoomMemory, settings: Settings,
             # A heater turned back on gets its setpoint again: it may
             # report one setpoint and heat to another.
             need_setpoint = need_setpoint or (need_mode and heater.mode == OFF)
-            if not need_setpoint and _runaway(heater, hm, want, settings, now):
-                need_setpoint = True
+            effect = 0 if need_setpoint else _effect(heater, hm, want, settings, now)
+            need_setpoint = need_setpoint or effect > 0
         if not (need_mode or need_setpoint):
             hm.unconfirmed = 0
             continue
@@ -351,6 +356,10 @@ def _commands(heaters, desired: float, memory: RoomMemory, settings: Settings,
                    and (not need_setpoint or _close(hm.sent_setpoint, want, 1e-6)))
         if waiting or not _allowed(hm, now, settings):
             continue
+        if not need_mode and effect >= 2:
+            # Sending it again did not help: off and on, then the setpoint.
+            out.append(Command(heater.entity_id, "set_hvac_mode", OFF))
+            need_mode, hm.kicked_at = True, now
         if need_mode:
             out.append(Command(heater.entity_id, "set_hvac_mode", HEAT))
             hm.sent_mode = HEAT
@@ -361,31 +370,51 @@ def _commands(heaters, desired: float, memory: RoomMemory, settings: Settings,
     return out
 
 
-def _runaway(heater: Heater, hm: HeaterMemory, want: float, settings: Settings,
-             now: datetime) -> bool:
-    """True when a heater keeps warming well over the setpoint it reports.
+def _effect(heater: Heater, hm: HeaterMemory, want: float, settings: Settings,
+            now: datetime) -> int:
+    """Whether a heater uses the setpoint it reports, judged by its own sensor.
 
-    It may hold another setpoint than it says: a Mill took 5 °C, reported
-    5 °C and kept heating to an earlier 25 °C (5.11.2026). Its setpoint is
-    then sent again; that is harmless when the warmth comes from elsewhere
-    (a fireplace, the sun).
+    A Mill can take a setpoint over Matter, report it and keep another: on
+    5.11.2026 one kept heating to an earlier 25 °C after taking 5 °C, and
+    later held 11 °C after taking 12, 13 and 19 °C while the room cooled to
+    15 °C. A heater reading ``effect_margin`` over its setpoint should cool
+    and one under it should warm; one that moved less than ``effect_move``
+    that way in ``effect_window`` does not obey. Returns 0, or how many
+    windows in a row: 1 sends the setpoint again, 2 or more also switch the
+    heater off and on. Warmth from elsewhere (a fireplace, the sun) costs
+    only those commands.
     """
     own = heater.current
-    if own is None or heater.mode != HEAT or own < want + settings.runaway_margin:
-        hm.warm_from, hm.runaway = None, 0
-        return False
-    if hm.warm_from is None or own < hm.warm_from[0]:
-        hm.warm_from = (own, now)
-        return False
-    start, since = hm.warm_from
-    if now - since < settings.runaway_window:
-        return False
-    hm.warm_from = (own, now)
-    if own - start < settings.runaway_rise:
-        hm.runaway = 0
-        return False
-    hm.runaway += 1
-    return True
+    kind = None
+    if own is not None and heater.mode == HEAT:
+        if own >= want + settings.effect_margin:
+            kind = "warm"
+        elif own <= want - settings.effect_margin:
+            kind = "cold"
+    if kind is None:
+        hm.watch, hm.tries = None, 0
+        return 0
+    if hm.watch is None or hm.watch[2] != kind:
+        hm.watch = (own, now, kind)
+        return 0
+    start, since, _ = hm.watch
+    if now - since < settings.effect_window:
+        return 0
+    hm.watch = (own, now, kind)
+    toward = start - own if kind == "warm" else own - start
+    if toward >= settings.effect_move:
+        hm.tries = 0
+        return 0
+    hm.tries += 1
+    return hm.tries
+
+
+def disobeying(heater: Heater, memory: RoomMemory) -> bool:
+    """A heater that should heat and has not for two windows, after a
+    resend and an off and on: Villa Kuppis sends a phone alert."""
+    hm = memory.heaters.get(heater.entity_id)
+    return (heater.available and hm is not None and hm.tries >= 2
+            and hm.watch is not None and hm.watch[2] == "cold")
 
 
 def _frost(sensor_ok: bool, room: float | None, memory: RoomMemory,
@@ -420,8 +449,10 @@ def _notes(heaters, memory: RoomMemory, settings: Settings) -> str:
                 out.append(f"{heater.label} ei suostu sammumaan")
             elif hm.sent_setpoint is not None:
                 out.append(f"{heater.label} ei ota lämpötilaa {hm.sent_setpoint:g} °C")
-        elif heater.available and hm is not None and hm.runaway >= 3 and heater.setpoint is not None:
-            out.append(f"{heater.label} lämpenee yli asetuksensa {heater.setpoint:g} °C, "
+        elif (heater.available and hm is not None and hm.tries >= 3 and hm.watch is not None
+              and heater.setpoint is not None):
+            how = "lämpenee yli" if hm.watch[2] == "warm" else "ei lämmitä"
+            out.append(f"{heater.label} {how} asetuksensa {heater.setpoint:g} °C, "
                        "asetus lähetetty uudelleen")
     return "; ".join(out)
 

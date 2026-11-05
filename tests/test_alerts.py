@@ -168,6 +168,18 @@ class MonitorTests(unittest.TestCase):
         self.service.cottage.heaters["small"] = [heater]
         self.assertEqual(len(self.check(40)), 2)
 
+    def test_heater_that_does_not_heat_is_reported_until_it_heats(self):
+        heater = {"device_id": "small-heater-1", "label": "Kammari 1000W patteri",
+                  "available": True, "status": "ok", "disobeying": True}
+        self.service.cottage.heaters["small"] = [heater]
+        self.check()
+        self.assertEqual(self.check(1), ["Mökki: Kammari: patteri Kammari 1000W patteri ei lämmitä"])
+        self.assertIn("omista painikkeista", self.notifier.sent[0][1])
+        self.assertEqual(len(self.check(30)), 1)   # once
+        self.service.cottage.heaters["small"] = [{**heater, "disobeying": False}]
+        self.assertEqual(self.check(1)[1:],
+                         ["Mökki: Kammari: patteri Kammari 1000W patteri lämmittää taas"])
+
     def test_heater_switched_off_in_villa_kuppis_is_not_reported(self):
         heater = {"device_id": "small-heater-1", "label": "Kammari 1000W patteri",
                   "available": False, "status": "unavailable", "enabled": False}

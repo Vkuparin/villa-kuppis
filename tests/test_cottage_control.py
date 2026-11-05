@@ -280,8 +280,15 @@ class RunawayTests(unittest.TestCase):
         sim = self.warm_kammari(sticky=99)
         sim.run(4 * 60)
         self.assertIn("lämpenee yli asetuksensa", sim.decisions[-1][1].reason)
-        per_hour = sim.max_commands_per_hour()
-        self.assertLessEqual(per_hour, 4)
+        # A resend, then off and on with the setpoint, once per window.
+        sends = sorted({at for at, _ in sim.commands})
+        self.assertLessEqual(max(sum(1 for t in sends if s <= t < s + timedelta(hours=1))
+                                 for s in sends), 3)
+        self.assertIn(("set_hvac_mode", "off"),
+                      [(c.service, c.value) for _, c in sim.commands])
+        self.assertNotIn("manual", sim.modes_since(START))
+        # Warm, not cold: no phone alert.
+        self.assertFalse(control.disobeying(sim.room.heaters[0].view(), sim.memory))
 
     def test_warmth_from_elsewhere_costs_only_a_resend_now_and_then(self):
         room = Room([SimHeater("climate.kammari", 1000, step=None)], temp=19.0, outdoor=0.0,
@@ -291,9 +298,35 @@ class RunawayTests(unittest.TestCase):
         room.extra_w = 1000.0            # a fireplace
         sim.run(4 * 60)
         self.assertGreater(room.temp, 24.0)
-        late = [c for at, c in sim.commands if at >= START + timedelta(hours=1)]
+        late = {at for at, _ in sim.commands if at >= START + timedelta(hours=1)}
         self.assertLessEqual(len(late), 12)
         self.assertNotIn("manual", sim.modes_since(START))
+        self.assertFalse(control.disobeying(room.heaters[0].view(), sim.memory))
+
+    def test_a_heater_that_does_not_heat_is_retried_and_then_reported(self):
+        # 5.11.2026: the Mill took 12, 13 and 19 °C and kept 11 °C.
+        room = Room([SimHeater("climate.kammari", 1000, step=None)], temp=17.0, outdoor=0.0,
+                    ua=30.0, capacity=0.49e6, bias=-2.5)
+        heater = room.heaters[0]
+        heater.setpoint, heater.holds, heater.sticky = 11.0, 11.0, 99
+        sim = Sim(room, target=21.0)
+        sim.run(30)
+        self.assertFalse(control.disobeying(heater.view(), sim.memory))
+        sim.run(2 * 60)
+        self.assertTrue(control.disobeying(heater.view(), sim.memory))
+        self.assertIn("ei lämmitä asetuksensa", sim.decisions[-1][1].reason)
+        self.assertNotIn("manual", sim.modes_since(START))
+
+    def test_a_restart_that_helps_ends_the_report(self):
+        room = Room([SimHeater("climate.kammari", 1000, step=None)], temp=17.0, outdoor=0.0,
+                    ua=30.0, capacity=0.49e6, bias=-2.5)
+        heater = room.heaters[0]
+        heater.setpoint, heater.holds, heater.sticky = 11.0, 11.0, 1   # the second write takes
+        sim = Sim(room, target=21.0)
+        sim.run(3 * 60)
+        self.assertIsNone(heater.holds)
+        self.assertFalse(control.disobeying(heater.view(), sim.memory))
+        self.assertGreater(room.temp, 19.0)
 
 
 class WatchdogTests(unittest.TestCase):
