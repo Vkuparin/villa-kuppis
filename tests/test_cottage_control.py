@@ -36,6 +36,8 @@ class SimHeater:
     available: bool = True
     ignore_commands: bool = False
     enabled: bool = True
+    # Reports the setpoint it was sent but heats to this one (Kammari's Mill, 5.11.2026).
+    stuck_setpoint: float | None = None
 
     def view(self) -> control.Heater:
         return control.Heater(self.entity_id, self.available, self.mode if self.available else None,
@@ -59,11 +61,12 @@ class Room:
         power = 0.0
         for h in self.heaters:
             own = self.temp + self.BIAS
+            setpoint = h.setpoint if h.stuck_setpoint is None else h.stuck_setpoint
             if h.mode != "heat" or not h.available:
                 h.on = False
-            elif own < h.setpoint - 0.25:
+            elif own < setpoint - 0.25:
                 h.on = True
-            elif own > h.setpoint + 0.25:
+            elif own > setpoint + 0.25:
                 h.on = False
             power += h.watts if h.on else 0.0
         self.temp += (power - self.ua * (self.temp - self.outdoor)) * seconds / self.capacity
@@ -160,6 +163,37 @@ class FollowTests(unittest.TestCase):
         sim = Sim(large_room(), target=40.0)
         sim.run(1)
         self.assertEqual(sim.decisions[0][1].effective_target, SETTINGS.max_target)
+
+
+class StuckHeaterTests(unittest.TestCase):
+    def test_heater_heating_past_its_low_setpoint_is_switched_off(self):
+        room = Room([SimHeater("climate.kammari", 1000)], temp=14.0, outdoor=10.0, ua=25.0,
+                    capacity=0.5e6)
+        sim = Sim(room, target=22.0)
+        sim.run(60)                                   # warm to the target, then low
+        room.heaters[0].stuck_setpoint = 25.0         # keeps heating at 25 °C
+        sim.run(10 * 60)
+        first = sim.temps_since(START + timedelta(minutes=60))
+        self.assertLess(max(first), 24.0)              # caught within about 30 min
+        later = sim.temps_since(START + timedelta(hours=3))
+        self.assertLess(max(later), 23.0)              # later low drives are off at once
+        offs = [at for at, c in sim.commands if c.service == "set_hvac_mode" and c.value == "off"]
+        self.assertTrue(offs)
+        reasons = [d.reason for _, d, _ in sim.decisions if "patterit sammutettu" in d.reason]
+        self.assertTrue(reasons)
+        # Back on below the target, with the setpoint written again.
+        ons = [(at, c) for at, c in sim.commands
+               if c.service == "set_hvac_mode" and c.value == "heat" and at > offs[0]]
+        self.assertTrue(ons)
+        resent = [c for at, c in sim.commands if at == ons[0][0] and c.service == "set_temperature"]
+        self.assertEqual([c.value for c in resent], [25.0])
+        self.assertLessEqual(sim.max_commands_per_hour(), SETTINGS.max_commands_per_hour)
+        self.assertEqual(sim.modes_since(START), {"follow"})
+
+    def test_a_working_heater_is_not_switched_off(self):
+        sim = Sim(large_room(), target=18.0)
+        sim.run(24 * 60)
+        self.assertFalse([c for _, c in sim.commands if c.service == "set_hvac_mode"])
 
 
 class WatchdogTests(unittest.TestCase):

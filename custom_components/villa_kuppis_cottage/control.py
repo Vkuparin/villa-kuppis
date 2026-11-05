@@ -18,6 +18,13 @@ Modes, in precedence order:
 - ``follow``: the room sensor is valid. Heaters are driven high
   (target + boost) below the target and low above it, with hysteresis and
   a minimum dwell. Their own thermostats still bound the temperature.
+  A heater may report the low setpoint and still heat to its old one (a
+  Mill did on 5.11.2026, from 25 °C at 01:30 to 24.7 °C at 03:00): when
+  the room is still ``stuck_rise`` warmer than its lowest reading
+  ``stuck_after`` into the low drive, the room's heaters are switched
+  off until the drive goes high again, and at once in every later low
+  drive (until a restart). Turning a heater back on also writes its
+  setpoint again.
 
 A heater switched off in Villa Kuppis (``enabled`` false) is kept off and
 is not a manual change. Before it is turned off it gets the safe setpoint,
@@ -77,6 +84,8 @@ class Settings:
     fallback_heats_disabled: bool = True
     readback_tolerance: float = 1.0  # a heater may round what it was sent
     frost_margin: float = 1.0        # frost guard ends this far above safe_setpoint
+    stuck_after: timedelta = timedelta(minutes=30)   # low drive this long and the room
+    stuck_rise: float = 0.5          # still this much warmer: the heaters are switched off
     unconfirmed_after: int = 3       # sends without read-back before the status says so
 
 
@@ -145,6 +154,9 @@ class RoomMemory:
     manual_by: str | None = None
     frost: bool = False              # frost guard on
     heaters: dict = field(default_factory=dict)
+    low_room: float | None = None    # the lowest room reading in this low drive
+    low_off: bool = False            # the room warmed at low drive: heaters off
+    stuck: bool = False              # it has: later low drives switch them off at once
 
 
 @dataclass(frozen=True)
@@ -243,7 +255,7 @@ def _sent(hm: HeaterMemory, now: datetime) -> None:
 
 
 def _off_commands(heaters, memory: RoomMemory, settings: Settings,
-                  now: datetime) -> list[Command]:
+                  now: datetime, *, include_enabled: bool = False) -> list[Command]:
     """Turn the switched-off heaters off, once each, within the rate limits.
 
     A heater set above the safe setpoint gets the safe setpoint first, so
@@ -251,7 +263,7 @@ def _off_commands(heaters, memory: RoomMemory, settings: Settings,
     """
     out = []
     for heater in heaters:
-        if heater.enabled or not heater.available:
+        if (heater.enabled and not include_enabled) or not heater.available:
             continue
         hm = memory.heaters.setdefault(heater.entity_id, HeaterMemory())
         if heater.mode == OFF:
@@ -297,6 +309,9 @@ def _commands(heaters, desired: float, memory: RoomMemory, settings: Settings,
             need_setpoint = not (_close(heater.setpoint, want, tol)
                                  or (_close(hm.sent_setpoint, want, 1e-6)
                                      and _close(heater.setpoint, want, _readback(heater, settings))))
+            # A heater turned back on gets its setpoint again: it may
+            # report one setpoint and heat to another.
+            need_setpoint = need_setpoint or (need_mode and heater.mode == OFF)
         if not (need_mode or need_setpoint):
             hm.unconfirmed = 0
             continue
@@ -424,8 +439,21 @@ def decide(now: datetime, target: Target | None, sensor: Sensor | None,
         want = memory.drive
     if want != memory.drive:
         memory.drive, memory.drive_since = want, now
-    desired = value + settings.boost if want == "high" else settings.low_setpoint
-    cmds = _commands(heaters, desired, memory, settings, now)
+        memory.low_room, memory.low_off = None, False
+    reason = f"huone {room:g} °C, tavoite {value:g} °C"
+    if want == "low":
+        memory.low_room = room if memory.low_room is None else min(memory.low_room, room)
+        if (not memory.low_off and now - memory.drive_since >= settings.stuck_after
+                and room >= memory.low_room + settings.stuck_rise):
+            memory.low_off = memory.stuck = True
+        elif memory.stuck:
+            memory.low_off = True
+    if memory.low_off:
+        cmds = _off_commands(heaters, memory, settings, now, include_enabled=True)
+        reason += (f"; huone lämpeni {settings.low_setpoint:g} °C:n asetuksesta huolimatta,"
+                   " patterit sammutettu")
+    else:
+        desired = value + settings.boost if want == "high" else settings.low_setpoint
+        cmds = _commands(heaters, desired, memory, settings, now)
     cmds += _disabled_commands(heaters, frost, memory, settings, now)
-    return _decision("follow", f"huone {room:g} °C, tavoite {value:g} °C", value, want, cmds,
-                     heaters, memory, settings, frost)
+    return _decision("follow", reason, value, want, cmds, heaters, memory, settings, frost)
