@@ -219,7 +219,8 @@ async def test_hand_change_pauses_the_room_until_cleared(hass, calls, freezer):
     await hass.services.async_call(DOMAIN, "clear_manual", {"room": "large"}, blocking=True)
     await hass.async_block_till_done()
     assert status(hass).attributes["mode"] == "follow"
-    assert ("climate.mill_1", 5.0) in sent(calls)
+    # The room is 1.5 °C over the target, so the Mill gets target − 1.5, not 5 °C (0.9.0).
+    assert ("climate.mill_1", 16.5) in sent(calls)
 
 
 async def test_unavailable_heater_is_skipped(hass, calls):

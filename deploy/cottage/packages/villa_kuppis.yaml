@@ -14,10 +14,11 @@ villa_kuppis_cottage:
   # Heater setpoint when there is no valid target from Villa Kuppis (also
   # when Automaatio is off), and the lowest room target accepted.
   safe_setpoint: 5
-  # Heater setpoint when the room is warm enough (driven low).
+  # The lowest setpoint the room control sends a heater.
   low_setpoint: 5
   max_target: 25
-  # Heater setpoint when the room needs heat: target + boost.
+  # Heaters get the target plus the gap between their own sensor and the
+  # ALPSTUGA, pushed at most this far up or down while the room is off target.
   boost: 3
   hysteresis: 0.3
   min_dwell_minutes: 10

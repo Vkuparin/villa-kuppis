@@ -15,16 +15,18 @@ Modes, in precedence order:
   thermostats hold the safe setpoint.
 - ``thermostat``: the target is valid but the room sensor is missing,
   stale or implausible. The heaters' own thermostats hold the target.
-- ``follow``: the room sensor is valid. Heaters are driven high
-  (target + boost) below the target and low above it, with hysteresis and
-  a minimum dwell. Their own thermostats still bound the temperature.
-  A heater may report the low setpoint and still heat to its old one (a
-  Mill did on 5.11.2026, from 25 °C at 01:30 to 24.7 °C at 03:00): when
-  the room is still ``stuck_rise`` warmer than its lowest reading
-  ``stuck_after`` into the low drive, the room's heaters are switched
-  off until the drive goes high again, and at once in every later low
-  drive (until a restart). Turning a heater back on also writes its
-  setpoint again.
+- ``follow``: the room sensor is valid. Each heater gets a realistic
+  setpoint: the target, corrected by ``trim`` for how much colder or
+  warmer the heaters' own sensors read than the room sensor, plus
+  ``prop_gain`` times the room's distance from the target, at most
+  ``boost`` either way. The trim
+  starts from the heaters' own readings and moves ``trim_gain`` per °C of
+  room error every ``trim_interval``, so the heaters' own thermostats hold
+  the room sensor at the target. A setpoint changes by whole steps, at
+  most once per ``min_dwell`` unless it moves by ``big_change``. A heater
+  that misses a command is left near the target, not far above it (a Mill
+  on 5.11.2026 kept heating to an earlier 25 °C high drive after it had
+  taken 5 °C). Turning a heater back on also writes its setpoint again.
 
 A heater switched off in Villa Kuppis (``enabled`` false) is kept off and
 is not a manual change. Before it is turned off it gets the safe setpoint,
@@ -67,9 +69,9 @@ OFF = "off"
 @dataclass(frozen=True)
 class Settings:
     safe_setpoint: float = 5.0       # fallback; also the lowest room target
-    low_setpoint: float = 5.0        # heater setpoint when driven low
+    low_setpoint: float = 5.0        # the lowest setpoint follow mode sends
     max_target: float = 25.0
-    boost: float = 3.0               # high drive = target + boost
+    boost: float = 3.0               # the push is at most this far from target + trim
     hysteresis: float = 0.3
     min_dwell: timedelta = timedelta(minutes=10)
     sensor_max_age: timedelta = timedelta(minutes=30)
@@ -84,8 +86,13 @@ class Settings:
     fallback_heats_disabled: bool = True
     readback_tolerance: float = 1.0  # a heater may round what it was sent
     frost_margin: float = 1.0        # frost guard ends this far above safe_setpoint
-    stuck_after: timedelta = timedelta(minutes=30)   # low drive this long and the room
-    stuck_rise: float = 0.5          # still this much warmer: the heaters are switched off
+    prop_gain: float = 1.0           # setpoint above target + trim per °C the room is below
+    trim_gain: float = 0.5           # trim change per °C of room error ...
+    trim_interval: timedelta = timedelta(minutes=15)   # ... per interval
+    trim_limit: float = 10.0         # the heaters' sensors are at most this far off
+    trim_band: float = 1.0           # the trim learns only this close to the target
+    hold_band: float = 0.5           # no push this close to the target
+    big_change: float = 2.0          # a setpoint moving this much does not wait min_dwell
     unconfirmed_after: int = 3       # sends without read-back before the status says so
 
 
@@ -128,6 +135,7 @@ class Heater:
     step: float | None = None
     enabled: bool = True             # False: switched off in Villa Kuppis
     name: str = ""                   # friendly name for reasons; entity_id if empty
+    current: float | None = None     # the heater's own temperature reading
 
     @property
     def label(self) -> str:
@@ -154,9 +162,9 @@ class RoomMemory:
     manual_by: str | None = None
     frost: bool = False              # frost guard on
     heaters: dict = field(default_factory=dict)
-    low_room: float | None = None    # the lowest room reading in this low drive
-    low_off: bool = False            # the room warmed at low drive: heaters off
-    stuck: bool = False              # it has: later low drives switch them off at once
+    trim: float | None = None        # heaters' own sensors minus the room sensor, learned
+    trim_at: datetime | None = None
+    setpoint: float | None = None    # the follow setpoint last chosen
 
 
 @dataclass(frozen=True)
@@ -383,7 +391,7 @@ def decide(now: datetime, target: Target | None, sensor: Sensor | None,
     if changed is not None:
         memory.manual_until = now + settings.manual_hold
         memory.manual_by = changed
-        memory.drive = memory.drive_since = None
+        memory.drive = memory.drive_since = memory.setpoint = None
     ok, why = sensor_valid(sensor, now, settings)
     room = sensor.value if ok else None
 
@@ -409,7 +417,7 @@ def decide(now: datetime, target: Target | None, sensor: Sensor | None,
     memory.manual_until = memory.manual_by = None
 
     if target is None or now >= target.valid_until:
-        memory.drive = memory.drive_since = None
+        memory.drive = memory.drive_since = memory.setpoint = None
         reason = "Villa Kuppis ei ole antanut tavoitetta" if target is None else "tavoite vanheni"
         heat_all = settings.fallback_heats_disabled
         frost = _frost(ok, room, memory, settings)
@@ -423,37 +431,53 @@ def decide(now: datetime, target: Target | None, sensor: Sensor | None,
     value = min(max(target.value_at(now), settings.safe_setpoint), settings.max_target)
     frost = _frost(ok, room, memory, settings)
     if not ok:
-        memory.drive = memory.drive_since = None
-        cmds = _commands(heaters, value, memory, settings, now)
+        memory.drive = memory.drive_since = memory.setpoint = None
+        # The heaters' own thermostats, corrected by what follow mode learned.
+        cmds = _commands(heaters, value + (memory.trim or 0.0), memory, settings, now)
         cmds += _disabled_commands(heaters, frost, memory, settings, now)
         return _decision("thermostat", why, value, None, cmds, heaters, memory, settings, frost)
 
-    if room < value - settings.hysteresis:
-        want = "high"
-    elif room > value + settings.hysteresis:
-        want = "low"
-    else:
-        want = memory.drive or ("high" if room < value else "low")
-    if (memory.drive is not None and want != memory.drive
-            and now - memory.drive_since < settings.min_dwell):
-        want = memory.drive
-    if want != memory.drive:
-        memory.drive, memory.drive_since = want, now
-        memory.low_room, memory.low_off = None, False
-    reason = f"huone {room:g} °C, tavoite {value:g} °C"
-    if want == "low":
-        memory.low_room = room if memory.low_room is None else min(memory.low_room, room)
-        if (not memory.low_off and now - memory.drive_since >= settings.stuck_after
-                and room >= memory.low_room + settings.stuck_rise):
-            memory.low_off = memory.stuck = True
-        elif memory.stuck:
-            memory.low_off = True
-    if memory.low_off:
-        cmds = _off_commands(heaters, memory, settings, now, include_enabled=True)
-        reason += (f"; huone lämpeni {settings.low_setpoint:g} °C:n asetuksesta huolimatta,"
-                   " patterit sammutettu")
-    else:
-        desired = value + settings.boost if want == "high" else settings.low_setpoint
-        cmds = _commands(heaters, desired, memory, settings, now)
+    desired, drive = _follow_setpoint(value, room, heaters, memory, settings, now)
+    cmds = _commands(heaters, desired, memory, settings, now)
     cmds += _disabled_commands(heaters, frost, memory, settings, now)
-    return _decision("follow", reason, value, want, cmds, heaters, memory, settings, frost)
+    return _decision("follow", f"huone {room:g} °C, tavoite {value:g} °C", value, drive, cmds,
+                     heaters, memory, settings, frost)
+
+
+def _follow_setpoint(value: float, room: float, heaters, memory: RoomMemory,
+                     settings: Settings, now: datetime) -> tuple[float, str]:
+    """The heaters' setpoint in follow mode and the drive shown in the
+    status: "high" heating the room up, "low" letting it cool, "hold"."""
+    error = value - room
+    owns = [h.current for h in heaters if h.enabled and h.available and h.current is not None]
+    if memory.trim is None and (owns or any(h.enabled and h.available for h in heaters)):
+        # Start from the gap the heaters report now; a heater without its own
+        # reading starts from no gap and the room sensor corrects it.
+        memory.trim = sum(owns) / len(owns) - room if owns else 0.0
+        memory.trim_at = now
+    elif memory.trim is not None and now - memory.trim_at >= settings.trim_interval:
+        # Only near the target: far off, the heaters run flat out or not
+        # at all whatever the trim, and it would wind up.
+        if abs(error) <= settings.trim_band:
+            memory.trim += settings.trim_gain * error
+        memory.trim_at = now
+    if memory.trim is not None:
+        memory.trim = min(max(memory.trim, -settings.trim_limit), settings.trim_limit)
+    trim = memory.trim if memory.trim is not None else 0.0   # no own reading yet
+    # Within hold_band the heaters' own thermostats cycle the room a little;
+    # the setpoint does not chase that.
+    push = 0.0 if abs(error) <= settings.hold_band else settings.prop_gain * error
+    push = min(max(push, -settings.boost), settings.boost)
+    raw = max(value + trim + push, settings.low_setpoint)
+    step = settings.default_step
+    last = memory.setpoint
+    # One and a half steps: a value near a rounding edge does not flap.
+    if last is None or abs(raw - last) >= settings.big_change or (
+            abs(raw - last) >= 1.5 * step
+            and (memory.drive_since is None or now - memory.drive_since >= settings.min_dwell)):
+        memory.setpoint = round(raw / step) * step
+        memory.drive_since = now
+    drive = ("high" if error > settings.hysteresis else
+             "low" if error < -settings.hysteresis else "hold")
+    memory.drive = drive
+    return memory.setpoint, drive

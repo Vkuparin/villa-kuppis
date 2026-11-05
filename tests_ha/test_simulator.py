@@ -75,7 +75,8 @@ async def test_controller_heats_the_stand_in_room(hass, freezer):
     await hass.services.async_call(COTTAGE, "set_target", {
         "room": "large", "target": 18, "revision": 1, "valid_minutes": 1440}, blocking=True)
     await hass.async_block_till_done()
-    assert hass.states.get("climate.sim_mill_large_1").attributes["temperature"] == 21.0
+    # Target 18 + the stand-in Mill's 0.5 °C sensor gap + the full 3 °C push (0.9.0).
+    assert hass.states.get("climate.sim_mill_large_1").attributes["temperature"] == 21.5
     assert hass.states.get("climate.sim_mill_large_1").attributes["hvac_action"] == "heating"
     await run(hass, freezer, 12 * 60)
     room = float(hass.states.get("sensor.sim_alpstuga_large_temperature").state)
@@ -113,7 +114,7 @@ async def test_dropouts(hass, freezer):
         "available": True}, blocking=True)
     await run(hass, freezer, 2)
     assert hass.states.get("sensor.villa_kuppis_large_target").attributes["mode"] == "follow"
-    assert hass.states.get("climate.sim_mill_large_2").attributes["temperature"] == 18.0
+    assert hass.states.get("climate.sim_mill_large_2").attributes["temperature"] == 18.5   # 15 + 0.5 gap + 3
 
 
 async def test_hand_change_is_seen_as_manual(hass, freezer):

@@ -168,6 +168,7 @@ def read_heater(entity_id: str, state: State | None, enabled: bool = True) -> co
         entity_id, True, state.state, _float(attrs.get(ATTR_TEMPERATURE)),
         _float(attrs.get("min_temp")), _float(attrs.get("max_temp")),
         _float(attrs.get("target_temp_step")), enabled, name,
+        _float(attrs.get("current_temperature")),
     )
 
 

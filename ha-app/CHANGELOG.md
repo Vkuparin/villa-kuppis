@@ -1,5 +1,10 @@
 # Muutokset
 
+## 0.4.51
+
+- Mökin integraatio 0.9.0 (päivitä install.sh:lla): Mill-patterit saavat nyt oikean asetusarvon 5 °C:n ja 25 °C:n vuorottelun sijaan. Asetusarvo on tavoite plus patterin oman anturin ja ALPSTUGAn ero, joka tarkentuu hitaasti, ja kun huone on tavoitteesta sivussa, enintään 3 °C ylös tai alas. Asetusarvo muuttuu 0,5 °C:n askelin. Jos patteri jättää komennon tekemättä, kuten Kammarin Mill 5.11. yöllä, huone lämpenee enintään muutaman asteen yli tavoitteen eikä 25 °C:seen.
+- Oppiminen ja Historian energia-arvio päättelevät lämmityksen patterin asetusarvosta ja sen omasta lämpötilasta, joten pienet asetusarvot luetaan oikein.
+
 ## 0.4.50
 
 - Vierailulle voi antaa yölämpötilan (Yöllä, oletus 18 °C): saapumisesta lähtien huoneet pidetään siinä yöaikaan (asetukset, oletus klo 22–06) ja muuten tavoitteessa. Tyhjänä tavoite pidetään yölläkin. Huonelämpötila on edelleen ALPSTUGA-anturin.

@@ -79,7 +79,7 @@ class ModelTest(unittest.TestCase):
 class WithControllerTest(unittest.TestCase):
     """The room controller drives the stand-in heaters like real ones."""
 
-    def run_room(self, room, target, hours, outdoor=-10.0):
+    def run_room(self, room, target, hours, outdoor=-10.0, own=True):
         settings = control.Settings()
         memory = control.RoomMemory()
         goal = control.Target(target, 1, START + timedelta(hours=hours + 1))
@@ -88,7 +88,9 @@ class WithControllerTest(unittest.TestCase):
             now = START + timedelta(minutes=minute)
             sensor = control.Sensor(round(room.temperature, 1), now)
             heaters = [control.Heater(h.key, h.available, h.mode, h.setpoint,
-                                      h.min_temp, h.max_temp, h.step) for h in room.heaters]
+                                      h.min_temp, h.max_temp, h.step,
+                                      current=round(room.heater_reading(h), 1) if own else None)
+                       for h in room.heaters]
             decision = control.decide(now, goal, sensor, heaters, memory, settings)
             self.assertNotEqual(decision.mode, "manual")
             for cmd in decision.commands:
@@ -112,6 +114,11 @@ class WithControllerTest(unittest.TestCase):
         temps = self.run_room(small_room(temperature=3.0), 5.0, 12)
         self.assertGreater(min(temps[-6 * 60:]), 4.4)
         self.assertLess(max(temps[-6 * 60:]), 6.0)
+
+    def test_heaters_without_their_own_reading_still_reach_the_target(self):
+        temps = self.run_room(large_room(), 21.0, 18, own=False)
+        self.assertAlmostEqual(min(temps[-6 * 60:]), 21.0, delta=0.6)
+        self.assertAlmostEqual(max(temps[-6 * 60:]), 21.0, delta=0.6)
 
 
 if __name__ == "__main__":

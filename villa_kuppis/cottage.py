@@ -122,22 +122,27 @@ def _heater_state(row: tuple | None, ts: int, room_c: float | None,
     Their own sensor reads lower than the ALPSTUGA while heating (2.5 °C on
     4.11.2026), so a Mill set to 5 °C in a room the ALPSTUGA calls 6 °C may
     well heat. ``idle``: in heat mode, set at least the deadband below its
-    own reading, so it does not heat (the low drive). ``on``: in heat mode,
-    set at or above the target in force and the deadband above its own
-    reading, so it heats. A heater cycling around its setpoint (the
-    fallback, a thermostat hold) is unknown. The room temperature itself
-    always comes from the room sensor.
+    own reading, so it does not heat. ``on``: in heat mode, set at least
+    the deadband above its own reading, so it heats (since integration
+    0.9.0 the setpoint is the target corrected for that sensor, not a
+    25 °C high drive). A row without the heater's own reading counts as
+    on only when set at or above the target in force. A heater cycling
+    around its setpoint (holding the room, the fallback) is unknown. The
+    room temperature itself always comes from the room sensor.
     """
     if row is None or ts - row[0] > learning.MAX_READING_AGE:
         return None
     _ts, mode, setpoint, *rest = row
-    own = rest[0] if rest and rest[0] is not None else room_c
+    own_known = bool(rest) and rest[0] is not None
+    own = rest[0] if own_known else room_c
     if mode == "off":
         return "off"
     if mode != "heat" or setpoint is None:
         return None
     if own is not None and setpoint <= own - learning.DEADBAND_C:
         return "idle"
+    if own_known:
+        return "on" if setpoint >= own + learning.DEADBAND_C else None
     if (target is not None and setpoint >= target - learning.DEADBAND_C
             and (own is None or setpoint >= own + learning.DEADBAND_C)):
         return "on"
