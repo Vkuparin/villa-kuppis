@@ -57,7 +57,8 @@ from .heat_optimizer import HeatLimits, optimize_heating
 from .planning import Period, plan_day
 from .prices import INTERVAL_SECONDS
 from .storage import PriceStore
-from .visit import VisitPlan, VisitStore, plan_start, visit_target
+from .visit import (DEFAULT_NIGHT, VisitPlan, VisitStore, hold_factor, lead_hours, plan_start,
+                    visit_target)
 
 SITE = "cottage"
 HELSINKI = ZoneInfo("Europe/Helsinki")
@@ -74,6 +75,17 @@ RELEASE_MINUTES = 1
 # A visit heat-up is planned as if the heaters warmed the room this much
 # slower than learned: an early warm room costs a little, a cold arrival more.
 VISIT_HEAT_MARGIN = 0.7
+# The fixed visit lead is chosen by the forecast this long before the arrival.
+VISIT_OUTDOOR_BEFORE = timedelta(hours=6)
+
+
+def visit_night(overrides: Mapping) -> tuple[str, str]:
+    """The visit's night hours (Helsinki time) from the cottage settings."""
+    values = app_settings.resolve(overrides, SITE)
+    try:
+        return (values["visit_night_start"]["value"], values["visit_night_end"]["value"])
+    except KeyError:
+        return DEFAULT_NIGHT
 
 
 @dataclass(frozen=True)
@@ -240,24 +252,25 @@ class CottageTargetSender:
         if visit is None:
             self.visit_plan = None
             return out
+        night = visit_night(overrides)
         if visit.heat_start is not None:
             plan = VisitPlan(visit.heat_start, "started", None)
         else:
-            plan = plan_start(visit.arrival, periods, now)
+            outdoor = self._outdoor_at(visit.arrival - VISIT_OUTDOOR_BEFORE)
+            plan = plan_start(visit.arrival, periods, now, lead_hours=lead_hours(outdoor),
+                              hold=hold_factor(visit.arrival_target(night), outdoor))
             if now >= plan.start:
                 self._visits.mark_started(visit.visit_id, now)
                 plan = VisitPlan(now, "started", None)
         self.visit_plan = plan
         economic = {room: list(steps) for room, steps in out.items()}
-        learned = self._optimize_visit(out, visit, plan, overrides, periods, now, extra)
+        learned = self._optimize_visit(out, visit, plan, overrides, periods, now, extra, night)
         for room, steps in out.items():
             if room in learned:
                 continue
             for i, target in enumerate(steps):
                 # A later period heats when the heat-up starts during it.
-                at = now if i == 0 else datetime.fromtimestamp(
-                    target.period_ts + INTERVAL_SECONDS - 1, now.tzinfo)
-                value = visit_target(visit, room, at, plan)
+                value = visit_target(visit, room, self._period_at(now, i, target), plan, night)
                 if value is not None:
                     steps[i] = RoomTarget(room, target.period_ts, value, target.price_c_kwh, "visit")
         if visit.departure is not None:
@@ -267,6 +280,26 @@ class CottageTargetSender:
                 out[room] = [economic[room][i] if t.period_ts >= departure and t.reason == "visit"
                              else t for i, t in enumerate(steps)]
         return out
+
+    @staticmethod
+    def _period_at(now: datetime, i: int, target: RoomTarget) -> datetime:
+        """The moment a plan step stands for: now for the current period,
+        the last second of a later one."""
+        if i == 0:
+            return now
+        return datetime.fromtimestamp(target.period_ts + INTERVAL_SECONDS - 1, now.tzinfo)
+
+    def _outdoor_at(self, at: datetime) -> float | None:
+        """The outdoor forecast at ``at``, or None when there is none."""
+        if self._models is None:
+            return None
+        try:
+            _models, outdoor = self._models()
+            ts = int(at.timestamp())
+            value = outdoor.at(ts)
+            return value if value is not None else outdoor.last_before(ts)
+        except Exception:     # no forecast: the fixed lead without it
+            return None
 
     def _humidity_guard(self, out: dict[str, list[RoomTarget]], overrides: Mapping) -> None:
         """Setting humidity_heat: a room over the humidity limit is kept at
@@ -322,10 +355,11 @@ class CottageTargetSender:
 
     def _optimize_visit(self, out: dict[str, list[RoomTarget]], visit, plan: VisitPlan,
                         overrides: Mapping, periods: Sequence[Period], now: datetime,
-                        extra: float = 0.0) -> set:
+                        extra: float = 0.0, night: tuple[str, str] | None = None) -> set:
         """Heat-ups of learned rooms planned to reach the target at arrival
         (card F5.3); returns the rooms it set. The baseline is the fixed-lead
-        visit plan, so the result never costs more than it."""
+        visit plan, so the result never costs more than it. From the
+        arrival on the room follows the visit's day and night targets."""
         arrival = int(visit.arrival.timestamp())
         now_ts = int(now.timestamp())
         if self._models is None or visit.ended_at is not None or now_ts >= arrival:
@@ -338,14 +372,15 @@ class CottageTargetSender:
             return set()   # the arrival is past the known prices
         fixed = plan_day(ahead, app_settings.plan_settings(overrides, SITE, rooms))
         start_ts = int(plan.start.timestamp())
+        goal = visit.arrival_target(night)
         models = outdoor = temps = None
         done = set()
         for room in rooms:
             values = app_settings.resolve(overrides, SITE, room)
-            base = [visit.target_c if p.ts_utc >= start_ts else float(r.temperature_c)
+            base = [goal if p.ts_utc >= start_ts else float(r.temperature_c)
                     for p, r in zip(ahead, fixed[room])]
             limits = heat_limits(values)
-            key = ("visit", ahead[0].ts_utc, len(ahead), arrival, visit.target_c,
+            key = ("visit", ahead[0].ts_utc, len(ahead), arrival, goal,
                    limits, tuple(base), extra)
             cached = self._optimized.get(("visit", room))
             if cached is None or cached[0] != key:
@@ -357,12 +392,16 @@ class CottageTargetSender:
                     model = replace(model, heat_c_per_h=model.heat_c_per_h * VISIT_HEAT_MARGIN)
                 result = None if model is None else optimize_heating(
                     model, temps.get(room), [(p.ts_utc, float(p.price_c_kwh) + extra) for p in ahead],
-                    outdoor, limits, base, visit=(arrival, visit.target_c))
+                    outdoor, limits, base, visit=(arrival, goal))
                 cached = self._optimized[("visit", room)] = (key, result)
             result = cached[1]
             if result is not None:
-                out[room] = [RoomTarget(room, t.period_ts, step.target_c, t.price_c_kwh, "visit")
-                             for t, step in zip(out[room], result.steps)]
+                out[room] = [RoomTarget(
+                    room, t.period_ts,
+                    step.target_c if t.period_ts < arrival
+                    else visit.target_at(self._period_at(now, i, t), night),
+                    t.price_c_kwh, "visit")
+                    for i, (t, step) in enumerate(zip(out[room], result.steps))]
                 done.add(room)
         return done
 

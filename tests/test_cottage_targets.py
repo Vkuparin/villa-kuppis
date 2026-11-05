@@ -296,9 +296,10 @@ class TargetTests(IsolatedAsyncioTestCase):
         humidity = {"large": 85.0, "small": 60.0}
         self.sender._room_humidity = lambda: dict(humidity)
         lowest = lambda room="large": min(t.target_c for t in self.sender.plans()[room])
+        self.overrides = {"site:cottage": {"humidity_heat": False}}
         plain = [t.target_c for t in self.sender.plans()["large"]]
-        self.assertEqual(min(plain), 5.0)                     # off by default
-        self.overrides = {"site:cottage": {"humidity_heat": True}}
+        self.assertEqual(min(plain), 5.0)                     # switched off
+        self.overrides = {}                                   # on by default
         plans = self.sender.plans()
         self.assertEqual([t.target_c for t in plans["large"]], [max(v, 7.0) for v in plain])
         self.assertEqual({t.reason for t in plans["large"] if t.target_c == 7.0}, {"humidity"})
@@ -457,6 +458,60 @@ class OptimizedTargetTests(unittest.TestCase):
         self.overrides = {"site:cottage": {"heat_price_control": "fixed"}}
         visits.start(self.now + timedelta(hours=20), 20.0, ["large"], "Ville", self.now)
         self.assertNotEqual(self.sender.targets()["large"].reason, "visit")   # 12 h rule: later
+
+    def test_visit_lead_follows_the_outdoor_forecast(self):
+        from villa_kuppis.learning import Outdoor
+        from villa_kuppis.visit import VisitStore
+        visits = VisitStore(Path(self.tmp.name) / "visits.db")
+        self.addCleanup(visits.close)
+        self.sender._visits = visits
+        self.overrides = {"site:cottage": {"heat_price_control": "fixed"}}
+        arrival = self.now + timedelta(hours=20)
+        visits.start(arrival, 20.0, ["large"], "Ville", self.now)
+        forecast = lambda c: Outdoor([(int(self.now.timestamp()) + h * 3600, c)
+                                      for h in range(-1, 30)])
+        self.sender._models = lambda: ({}, forecast(-10.0))
+        self.assertEqual(self.sender.targets()["large"].reason, "visit")   # frost: 24 h lead
+        self.assertEqual(visits.active().heat_start, self.now)             # so at once
+
+    def test_visit_lead_is_shorter_in_mild_weather(self):
+        from villa_kuppis.learning import Outdoor
+        from villa_kuppis.visit import VisitStore
+        visits = VisitStore(Path(self.tmp.name) / "visits.db")
+        self.addCleanup(visits.close)
+        self.sender._visits = visits
+        self.overrides = {"site:cottage": {"heat_price_control": "fixed"}}
+        arrival = self.now + timedelta(hours=20)
+        visits.start(arrival, 20.0, ["large"], "Ville", self.now)
+        self.sender._models = lambda: ({}, Outdoor(
+            [(int(self.now.timestamp()) + h * 3600, 8.0) for h in range(-1, 30)]))
+        self.sender.targets()
+        plan = self.sender.visit_plan
+        self.assertEqual(plan.lead_hours, 8.0)
+        self.assertLessEqual(plan.start, arrival - timedelta(hours=8))
+        self.assertGreaterEqual(plan.start, arrival - timedelta(hours=12))
+
+    def test_visit_rooms_keep_the_night_target_after_the_arrival(self):
+        from villa_kuppis.visit import VisitStore, in_night
+        visits = VisitStore(Path(self.tmp.name) / "visits.db")
+        self.addCleanup(visits.close)
+        self.sender._visits = visits
+        arrival = self.now + timedelta(hours=14)        # 14:01 Helsinki
+        visits.start(arrival, 21.0, ["large", "small"], "Ville", self.now, night_c=18.0)
+        plans = self.sender.plans()
+        night = ("22:00", "06:00")
+        for room in ("large", "small"):     # learned and not learned
+            after = [t for t in plans[room] if t.period_ts >= arrival.timestamp()]
+            self.assertTrue(after)
+            for t in after:
+                end = datetime.fromtimestamp(t.period_ts + INTERVAL_SECONDS - 1, timezone.utc)
+                with self.subTest(room=room, at=end):
+                    self.assertEqual(t.target_c, 18.0 if in_night(end, night) else 21.0)
+            self.assertIn(18.0, [t.target_c for t in after])
+        self.overrides = {"site:cottage": {"visit_night_start": "23:00"}}
+        late = [t for t in self.sender.plans()["small"]
+                if t.period_ts >= self.now.timestamp() + 22 * 3600]
+        self.assertEqual(late[0].target_c, 21.0)        # 22:00-22:15 now day
 
     def test_visit_heat_up_is_planned_with_a_slower_heater(self):
         from villa_kuppis import cottage_targets

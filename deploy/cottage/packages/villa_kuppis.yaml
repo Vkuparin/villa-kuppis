@@ -24,7 +24,7 @@ villa_kuppis_cottage:
   # ALPSTUGA reports on change; the stand-in at least every 5 minutes.
   sensor_max_age_minutes: 30
   # A change made by hand (heater, Google Home, HA UI) pauses the room.
-  manual_hold_minutes: 240
+  manual_hold_minutes: 720
   max_commands_per_hour: 12
   # A heater switched off in Villa Kuppis still holds safe_setpoint in
   # fallback, so a forgotten switch never leaves a room unheated.

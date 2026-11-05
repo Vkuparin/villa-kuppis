@@ -46,7 +46,7 @@ from typing import Callable
 from urllib.parse import urlsplit
 
 from .cottage_targets import ACTOR as PLAN_ACTOR
-from .cottage_targets import CottageTargetSender
+from .cottage_targets import CottageTargetSender, visit_night
 from .credential_file import read_token_file
 from . import learning
 from . import settings as app_settings
@@ -55,7 +55,8 @@ from .ha_gateway import (DEFAULT_ENTITY_STALE_AFTER, Binding, BindingError,
 from .pump_service import (DB_FILENAME, HISTORY_INTERVAL_SECONDS, _iso,
                            _to_epoch)
 from .prices import HELSINKI
-from .visit import MAX_TARGET, MIN_TARGET, VisitError, VisitPlan, VisitStore
+from .visit import (HEATER_DESIGN_DELTA_C, MAX_TARGET, MIN_TARGET, VisitError, VisitPlan,
+                    VisitStore)
 
 SITE_ID = "cottage"
 SITE_LABEL = "Mökki"
@@ -87,6 +88,7 @@ VISIT_ERRORS = (
     ("no active visit", "Vierailua ei ole käynnissä."),
     ("arrival time must be within", "Saapumisaika saa olla enintään 14 päivän päässä."),
     ("target must be", f"Tavoitteen on oltava {MIN_TARGET:g}–{MAX_TARGET:g} °C."),
+    ("night target must be", f"Yölämpötilan on oltava {MIN_TARGET:g}–{MAX_TARGET:g} °C."),
     ("choose at least one room", "Valitse vähintään yksi huone."),
     ("departure must be", "Lähdön on oltava saapumisen jälkeen ja enintään 30 päivän päästä siitä."),
 )
@@ -114,21 +116,30 @@ def _heater_state(row: tuple | None, ts: int, room_c: float | None,
                   target: float | None) -> str | None:
     """off | idle | on for one heater's latest row, None when unknown.
 
-    ``idle``: in heat mode but set at least the deadband below the room,
-    so its own thermostat does not heat (the low drive). ``on``: in heat
-    mode and set at or above the target in force, so it heats while the
-    room is below the target.
+    The Mills report no heating state, so it is worked out from the
+    setpoint against the temperature the heater's own thermostat reads
+    (``own``, the row's value; the room sensor for older rows without it).
+    Their own sensor reads lower than the ALPSTUGA while heating (2.5 °C on
+    4.11.2026), so a Mill set to 5 °C in a room the ALPSTUGA calls 6 °C may
+    well heat. ``idle``: in heat mode, set at least the deadband below its
+    own reading, so it does not heat (the low drive). ``on``: in heat mode,
+    set at or above the target in force and the deadband above its own
+    reading, so it heats. A heater cycling around its setpoint (the
+    fallback, a thermostat hold) is unknown. The room temperature itself
+    always comes from the room sensor.
     """
     if row is None or ts - row[0] > learning.MAX_READING_AGE:
         return None
-    _ts, mode, setpoint = row
+    _ts, mode, setpoint, *rest = row
+    own = rest[0] if rest and rest[0] is not None else room_c
     if mode == "off":
         return "off"
     if mode != "heat" or setpoint is None:
         return None
-    if room_c is not None and setpoint <= room_c - learning.DEADBAND_C:
+    if own is not None and setpoint <= own - learning.DEADBAND_C:
         return "idle"
-    if target is not None and setpoint >= target - learning.DEADBAND_C:
+    if (target is not None and setpoint >= target - learning.DEADBAND_C
+            and (own is None or setpoint >= own + learning.DEADBAND_C)):
         return "on"
     return None
 
@@ -152,10 +163,8 @@ def rated_kw(*names: str | None) -> float | None:
     return None
 
 
-# A room heater is sized to hold about this much over the outdoor temperature
-# at full power (rule of thumb), so holding a room takes (room - outdoor) / 40
-# of it until the room's own rates are learned.
-HEATER_DESIGN_DELTA_C = 40.0
+# Holding a room takes (room - outdoor) / HEATER_DESIGN_DELTA_C of full
+# heating until the room's own rates are learned (see visit.py).
 
 
 def hold_share(room_c: float, outdoor_c: float | None, model=None) -> float | None:
@@ -444,14 +453,14 @@ class CottageStore:
                 "AND ts_utc < ? ORDER BY ts_utc, id",
                 (site_id, *devices, s, e)).fetchall()
         out, room, control = [], None, None
-        last: dict[str, tuple] = {}    # heater -> (ts, mode, setpoint)
+        last: dict[str, tuple] = {}    # heater -> (ts, mode, setpoint, own reading)
         for ts, device, value, mode, setpoint in rows:
             if device == temperature:
                 room = (ts, value)
             elif device == status:
                 control = (ts, value, mode)
             else:
-                last[device] = (ts, mode, setpoint)
+                last[device] = (ts, mode, setpoint, value)
             room_c = room[1] if room and ts - room[0] <= learning.MAX_READING_AGE else None
             target = (control[1] if control and ts - control[0] <= learning.MAX_READING_AGE
                       and control[2] in HEATING_MODES else None)
@@ -469,7 +478,8 @@ class CottageStore:
                         ) -> list[tuple[int, float]]:
         """Estimated (hour start, kWh) of a room's heaters: each heater's
         rated power (``heaters``: device id -> kW) times ``heating_share`` of
-        its setpoint against the room reading, while both are fresh.
+        its setpoint against the temperature its own thermostat reads (the
+        room reading for rows without one), while both are fresh.
         ``hold(ts, room_c)`` gives the share that holds the room then."""
         if not heaters:
             return []
@@ -495,7 +505,8 @@ class CottageStore:
                 row = last.get(device)
                 if (row is not None and t - row[0] <= learning.MAX_READING_AGE
                         and row[1] == "heat" and row[2] is not None):
-                    total += kw * heating_share(row[2], room[1], base)
+                    own = row[3] if row[3] is not None else room[1]
+                    total += kw * heating_share(row[2], own, base)
             return total
 
         def add(a: int, b: int, kw: float) -> None:
@@ -516,7 +527,7 @@ class CottageStore:
             if device == temperature:
                 room = (ts, value)
             elif device is not None:
-                last[device] = (ts, mode, setpoint)
+                last[device] = (ts, mode, setpoint, value)
             prev = ts
         return sorted((hour, round(kwh, 4)) for hour, kwh in hours.items() if kwh > 0)
 
@@ -1001,6 +1012,7 @@ class CottageSite:
         hand = self._store.hand_targets(SITE_ID)
         # A visit started on site has nobody to warn about being late.
         planned = start < visit.arrival
+        goal = visit.arrival_target(self._night()) - VISIT_REACHED_MARGIN
         out = {}
         for room in visit.rooms:
             if room in hand:
@@ -1009,7 +1021,6 @@ class CottageSite:
             if info is None:
                 continue
             item = {**info, "reached": False, "eta": None, "late": False}
-            goal = visit.target_c - VISIT_REACHED_MARGIN
             if info["fresh"] and info["value"] >= goal:
                 item["reached"] = True
             elif info["fresh"] and planned:
@@ -1028,6 +1039,10 @@ class CottageSite:
             out[room] = item
         return out
 
+    def _night(self) -> tuple[str, str]:
+        overrides = self._targets_cfg["overrides"]() if self._targets_cfg else {}
+        return visit_night(overrides)
+
     def visit_view(self) -> dict:
         visit = self._visits.active()
         if visit is None:
@@ -1037,6 +1052,8 @@ class CottageSite:
             plan = VisitPlan(visit.heat_start, "started", None)
         return {
             "visit": {"arrival": visit.arrival.isoformat(), "target": visit.target_c,
+                      "night": visit.night_c, "night_hours": list(self._night()),
+                      "arrival_target": visit.arrival_target(self._night()),
                       "rooms": list(visit.rooms), "created_by": visit.created_by,
                       "heat_start": visit.heat_start.isoformat() if visit.heat_start else None,
                       "departure": visit.departure.isoformat() if visit.departure else None},
@@ -1054,24 +1071,26 @@ class CottageSite:
         out = []
         progress = self._progress(visit, now)
         names = lambda rooms: ", ".join(ROOMS.get(r, r) for r in rooms)
+        goal = visit.arrival_target(self._night())
         heated = [r for r in visit.rooms if r not in self._store.hand_targets(SITE_ID)]
         if progress and len(progress) == len(heated) and all(
                 p["reached"] for p in progress.values()):
             out.append((visit.visit_id, "warm", "Mökki on lämmin",
                         ", ".join(f"{ROOMS.get(r, r)} {deg_text(p['value'])}" for r, p in progress.items())
-                        + f". Tavoite {deg_text(visit.target_c)}."))
+                        + f". Tavoite {deg_text(goal)}."))
         late = [r for r, p in progress.items() if p["late"] and not p["reached"]]
         if late:
             out.append((visit.visit_id, "late", "Mökki ei ehdi lämmetä ajoissa",
                         f"{names(late)}: " + ", ".join(
                             deg_text(progress[r]["value"]) if progress[r]["fresh"] else "ei lukemaa"
                             for r in late)
-                        + f". Tavoite {deg_text(visit.target_c)} saapumiseen "
+                        + f". Tavoite {deg_text(goal)} saapumiseen "
                         + visit.arrival.astimezone(HELSINKI).strftime("%-d.%-m. klo %H.%M")
                         + " mennessä ei ehkä toteudu."))
         if visit.departure is None and now >= visit.arrival + VISIT_LEFT_AFTER:
+            night = "" if visit.night_c is None else f" (yöllä {deg_text(visit.night_c)})"
             out.append((visit.visit_id, "left", "Mökkivierailu on yhä päällä",
-                        f"Huoneet pidetään {deg_text(visit.target_c)} lämmössä. Lopeta vierailu "
+                        f"Huoneet pidetään {deg_text(visit.target_c)}{night} lämmössä. Lopeta vierailu "
                         "Villa Kuppisissa, jos olet jo lähtenyt mökiltä."))
         return out
 
@@ -1103,6 +1122,15 @@ class CottageSite:
             raise VisitError("Tavoitteen on oltava luku.")
         return float(target)
 
+    @classmethod
+    def _visit_night(cls, night) -> float | None:
+        if night in (None, ""):
+            return None
+        try:
+            return cls._visit_target(night)
+        except VisitError:
+            raise VisitError("Yölämpötilan on oltava luku.") from None
+
     @staticmethod
     def _visit_rooms(rooms) -> list:
         if not isinstance(rooms, list) or not all(isinstance(r, str) for r in rooms) \
@@ -1116,15 +1144,19 @@ class CottageSite:
         return VisitError(next((fi for key, fi in VISIT_ERRORS if message.startswith(key)),
                                fallback))
 
-    def start_visit(self, arrival, target, rooms, actor: str, departure=None) -> dict:
+    def start_visit(self, arrival, target, rooms, actor: str, departure=None,
+                    night=None) -> dict:
         """Start a visit from request values; raises ``VisitError`` (Finnish message).
-        An arrival now or earlier (on site, up to a day) heats at once."""
+        An arrival now or earlier (on site, up to a day) heats at once.
+        ``night`` is the night target (None: the target all night)."""
         arrival_dt = self._visit_arrival(arrival)
         departure_dt = self._visit_departure(departure)
         target_c = self._visit_target(target)
+        night_c = self._visit_night(night)
         room_ids = self._visit_rooms(rooms)
         try:
-            self._visits.start(arrival_dt, target_c, room_ids, actor, self._now(), departure_dt)
+            self._visits.start(arrival_dt, target_c, room_ids, actor, self._now(), departure_dt,
+                               night_c)
         except VisitError as error:
             raise self._visit_error(error, "Vierailua ei voitu aloittaa.") from None
         self._clear_hand(room_ids, actor)    # the newest choice wins
@@ -1133,8 +1165,8 @@ class CottageSite:
 
     def update_visit(self, body: dict, actor: str = "web") -> dict:
         """Change the active visit from request values (any of arrival,
-        departure, target, rooms; departure null clears it); raises
-        ``VisitError`` (Finnish message)."""
+        departure, target, night, rooms; departure or night null clears it);
+        raises ``VisitError`` (Finnish message)."""
         changes = {}
         if "arrival" in body:
             changes["arrival"] = self._visit_arrival(body["arrival"])
@@ -1142,6 +1174,8 @@ class CottageSite:
             changes["departure"] = self._visit_departure(body["departure"])
         if "target" in body:
             changes["target_c"] = self._visit_target(body["target"])
+        if "night" in body:
+            changes["night_c"] = self._visit_night(body["night"])
         if "rooms" in body:
             changes["rooms"] = self._visit_rooms(body["rooms"])
         try:
@@ -1149,7 +1183,7 @@ class CottageSite:
         except VisitError as error:
             raise self._visit_error(error, "Vierailua ei voitu muuttaa.") from None
         visit = self._visits.active()
-        if visit is not None and ("target_c" in changes or "rooms" in changes):
+        if visit is not None and changes.keys() & {"target_c", "night_c", "rooms"}:
             self._clear_hand(visit.rooms, actor)   # a new visit target wins
         self._retarget()
         return self.visit_view()
@@ -1383,9 +1417,13 @@ class CottageSite:
                         written += self._store.record(SITE_ID, binding.device_id, ts,
                                                       value=value)[0]
                 elif role == "heater":
+                    # value: what the heater's own thermostat reads (to 0.1 °C),
+                    # for telling when it heats; never the room temperature.
+                    own = _num(state.get("room_temp"))
                     written += self._store.record(
                         SITE_ID, binding.device_id, ts, mode=state.get("mode"),
-                        setpoint=_num(state.get("setpoint")))[0]
+                        setpoint=_num(state.get("setpoint")),
+                        value=round(own, 1) if own is not None else None)[0]
                 elif role == "status":
                     written += self._record_status(binding, state, ts)
             return written
@@ -1711,6 +1749,8 @@ SECTION_HTML = r"""
           <input type="datetime-local" id="visit-departure"></label>
         <label title="Huoneiden tavoitelämpötila vierailun ajaksi. Oletus 21 °C, sallittu 5–25 °C.">Tavoite (°C)
           <input type="number" id="visit-target" value="21" min="5" max="25" step="0.5"></label>
+        <label title="Huoneiden lämpötila vierailun öinä, unta varten (yöaika oletuksena klo 22–06, muutettavissa asetusten Vierailu-kohdassa). Oletus 18 °C, sallittu 5–25 °C. Tyhjänä huoneet pidetään yölläkin tavoitteessa.">Yöllä (°C)
+          <input type="number" id="visit-night" value="18" min="5" max="25" step="0.5"></label>
         <fieldset title="Huoneet, jotka lämmitetään vierailua varten. Oletuksena molemmat.">
           <legend>Huoneet</legend>
           <label><input type="checkbox" id="visit-large" checked> Mökki</label>
@@ -2142,6 +2182,7 @@ function vkHeaterSwitch(heater, onChange) {
   var $vArrival = document.getElementById("visit-arrival");
   var $vDeparture = document.getElementById("visit-departure");
   var $vTarget = document.getElementById("visit-target");
+  var $vNight = document.getElementById("visit-night");
   var $vStart = document.getElementById("visit-start");
   var $vEnd = document.getElementById("visit-end");
   var VISIT_ROOMS = ["large", "small"];
@@ -2151,10 +2192,11 @@ function vkHeaterSwitch(heater, onChange) {
   var VISIT = null;
   var stamp = new Intl.DateTimeFormat("fi-FI", { timeZone: "Europe/Helsinki", weekday: "short",
     day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit" });
-  var HEAT_HELP = "Lämmitykseen oletetaan 12 tuntia, kunnes huoneiden lämpenemisnopeudet on opittu. " +
-    "Aloitus valitaan edullisimmaksi muutaman tunnin ikkunasta tunnettujen hintojen mukaan.";
+  var HEAT_HELP = "Kunnes huoneiden lämpenemisnopeudet on opittu, lämmitykseen oletetaan " +
+    "sääennusteen mukaan 8 tuntia (+5 °C tai lämpimämpi), 12 tuntia (0 °C) tai 24 tuntia " +
+    "(−5 °C tai kylmempi). Aloitus valitaan edullisimmaksi muutaman tunnin ikkunasta tunnettujen hintojen mukaan.";
   var PLAN_HELP = { cheapest: "Edullisin aloitus hintojen mukaan.",
-    fixed: "Aloitus 12 tuntia ennen saapumista (hintoja ei ollut koko ikkunalle).",
+    fixed: "Aloitus sääennusteen mukaisen lämmitysajan verran ennen saapumista (hintoja ei ollut koko ikkunalle).",
     started: "Lämmitys on jo aloitettu." };
   function pad(n) { return n < 10 ? "0" + n : "" + n; }
   // A "datetime-local" value is Helsinki wall-clock time; return an ISO instant.
@@ -2188,13 +2230,14 @@ function vkHeaterSwitch(heater, onChange) {
   }
   // During a visit the form shows it; a field being edited is left alone.
   function fillForm(v) {
-    var key = JSON.stringify([v.arrival, v.departure, v.target, v.rooms]);
+    var key = JSON.stringify([v.arrival, v.departure, v.target, v.night, v.rooms]);
     if (key === shownVisit) return;
     shownVisit = key;
     var focused = document.activeElement;
     if (focused !== $vArrival) $vArrival.value = isoToHelsinki(v.arrival);
     if (focused !== $vDeparture) $vDeparture.value = isoToHelsinki(v.departure);
     if (focused !== $vTarget) $vTarget.value = v.target;
+    if (focused !== $vNight) $vNight.value = v.night === null || v.night === undefined ? "" : v.night;
     VISIT_ROOMS.forEach(function (r) {
       document.getElementById("visit-" + r).checked = v.rooms.indexOf(r) >= 0; });
   }
@@ -2255,8 +2298,9 @@ function vkHeaterSwitch(heater, onChange) {
     var arrival = helsinkiToIso($vArrival.value);
     if (!arrival) { $vMsg.textContent = "Valitse saapumisaika."; return; }
     var departure = $vDeparture.value ? helsinkiToIso($vDeparture.value) : null;
+    var night = parseFloat($vNight.value);
     visitCall("api/visit", { arrival: arrival, target: parseFloat($vTarget.value),
-      rooms: checkedRooms(), departure: departure });
+      rooms: checkedRooms(), departure: departure, night: isNaN(night) ? null : night });
   });
   $vEnd.addEventListener("click", function () { visitCall("api/visit/end", {}); });
   // During a visit a changed field saves itself, once the typing stops.
@@ -2279,6 +2323,9 @@ function vkHeaterSwitch(heater, onChange) {
   $vTarget.addEventListener("change", visitEdit(function () {
     var target = parseFloat($vTarget.value);
     return isNaN(target) ? null : { target: target }; }));
+  $vNight.addEventListener("change", visitEdit(function () {
+    var night = parseFloat($vNight.value);
+    return { night: isNaN(night) ? null : night }; }));
   VISIT_ROOMS.forEach(function (r) {
     document.getElementById("visit-" + r).addEventListener("change",
       visitEdit(function () { return { rooms: checkedRooms() }; }));

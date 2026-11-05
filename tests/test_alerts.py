@@ -168,6 +168,18 @@ class MonitorTests(unittest.TestCase):
         self.service.cottage.heaters["small"] = [heater]
         self.assertEqual(len(self.check(40)), 2)
 
+    def test_heater_switched_off_in_villa_kuppis_is_not_reported(self):
+        heater = {"device_id": "small-heater-1", "label": "Kammari 1000W patteri",
+                  "available": False, "status": "unavailable", "enabled": False}
+        self.service.cottage.heaters["small"] = [heater]
+        self.check()
+        self.assertEqual(self.check(60), [])
+        self.service.cottage.heaters["small"] = [{**heater, "enabled": True}]
+        self.check(1)
+        self.assertEqual(self.check(30), ["Mökki: Kammari: patteri Kammari 1000W patteri ei vastaa"])
+        self.service.cottage.heaters["small"] = [heater]        # switched off: no "vastaa taas"
+        self.assertEqual(len(self.check(10)), 1)
+
     def test_pump_problem_is_reported_after_30_minutes(self):
         self.service.units = [unit(power=None, mode=None, in_error=True)]
         self.check()
@@ -275,6 +287,15 @@ class MonitorTests(unittest.TestCase):
         self.service.cottage.connection = "ok"
         self.check(1)
         self.assertEqual(self.check(15)[2:], [])
+
+    def test_air_reminder_waits_for_the_morning(self):
+        from types import SimpleNamespace
+        self.now = datetime(2026, 1, 10, 20, 30, tzinfo=timezone.utc)   # 22.30 Helsinki
+        self.service.cottage.visit = SimpleNamespace(arrival=self.now - 60 * MINUTE)
+        self.service.cottage.air["large"]["co2"] = 1400
+        self.check()
+        self.assertEqual(self.check(60 * 9 + 20), [])           # 07.50
+        self.assertEqual(self.check(10), ["Tuuleta: Mökki"])    # 08.00, still stale
 
     def test_notice_that_was_not_sent_is_retried(self):
         self.notifier.ok = False

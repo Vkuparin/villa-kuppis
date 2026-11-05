@@ -110,6 +110,15 @@ def _to_epoch(value) -> int:
     return int(dt.timestamp())
 
 
+def _learn_days(site: str) -> int:
+    """Days of history a site's rooms learn from (cottage rooms heat on visits)."""
+    return learning.HEAT_LEARN_DAYS if site == "cottage" else learning.LEARN_DAYS
+
+
+def _held_days(site: str) -> int:
+    return learning.HEAT_MAX_HELD_DAYS if site == "cottage" else learning.MAX_HELD_DAYS
+
+
 def _iso(epoch: int) -> str:
     """unix seconds -> ISO-8601 UTC string (the API's timestamp form)."""
     return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
@@ -1583,7 +1592,7 @@ class PumpService:
             if cached is not None and 0 <= (now - cached[0]).total_seconds() \
                     < ROOM_RATES_CACHE_SECONDS:
                 return cached[1]
-            start = now - timedelta(days=learning.LEARN_DAYS)
+            start = now - timedelta(days=_learn_days(site))
             observed = self.store.outdoor_rows(site, start,
                                                now + timedelta(hours=1))
             ahead = self.store.forecast_rows(
@@ -1681,18 +1690,19 @@ class PumpService:
                     < ROOM_RATES_CACHE_SECONDS:
                 passed = cached[1]
             else:
-                start = now - timedelta(days=learning.LEARN_DAYS)
+                start = now - timedelta(days=_learn_days("cottage"))
                 passed = {}
                 for room in models:
                     _trained, check = learning.validate(
-                        self._learning_readings("cottage", room, start, now), observed, now)
+                        self._learning_readings("cottage", room, start, now), observed, now,
+                        _held_days("cottage"))
                     passed[room] = check is not None and check.passed
                 self._checked_cache = (now, passed)
         return ({room: model for room, model in models.items() if passed.get(room)},
                 future)
 
     def _compute_room_rates(self, site: str, now: datetime) -> dict:
-        start = now - timedelta(days=learning.LEARN_DAYS)
+        start = now - timedelta(days=_learn_days(site))
         models, (outdoor, future), ahead = self.learned_models(site)
         now_ts = _to_epoch(now)
         units = []
@@ -1701,7 +1711,7 @@ class PumpService:
         for subject, name in self._learning_subjects(site):
             readings = self._learning_readings(site, subject, start, now)
             model = models.get(subject) or learning.fit(readings, outdoor)
-            _trained, check = learning.validate(readings, outdoor, now)
+            _trained, check = learning.validate(readings, outdoor, now, _held_days(site))
             if site == "cottage":
                 last = readings[-1] if readings else None
                 room = (last.room_c if last is not None and now_ts - last.ts
@@ -1742,7 +1752,7 @@ class PumpService:
             })
         return {
             "site": site, "updated": _iso(now_ts),
-            "learn_days": learning.LEARN_DAYS, "limit_c": learning.MAX_MAE_C,
+            "learn_days": _learn_days(site), "limit_c": learning.MAX_MAE_C,
             "forecast": [[_iso(ts), v] for ts, v in ahead
                          if now_ts - 3600 < ts < now_ts + 24 * 3600],
             "units": units,

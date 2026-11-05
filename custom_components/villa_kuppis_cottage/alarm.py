@@ -7,8 +7,11 @@ heartbeat has come for ``silent`` (the home server, its Home Assistant or
 the link between the sites is down), this alarm says so once, and a room
 below ``cold_below`` gets a notice from here too. The alarm waits for the
 first heartbeat, so an older Villa Kuppis without heartbeats never sets it
-off. A notice counts as said only once a phone got it (``sent``); until
-then every check offers it again. Pure logic, no Home Assistant imports:
+off. After the cottage Home Assistant starts it waits ``startup_grace``
+for a heartbeat before it calls Villa Kuppis silent (the last heartbeat
+before a long outage of the cottage itself is old). A notice counts as
+said only once a phone got it (``sent``); until then every check offers
+it again. Pure logic, no Home Assistant imports:
 the tests load it by path.
 """
 
@@ -26,6 +29,7 @@ class AlarmSettings:
     cold_below: float = 3.0
     silent: timedelta = timedelta(minutes=60)
     clear_margin: float = 1.0   # a cold room is over this much above the limit
+    startup_grace: timedelta = timedelta(minutes=10)   # two heartbeats after a start
 
 
 def _deg(value: float) -> str:
@@ -36,14 +40,19 @@ def _deg(value: float) -> str:
 class Alarm:
     settings: AlarmSettings = field(default_factory=AlarmSettings)
     heard: datetime | None = None          # the last heartbeat
+    started: datetime | None = None        # when this Home Assistant started
     silent_sent: bool = False
     cold: set[str] = field(default_factory=set)   # rooms with a cold notice out
 
     def heartbeat(self, now: datetime) -> None:
         self.heard = now
 
+    def settling(self, now: datetime) -> bool:
+        return self.started is not None and now - self.started < self.settings.startup_grace
+
     def silent(self, now: datetime) -> bool:
-        return self.heard is not None and now - self.heard > self.settings.silent
+        return (self.heard is not None and now - self.heard > self.settings.silent
+                and not self.settling(now))
 
     def check(self, now: datetime, rooms: dict[str, float | None], safe_setpoint: float,
               plan_until: datetime | None = None) -> list[tuple[str, str, str]]:
@@ -66,7 +75,7 @@ class Alarm:
                         f"Mökin Home Assistant ei ole kuullut Villa Kuppisista {minutes} "
                         f"minuuttiin. {heat} Tarkista kodin palvelin tai mökin "
                         "verkkoyhteys. Tämä ilmoitus tulee mökin Home Assistantista."))
-        elif not silent and self.silent_sent:
+        elif not silent and self.silent_sent and not self.settling(now):
             out.append(("heard", "Mökki: Villa Kuppis vastaa taas",
                         "Yhteys Villa Kuppisiin toimii taas."))
         limit = self.settings.cold_below

@@ -233,7 +233,7 @@ class ManualTests(unittest.TestCase):
         self.assertEqual(sim.decisions[-1][1].effective_target, 24.0)
         self.assertEqual(len(sim.commands), sent_before)
         self.assertEqual(sim.room.heaters[0].setpoint, 24.0)
-        sim.run(4 * 60)
+        sim.run(int(SETTINGS.manual_hold.total_seconds() // 60))
         self.assertEqual(sim.decisions[-1][1].mode, "follow")
         resumed = [at for at, _ in sim.commands[sent_before:]]
         self.assertGreaterEqual(resumed[0] - changed_at, SETTINGS.manual_hold)
@@ -244,7 +244,7 @@ class ManualTests(unittest.TestCase):
         sim.room.heaters[2].mode = "off"
         sim.run(30)
         self.assertEqual(sim.decisions[-1][1].mode, "manual")
-        sim.run(4 * 60)
+        sim.run(int(SETTINGS.manual_hold.total_seconds() // 60))
         self.assertEqual(sim.room.heaters[2].mode, "heat")
 
     def test_own_commands_with_delayed_read_back_are_not_manual(self):
@@ -261,6 +261,42 @@ class ManualTests(unittest.TestCase):
         sim.run(6 * 60)
         self.assertNotIn("manual", sim.modes_since(START))
         self.assertIn(heater.setpoint, (SETTINGS.low_setpoint, 21.0))
+
+
+    def test_hand_change_holds_overnight(self):
+        self.assertGreaterEqual(SETTINGS.manual_hold, timedelta(hours=12))
+
+    def test_heater_back_online_with_a_cached_then_own_setpoint_is_not_manual(self):
+        # 4.11.2026: a Mill plugged in at the cottage showed HA's cached 5 °C,
+        # then its own higher setpoint, and got a 4 h "hand change".
+        sim = Sim(large_room(), target=None)
+        sim.run(10)
+        heater = sim.room.heaters[0]
+        heater.available = False
+        sim.run(30)
+        heater.available = True
+        heater.setpoint = SETTINGS.safe_setpoint   # cached state first
+        sim.run(1)
+        heater.setpoint = 21.0                     # then the Mill's own
+        mark = len(sim.commands)
+        sim.run(5)
+        self.assertNotIn("manual", sim.modes_since(START))
+        self.assertIn((heater.entity_id, SETTINGS.safe_setpoint),
+                      [(c.entity_id, c.value) for _, c in sim.commands[mark:]])
+        self.assertEqual(heater.setpoint, SETTINGS.safe_setpoint)
+
+    def test_hand_change_after_the_reconnect_settle_is_manual(self):
+        sim = Sim(large_room(), target=18.0)
+        sim.run(10)
+        heater = sim.room.heaters[0]
+        heater.available = False
+        sim.run(5)
+        heater.available = True
+        sim.run(int(SETTINGS.reconnect_settle.total_seconds() // 60) + 5)
+        self.assertNotIn("manual", sim.modes_since(START))
+        heater.setpoint = 24.0
+        sim.run(2)
+        self.assertEqual(sim.decisions[-1][1].mode, "manual")
 
 
 class CommandRateTests(unittest.TestCase):
@@ -455,6 +491,23 @@ class CottageAlarmTests(unittest.TestCase):
         self.assertEqual(self.titles(alarm, 70, {"Kammari": 3.5}), [])
         self.assertEqual(self.titles(alarm, 80, {"Kammari": None}), [])
         self.assertEqual(self.titles(alarm, 90, {"Kammari": 4.0}), ["Mökki: Kammari on taas lämpimämpi"])
+
+    def test_no_silence_notice_right_after_the_cottage_starts(self):
+        # 4.11.2026: the cottage HA came back after two days off; the last
+        # heartbeat was old, so the alarm went off 3 s after the start.
+        alarm = cottage_alarm.Alarm()
+        alarm.heartbeat(START - timedelta(days=2))
+        alarm.started = START
+        self.assertEqual(self.titles(alarm, 1, {"Kammari": 2.0}), [])
+        alarm.heartbeat(START + timedelta(minutes=5))
+        self.assertEqual(self.titles(alarm, 11, {"Kammari": 2.0}), [])
+
+    def test_silence_after_the_start_grace_is_still_reported(self):
+        alarm = cottage_alarm.Alarm()
+        alarm.heartbeat(START - timedelta(days=2))
+        alarm.started = START
+        self.assertEqual(self.titles(alarm, 9, {}), [])
+        self.assertEqual(self.titles(alarm, 11, {}), ["Mökki: Villa Kuppis ei vastaa"])
 
     def test_nothing_before_the_first_heartbeat(self):
         alarm = cottage_alarm.Alarm()

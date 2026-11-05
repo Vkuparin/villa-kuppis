@@ -2443,7 +2443,7 @@ class _PumpAppHandler(BaseHTTPRequestHandler):
         try:
             result = cottage.start_visit(body.get("arrival"), body.get("target"),
                                          body.get("rooms"), identity["actor"],
-                                         body.get("departure"))
+                                         body.get("departure"), body.get("night"))
         except VisitError as error:
             self._json(400, {"error": "bad_body", "detail": str(error)})
             return

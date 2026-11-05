@@ -40,7 +40,11 @@ A heater gets at most one command per ``min_command_interval`` and at most
 The integration starts with empty memory after a restart: a stored target
 stays valid until its expiry, and the first report of each heater is the
 baseline for manual detection, so a restart never looks like a manual
-change.
+change. A heater back from unavailable (a power cut, a move, a restart of
+Home Assistant or its Matter server) may first show a cached state and then
+its own: for ``reconnect_settle`` after it returns, any change it reports
+is a new baseline, not a person (a Mill once took 4 h of "hand change" from
+this). The controller then sends it what the room needs.
 """
 
 from __future__ import annotations
@@ -64,7 +68,8 @@ class Settings:
     sensor_max_age: timedelta = timedelta(minutes=30)
     sensor_min: float = -25.0        # plausible indoor range
     sensor_max: float = 40.0
-    manual_hold: timedelta = timedelta(hours=4)
+    manual_hold: timedelta = timedelta(hours=12)   # covers an evening change overnight
+    reconnect_settle: timedelta = timedelta(minutes=5)
     min_command_interval: timedelta = timedelta(seconds=60)
     max_commands_per_hour: int = 12
     confirm_grace: timedelta = timedelta(seconds=120)
@@ -128,6 +133,8 @@ class HeaterMemory:
     sent_at: datetime | None = None
     sends: list = field(default_factory=list)
     unconfirmed: int = 0             # sends in a row the heater did not take
+    away: bool = False               # seen unavailable since the last report
+    settle_until: datetime | None = None   # back from unavailable: changes are a baseline
 
 
 @dataclass
@@ -200,10 +207,19 @@ def _detect_manual(heaters, memory: RoomMemory, settings: Settings, now: datetim
         hm = memory.heaters.setdefault(heater.entity_id, HeaterMemory())
         if not heater.available:
             hm.seen = None   # a heater back from a power cut is a new baseline
+            hm.away = True
             continue
         observed = (heater.mode, heater.setpoint)
         previous, hm.seen = hm.seen, observed
-        if previous is None or previous == observed or not heater.enabled:
+        if previous is None:
+            if hm.away:
+                hm.away = False
+                hm.settle_until = now + settings.reconnect_settle
+            continue
+        if hm.settle_until is not None and now < hm.settle_until:
+            continue         # still catching up after a reconnect
+        hm.settle_until = None
+        if previous == observed or not heater.enabled:
             continue
         mode_ours = heater.mode == previous[0] or heater.mode == hm.sent_mode
         setpoint_ours = (_close(heater.setpoint, previous[1], 1e-6)

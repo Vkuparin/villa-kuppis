@@ -95,7 +95,7 @@ CONFIG_SCHEMA = vol.Schema({
         vol.Optional("hysteresis", default=_DEFAULTS.hysteresis): vol.Coerce(float),
         vol.Optional("min_dwell_minutes", default=10): vol.Coerce(float),
         vol.Optional("sensor_max_age_minutes", default=30): vol.Coerce(float),
-        vol.Optional("manual_hold_minutes", default=240): vol.Coerce(float),
+        vol.Optional("manual_hold_minutes", default=720): vol.Coerce(float),
         vol.Optional("max_commands_per_hour",
                      default=_DEFAULTS.max_commands_per_hour): cv.positive_int,
         vol.Optional("fallback_heats_disabled",
@@ -490,6 +490,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     conf = config[DOMAIN]
     controller = CottageController(hass, conf)
     await controller.async_load()
+    controller.alarm.started = dt_util.utcnow()
     hass.data[DOMAIN] = controller
 
     hass.services.async_register(DOMAIN, "set_target", controller.async_set_target,

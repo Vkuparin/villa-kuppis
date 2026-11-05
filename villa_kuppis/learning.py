@@ -31,7 +31,8 @@ A day that only holds the setpoint says nothing about the unit's power,
 so the held-out period must also show the room changing: at least
 ``MIN_HELD_ACTIVE`` steps of active cooling or heating and
 ``MIN_HELD_PASSIVE`` steps without the unit. Without them on the last day
-the period grows back a day at a time, up to ``MAX_HELD_DAYS``; if it
+the period grows back a day at a time, up to ``MAX_HELD_DAYS`` (cottage
+rooms: ``HEAT_MAX_HELD_DAYS``, learning from ``HEAT_LEARN_DAYS``); if it
 still lacks them the check fails. Points where both the reading and the
 prediction hold the setpoint are left out of the error, so a model is
 judged on the moves it predicts.
@@ -60,6 +61,10 @@ MAX_MAE_C = 1.0              # agreed held-out error (mean absolute, °C)
 MIN_HELD_PASSIVE = 8         # held-out steps without the unit
 MIN_HELD_ACTIVE = 8          # held-out steps of active cooling or heating
 MAX_HELD_DAYS = 7            # the held-out period grows back to this many days
+# Cottage rooms heat only on visits, so a week rarely holds one: they learn
+# from six weeks and hold out up to three (one visit in them is enough).
+HEAT_LEARN_DAYS = 42
+HEAT_MAX_HELD_DAYS = 21
 
 
 @dataclass(frozen=True)
@@ -385,8 +390,8 @@ def _holding(r: Reading, room: float) -> bool:
             and abs(room - r.setpoint_c) <= DEADBAND_C)
 
 
-def validate(readings: Sequence[Reading], outdoor: Outdoor,
-             now: datetime) -> tuple[RoomModel, Validation | None]:
+def validate(readings: Sequence[Reading], outdoor: Outdoor, now: datetime,
+             max_held_days: int = MAX_HELD_DAYS) -> tuple[RoomModel, Validation | None]:
     """Train before the held-out period and predict it.
 
     Returns the training model and the result, or (model, None) when no
@@ -400,7 +405,7 @@ def validate(readings: Sequence[Reading], outdoor: Outdoor,
     s, e = _day_bounds(day)
     days = 1
     passive, active = _moves(everything, outdoor, s, e)
-    while (passive < MIN_HELD_PASSIVE or active < MIN_HELD_ACTIVE) and days < MAX_HELD_DAYS:
+    while (passive < MIN_HELD_PASSIVE or active < MIN_HELD_ACTIVE) and days < max_held_days:
         earlier = _day_bounds(day - timedelta(days=days))[0]
         if earlier <= first_ts:
             break

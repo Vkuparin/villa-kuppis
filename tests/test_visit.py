@@ -12,7 +12,8 @@ from pathlib import Path
 from villa_kuppis.planning import Period
 from villa_kuppis.prices import INTERVAL_SECONDS
 from villa_kuppis.visit import (
-    LEAD_HOURS, VisitError, VisitPlan, VisitStore, plan_start, visit_target,
+    HOLD_FACTOR, LEAD_HOURS, VisitError, VisitPlan, VisitStore, hold_factor, in_night,
+    lead_hours, plan_start, visit_target,
 )
 
 from tests.test_cottage_control import Room, SimHeater, control
@@ -70,12 +71,68 @@ class PlanStartTests(unittest.TestCase):
         self.assertIsNone(visit_target(store_visit, "small", plan.start, plan))
 
 
-class VisitStoreTests(unittest.TestCase):
-    @staticmethod
-    def make_visit():
+class WeatherAndNightTests(unittest.TestCase):
+    def test_lead_grows_with_the_frost(self):
+        self.assertEqual(lead_hours(None), LEAD_HOURS)
+        self.assertEqual(lead_hours(10.0), 8.0)
+        self.assertEqual(lead_hours(5.0), 8.0)
+        self.assertEqual(lead_hours(2.5), 10.0)
+        self.assertEqual(lead_hours(0.0), 12.0)
+        self.assertEqual(lead_hours(-2.5), 18.0)
+        self.assertEqual(lead_hours(-20.0), 24.0)
+
+    def test_holding_a_warm_room_costs_more_in_frost(self):
+        self.assertEqual(hold_factor(21.0, None), HOLD_FACTOR)
+        self.assertEqual(hold_factor(21.0, 6.0), Decimal("0.5"))
+        self.assertEqual(hold_factor(21.0, -9.0), Decimal("1.0"))
+        self.assertEqual(hold_factor(21.0, -30.0), Decimal("1.0"))
+        self.assertEqual(hold_factor(21.0, 25.0), Decimal("0.1"))
+
+    def test_a_cheaper_hold_moves_the_start_earlier_into_cheap_hours(self):
+        fixed = ARRIVAL - timedelta(hours=LEAD_HOURS)
+        prices = with_price(flat_prices(NOW, 48), fixed - timedelta(hours=2), 2, "8")
+        self.assertEqual(plan_start(ARRIVAL, prices, NOW, hold=Decimal("1.0")).start, fixed)
+        self.assertEqual(plan_start(ARRIVAL, prices, NOW, hold=Decimal("0.1")).start,
+                         fixed - timedelta(hours=2))
+
+    def test_night_hours_are_helsinki_time_and_may_pass_midnight(self):
+        night = ("22:00", "06:00")
+        helsinki = lambda h, m=0: datetime(2026, 11, 21, h, m, tzinfo=timezone.utc) \
+            - timedelta(hours=2)
+        self.assertFalse(in_night(helsinki(21, 59), night))
+        self.assertTrue(in_night(helsinki(22), night))
+        self.assertTrue(in_night(helsinki(3), night))
+        self.assertFalse(in_night(helsinki(6), night))
+        self.assertTrue(in_night(helsinki(1), ("00:30", "07:00")))
+        self.assertFalse(in_night(helsinki(3), None))
+        self.assertFalse(in_night(helsinki(3), ("06:00", "06:00")))
+
+    def test_visit_keeps_the_night_target_at_night_after_the_arrival(self):
+        night = ("22:00", "06:00")
         with tempfile.TemporaryDirectory() as tmp:
             store = VisitStore(Path(tmp) / "v.db")
-            visit = store.start(ARRIVAL, 21.0, ["large"], "Ville", NOW)
+            visit = store.start(ARRIVAL, 21.0, ["large"], "Ville", NOW, night_c=18.0)
+            store.close()
+        plan = VisitPlan(ARRIVAL - timedelta(hours=12), "cheapest", None)
+        # The heat-up reaches the target of the arrival (18:00 Helsinki: day).
+        self.assertEqual(visit_target(visit, "large", ARRIVAL - timedelta(hours=7), plan, night),
+                         21.0)
+        self.assertEqual(visit_target(visit, "large", ARRIVAL + timedelta(hours=4), plan, night),
+                         18.0)                                 # 22:00
+        self.assertEqual(visit_target(visit, "large", ARRIVAL + timedelta(hours=12), plan, night),
+                         21.0)                                 # 06:00
+        self.assertEqual(visit_target(visit, "large", ARRIVAL + timedelta(hours=4), plan), 21.0)
+        late = VisitStoreTests.make_visit(ARRIVAL + timedelta(hours=5), night_c=18.0)   # 23:00
+        self.assertEqual(late.arrival_target(night), 18.0)
+        self.assertEqual(visit_target(late, "large", ARRIVAL, plan, night), 18.0)
+
+
+class VisitStoreTests(unittest.TestCase):
+    @staticmethod
+    def make_visit(arrival=ARRIVAL, night_c=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = VisitStore(Path(tmp) / "v.db")
+            visit = store.start(arrival, 21.0, ["large"], "Ville", NOW, night_c=night_c)
             store.close()
         return visit
 
@@ -124,6 +181,18 @@ class VisitStoreTests(unittest.TestCase):
                     departure.replace(tzinfo=None)):
             with self.subTest(departure=bad), self.assertRaises(VisitError):
                 self.store.start(ARRIVAL, 21.0, ["large"], "Ville", NOW, bad)
+
+    def test_night_target_is_stored_changed_and_checked(self):
+        visit = self.store.start(ARRIVAL, 21.0, ["large"], "Ville", NOW, night_c=18.0)
+        self.assertEqual(self.store.active().night_c, 18.0)
+        self.assertEqual(self.store.update(NOW, target_c=22.0).night_c, 18.0)   # kept
+        self.assertEqual(self.store.update(NOW, night_c=17.5).night_c, 17.5)
+        self.assertIsNone(self.store.update(NOW, night_c=None).night_c)
+        self.assertEqual(self.store.active().visit_id, visit.visit_id)
+        with self.assertRaises(VisitError):
+            self.store.start(ARRIVAL, 21.0, ["large"], "Ville", NOW, night_c=30.0)
+        with self.assertRaises(VisitError):
+            self.store.update(NOW, night_c=2.0)
 
     def test_notices_are_remembered_per_visit(self):
         first = self.store.start(ARRIVAL, 21.0, ["large"], "Ville", NOW)
@@ -195,6 +264,8 @@ class VisitStoreTests(unittest.TestCase):
         visit = store.active()
         self.assertEqual(visit.arrival, ARRIVAL)
         self.assertIsNone(visit.departure)
+        self.assertIsNone(visit.night_c)
+        self.assertEqual(store.update(NOW, night_c=18.0).night_c, 18.0)
 
 
 class SimulatedVisitTests(unittest.TestCase):

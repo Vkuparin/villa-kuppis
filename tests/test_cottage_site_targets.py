@@ -220,9 +220,11 @@ class VisitApiTests(unittest.TestCase):
         self.assertEqual(self.call("/api/visit"), (200, {"visit": None, "plan": None}))
         status, body = self.call("/api/visit", {"arrival": self.arrival(3), "target": 21,
                                                 "rooms": ["large", "small"],
-                                                "departure": self.arrival(51)})
+                                                "departure": self.arrival(51), "night": 18})
         self.assertEqual(status, 200)
         self.assertEqual(body["visit"]["target"], 21.0)
+        self.assertEqual(body["visit"]["night"], 18.0)
+        self.assertEqual(body["visit"]["night_hours"], ["22:00", "06:00"])
         self.assertTrue(body["visit"]["departure"])
         self.assertIn("progress", body)
         self.assertTrue(body["visit"]["created_by"])
@@ -232,7 +234,9 @@ class VisitApiTests(unittest.TestCase):
         status, cottage = self.call("/api/cottage")
         rooms = {r["id"]: r for r in cottage["rooms"]}
         self.assertEqual(rooms["small"]["plan"]["reason_text"], "Vierailu")
-        self.assertEqual(rooms["small"]["status"]["requested_target"], 21.0)
+        # 18 when the arrival falls in the night hours
+        self.assertEqual(rooms["small"]["status"]["requested_target"],
+                         body["visit"]["arrival_target"])
         self.assertEqual(rooms["small"]["status"]["mode"], "follow")
         self.assertIsNotNone(rooms["small"]["plan"]["acked_at"])
         self.assertEqual(cottage["air_limits"], {"humidity_pct": 80.0, "co2_ppm": 1200})
@@ -252,6 +256,8 @@ class VisitApiTests(unittest.TestCase):
                 ({"arrival": None}, "puuttuu"),
                 ({"target": 40}, "5–25"),
                 ({"target": "kuuma"}, "luku"),
+                ({"night": 3}, "Yölämpötilan on oltava 5–25"),
+                ({"night": "viileä"}, "Yölämpötilan on oltava luku"),
                 ({"rooms": []}, "vähintään yksi"),
                 ({"rooms": ["sauna"]}, "Tuntematon"),
                 ({"departure": self.arrival(4)}, "saapumisen jälkeen"),
@@ -276,9 +282,15 @@ class VisitApiTests(unittest.TestCase):
         self.assertEqual((body["visit"]["target"], body["visit"]["rooms"]), (22.0, ["large", "small"]))
         status, body = self.call("/api/visit/update", {"departure": None})
         self.assertIsNone(body["visit"]["departure"])
+        self.assertIsNone(body["visit"]["night"])
+        status, body = self.call("/api/visit/update", {"night": 17.5})
+        self.assertEqual((body["visit"]["night"], body["visit"]["target"]), (17.5, 22.0))
+        status, body = self.call("/api/visit/update", {"night": None})
+        self.assertIsNone(body["visit"]["night"])
         for change, text in (({"departure": "huomenna"}, "Lähtöaika"),
                              ({"departure": self.arrival(-0.1)}, "tulevaisuudessa"),
-                             ({"target": 40}, "5–25"), ({"rooms": []}, "vähintään yksi")):
+                             ({"target": 40}, "5–25"), ({"rooms": []}, "vähintään yksi"),
+                             ({"night": 30}, "Yölämpötilan")):
             status, body = self.call("/api/visit/update", change)
             self.assertEqual(status, 400, change)
             self.assertIn(text, body["detail"])
@@ -345,6 +357,7 @@ class PageTests(unittest.TestCase):
         page = render_page(demo=True)
         for text in ("Aloita vierailu", "Lopeta vierailu", "Lämmitys alkaa", "Lämmitys alkoi",
                      "Saapuminen", "Tavoite saavutettu", "12 tuntia", "\"api/visit\"",
+                     "Yöllä (°C)", "id=\"visit-night\"",
                      "Suunniteltu tavoite", "Mökki ei ole vahvistanut tavoitetta"):
             self.assertIn(text, page)
 

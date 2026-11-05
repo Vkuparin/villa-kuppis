@@ -180,6 +180,14 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(check.reason, "few_moves")
         self.assertEqual(check.days, learning.MAX_HELD_DAYS)
 
+    def test_a_cottage_room_holds_out_weeks_back_to_its_last_visit(self):
+        # Cottage rooms heat only on visits: the held-out period may reach
+        # back to the last heat-up eight days ago.
+        readings, out = heated_room(days=18, holding_from=10)
+        _model, check = validate(readings, out, after(18), learning.HEAT_MAX_HELD_DAYS)
+        self.assertTrue(check.passed, check)
+        self.assertGreater(check.days, learning.MAX_HELD_DAYS)
+
     def test_a_wrong_heating_rate_fails_on_a_heat_up(self):
         readings, out = heated_room(days=14, slow_from=13)
         model, check = validate(readings, out, after(14))

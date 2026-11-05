@@ -9,7 +9,8 @@ problem starts, and another when it is over:
   limit does not flap;
 * the cottage Home Assistant unreachable for 30 minutes (``alert_offline``);
 * a cottage room without a fresh temperature reading for an hour, or a
-  cottage heater unavailable for 30 minutes (``alert_device``);
+  cottage heater unavailable for 30 minutes (``alert_device``); a heater
+  switched off in Villa Kuppis is not reported (the cold alert still is);
 * a home pump unavailable or reporting a device error for 30 minutes
   (``alert_pump``, also per pump).
 
@@ -27,7 +28,9 @@ an hour.
 
 A cottage room that has been over the humidity limit for a day gets a
 notice (``alert_humidity``), and during a visit a room over 1200 ppm CO2
-gets a reminder to air it (``alert_co2``, no notice when it is over).
+gets a reminder to air it (``alert_co2``, no notice when it is over). The
+reminder waits over the night (22-08 Helsinki time) and comes in the
+morning if the air is still stale.
 
 Cottage visit notices are sent once per visit (``CottageSite.visit_notices``):
 the rooms are warm (``alert_visit_warm``), a room will not be warm by the
@@ -44,6 +47,7 @@ from datetime import datetime, timedelta, timezone
 
 from . import settings as app_settings
 from .cottage import deg_text, room_label
+from .visit import in_night
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +62,7 @@ HUMIDITY_CLEAR_MARGIN = 5.0    # %-points below the limit
 CO2_LIMIT = 1200
 CO2_CLEAR = 1000
 CO2_AFTER = 600.0
+CO2_QUIET = ("22:00", "08:00")   # Helsinki time: nobody wants to air at night
 VISIT_SETTINGS = {"warm": "alert_visit_warm", "late": "alert_visit_late",
                   "left": "alert_visit_left"}
 PHONE_PREFIX = "mobile_app_"
@@ -207,8 +212,15 @@ class AlertMonitor:
                 if heater.get("available", True) and heater.get("status") not in (
                         "missing", "unavailable"):
                     continue
+                key = f"device:heater:{heater.get('device_id')}"
+                if heater.get("enabled") is False:
+                    # Switched off in Villa Kuppis (unplugged on purpose):
+                    # silent, and an open notice is not ended by it.
+                    if key in self._open:
+                        out.append(self._open[key])
+                    continue
                 name = heater.get("label") or heater.get("device_id")
-                out.append(Problem(f"device:heater:{heater.get('device_id')}", "alert_device",
+                out.append(Problem(key, "alert_device",
                                    "cottage", room["id"],
                                    (f"{label}: patteri {name} ei vastaa",
                                     "Patteri ei ole ollut käytettävissä 30 minuuttiin. "
@@ -317,6 +329,8 @@ class AlertMonitor:
             since = self._since.setdefault(key, now)
             if key in self._open or not enabled(problem):
                 continue
+            if problem.setting == "alert_co2" and in_night(now, CO2_QUIET):
+                continue     # sent in the morning if the air is still stale
             if (now - since).total_seconds() >= problem.after and self._notifier.send(*problem.start):
                 self._open[key] = problem
         for key in [k for k in self._open if k not in current]:

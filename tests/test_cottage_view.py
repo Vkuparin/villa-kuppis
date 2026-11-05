@@ -228,7 +228,7 @@ class StoreTests(unittest.TestCase):
             store.close()
 
     def test_holding_a_cold_room_takes_what_the_heat_loss_needs(self):
-        self.assertAlmostEqual(cottage.hold_share(5.0, -5.0), 0.25)      # 10 °C over outdoor
+        self.assertAlmostEqual(cottage.hold_share(5.0, -5.0), 10 / 30)   # 10 °C over outdoor
         self.assertEqual(cottage.hold_share(5.0, 8.0), 0.0)              # warm outside
         self.assertIsNone(cottage.hold_share(5.0, None))
         learned = learning.RoomModel(True, loss_per_h=0.1, uses_outdoor=True, heat_c_per_h=4.0)
@@ -250,9 +250,37 @@ class StoreTests(unittest.TestCase):
             self.assertAlmostEqual(unknown, 2.6 * 0.4 * 24, places=1)  # no outdoor: as before
             hold = lambda ts, room_c: cottage.hold_share(room_c, -5.0)
             known = sum(k for _, k in store.energy_estimate("cottage", "temp", heaters, *day, hold))
-            # Holding 10.2 °C over the outdoor takes about a quarter of 2.6 kW, and
-            # set 0.2 °C under the room a little less: some 13 kWh a day, not 25.
-            self.assertAlmostEqual(known, 2.6 * 0.255 * 0.8 * 24, places=1)
+            # Holding 10.2 °C over the outdoor takes about a third of 2.6 kW, and
+            # set 0.2 °C under the room a little less: some 17 kWh a day, not 25.
+            self.assertAlmostEqual(known, 2.6 * (10.2 / 30) * 0.8 * 24, places=1)
+            store.close()
+
+    def test_a_mill_is_judged_by_its_own_reading(self):
+        # 4.11.2026: the Mill's own sensor read 2.5 °C under the ALPSTUGA.
+        ts = 1_700_000_000
+        state = cottage._heater_state
+        self.assertEqual(state((ts, "heat", 5.0, 3.8), ts, 6.2, 5.0), "on")
+        self.assertIsNone(state((ts, "heat", 5.0, 5.1), ts, 6.2, 5.0))     # cycling
+        self.assertEqual(state((ts, "heat", 5.0, 7.0), ts, 9.5, 18.0), "idle")
+        self.assertEqual(state((ts, "heat", 21.0, 16.0), ts, 18.5, 18.0), "on")
+        # A row without the heater's own reading falls back to the room.
+        self.assertEqual(state((ts, "heat", 5.0, None), ts, 6.2, 5.0), "idle")
+        self.assertEqual(state((ts, "heat", 5.0), ts, 6.2, 5.0), "idle")
+        with tempfile.TemporaryDirectory() as temp:
+            store = CottageStore(Path(temp) / "pumps.db")
+            t = 1_700_002_800 - 1_700_002_800 % 3600
+            for k in range(0, 24 * 3600, 300):     # fallback: the Mill holds its own 5 °C
+                store.record("cottage", "temp", t + k, value=6.2)
+                store.record("cottage", "h1", t + k, mode="heat", setpoint=5.0,
+                             value=4.9 if k % 600 else 5.1)
+            day = (datetime.fromtimestamp(t, timezone.utc),
+                   datetime.fromtimestamp(t + 24 * 3600, timezone.utc))
+            hold = lambda ts, room_c: cottage.hold_share(room_c, 0.0)
+            kwh = sum(k for _, k in store.energy_estimate("cottage", "temp", {"h1": 1.0},
+                                                          *day, hold))
+            # About the share that holds 6.2 °C at 0 °C outdoors (5 kWh), not ~0
+            # as when the setpoint was read against the ALPSTUGA.
+            self.assertAlmostEqual(kwh, 24 * 6.2 / 30, delta=1.0)
             store.close()
 
 
@@ -440,6 +468,11 @@ class ViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.history("small")["room_temp"][0][1], 7.2)
         with self.assertRaises(ValueError):
             self.site.history("garage", self.clock(), self.clock(), 10)
+        # The heater row keeps what its own thermostat reads, never as the room.
+        own = self.site._store.series("cottage", "large-heater-1", "value",
+                                      self.clock() - timedelta(hours=1), self.clock()
+                                      + timedelta(seconds=1), 10)
+        self.assertEqual([v for _, v in own], [22.5, 22.5])
 
     async def test_mode_changes_become_events_with_the_right_actor(self):
         self.site.sample()
