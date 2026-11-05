@@ -572,7 +572,7 @@ def _follow_setpoint(value: float, room: float, heaters, memory: RoomMemory,
     if last is None or abs(raw - last) >= settings.big_change or (
             abs(raw - last) >= max(settings.setpoint_deadband, 0.75 * step)
             and (memory.drive_since is None or now - memory.drive_since >= settings.min_dwell)):
-        memory.setpoint = round(raw / step) * step
+        memory.setpoint = round(round(raw / step) * step, 2)
         memory.drive_since = now
     drive = ("high" if error > settings.hysteresis else
              "low" if error < -settings.hysteresis else "hold")
