@@ -4,6 +4,8 @@ The cottage HP MP9 G4 (`cottage-server`) runs Debian 13 with Home Assistant OS a
 
 ## What the integration does
 
+For the Gen 4 heaters' reported-but-unapplied Matter setpoints, see the [Mill cloud and local control investigation](../../docs/cottage-mill.md). No control route has been changed.
+
 Every minute, and whenever a sensor or heater reports, each room is in one of four modes:
 
 | Mode | When | Heaters |
