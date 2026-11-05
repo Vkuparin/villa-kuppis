@@ -40,7 +40,10 @@ whole plan, visit included, until "Palauta automaatio" removes it or a
 visit with the room is started or its target or rooms change (the newest
 choice wins). It is
 sent with ``Automaatio`` off too: a person asked for it, so it is not
-automation.
+automation. So is an active visit: with ``Automaatio`` off its rooms get
+the visit's steps (heat-up and hold until the departure) and the
+fallback for every other step, so the visit heats on time while the rest
+of the plan stays off.
 """
 
 from __future__ import annotations
@@ -94,7 +97,7 @@ class RoomTarget:
     period_ts: int
     target_c: float
     price_c_kwh: Decimal | None
-    reason: str                 # "base" | "threshold" | "noprice" | "optimized" | "visit" | "hand"
+    reason: str                 # "base" | "threshold" | "noprice" | "optimized" | "visit" | "hand" | "off"
 
 
 def current_targets(overrides: Mapping, periods: Sequence[Period], rooms: Sequence[str],
@@ -449,14 +452,24 @@ class CottageTargetSender:
     def tick(self) -> list[dict]:
         """Send what is due; returns the commands submitted this tick.
 
-        With ``Automaatio`` off only hand-set targets are sent; the other
-        rooms are released."""
+        With ``Automaatio`` off only hand-set targets and an active visit
+        are sent; the other rooms are released."""
         if not self._automation_on():
             targets = self.preview()
             hand = self._hand()
-            out = self._release(keep=hand)
-            if hand and self._gateway.health()["state"] in ("ok", "stale"):
-                out += self._send({room: targets[room] for room in hand if room in targets})
+            visit = self._visits.active() if self._visits is not None else None
+            rooms = set(hand) | {r for r in (visit.rooms if visit is not None else ())
+                                 if r in targets}
+            for room in rooms - set(hand):
+                # Only the visit's own steps; the rest of the plan stays off.
+                steps = [t if t.reason == "visit" else
+                         RoomTarget(room, t.period_ts, RELEASE_TARGET, None, "off")
+                         for t in self.schedules[room]]
+                self.schedules[room] = steps
+                self.last[room] = targets[room] = steps[0]
+            out = self._release(keep=rooms)
+            if rooms and self._gateway.health()["state"] in ("ok", "stale"):
+                out += self._send({room: targets[room] for room in rooms})
             return out
         if self._gateway.health()["state"] not in ("ok", "stale"):
             return []   # retried on the first tick after the reconnect

@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.56
+
+- Vierailu toimii nyt aina, myös kun mökin Automaatio on pois päältä: vierailun huoneet lämpenevät ajoissa ja pysyvät tavoitteessa lähtöön asti, ja muuten ne ovat turvalämmöllä (ei hintaoptimointia). Muut huoneet pysyvät turvalämmöllä kuten ennenkin.
+
 ## 0.4.55
 
 - Lämpöpumppujen laitekorttien nimet suomeksi Koti-välilehdellä: "Room temperature" on "huonelämpötila", "Outdoor temperature" "ulkolämpötila", "Standby" "valmiustila" ja "Energy consumed (monthly)" "energiankulutus (kuukausi)".

@@ -80,7 +80,7 @@ DEFAULT_TARGET_INTERVAL = 60.0     # price targets are sent at most this often
 VISITS_DB = "visits.db"
 PLAN_REASONS = {"base": "Perustaso", "threshold": "Hintaraja", "noprice": "Ei hintaa",
                 "optimized": "Optimoitu", "visit": "Vierailu", "humidity": "Kosteusvahti",
-                "hand": "Käsin asetettu"}
+                "hand": "Käsin asetettu", "off": "Turvalämpö (Automaatio pois)"}
 VISIT_ERRORS = (
     ("arrival time needs", "Saapumisajalla on oltava aikavyöhyke."),
     ("arrival time must be at most a day ago", "Saapumisaika voi olla enintään vuorokauden takana."),
@@ -1200,7 +1200,7 @@ class CottageSite:
         return self.visit_view()
 
     def _retarget(self) -> None:
-        """After a visit change: send the targets now (Automaatio on), so the
+        """After a visit change: send the targets now, so the
         heat-up or its end does not wait for the next target tick."""
         try:
             self.tick_targets()
@@ -2020,7 +2020,8 @@ function vkHeaterSwitch(heater, onChange) {
       if (plan && plan.acked_at) tip.push("Mökki vahvisti tavoitteen klo " + clock.format(new Date(plan.acked_at)) + ".");
       if (st.valid_until && st.mode !== "fallback" && st.mode !== "manual")
         tip.push("Voimassa klo " + clock.format(new Date(st.valid_until)) + " asti.");
-      if (!AUTOMATION_ON && !room.hand) tip.push("Automaatio on pois päältä, joten tavoitetta ei lähetetä mökille.");
+      var sentOff = room.hand || (plan && (plan.reason === "visit" || plan.reason === "off"));
+      if (!AUTOMATION_ON && !sentOff) tip.push("Automaatio on pois päältä, joten tavoitetta ei lähetetä mökille.");
       tip.push("Napauta asettaaksesi huoneen tavoitteen käsin.");
       var tbtn = el("button", "value tgt-btn" + (ok ? "" : " old"),
         st.target === null ? "–" : temp(st.target), tip.join(" "));
@@ -2032,7 +2033,7 @@ function vkHeaterSwitch(heater, onChange) {
       });
       f1.appendChild(tbtn);
       if (plan && plan.reason_text) f1.appendChild(el("span", "fld-l", plan.reason_text));
-      if (plan && (AUTOMATION_ON || room.hand) && st.target !== null && Math.abs(plan.target - st.target) >= 0.05)
+      if (plan && (AUTOMATION_ON || sentOff) && st.target !== null && Math.abs(plan.target - st.target) >= 0.05)
         f1.appendChild(el("span", "fld-l", "→ " + temp(plan.target),
           "Suunniteltu tavoite tälle jaksolle; mökki saa sen seuraavalla lähetyksellä."));
       side.appendChild(f1);
@@ -2065,7 +2066,7 @@ function vkHeaterSwitch(heater, onChange) {
     if (st) {
       // Only a late acknowledgement is worth a line of its own.
       var acked = plan && plan.acked_at ? new Date(plan.acked_at).getTime() : null;
-      if (plan && (AUTOMATION_ON || room.hand) && room.state === "ok" && (acked === null ?
+      if (plan && (AUTOMATION_ON || sentOff) && room.state === "ok" && (acked === null ?
           Date.now() - PAGE_STARTED > ACK_LATE_MS : Date.now() - acked > ACK_LATE_MS))
         c.appendChild(row("Mökki ei ole vahvistanut tavoitetta", acked === null ? "ei vielä" : when(plan.acked_at), false,
           "Mökin ohjain vahvistaa jokaisen Villa Kuppiksen lähettämän tavoitteen, yleensä vartin välein. " +
@@ -2173,9 +2174,8 @@ function vkHeaterSwitch(heater, onChange) {
     $conn.hidden = data.site.connection === "ok";     // the header already says ok
     $conn.title = data.site.error || "Viimeisin yhteys: " + when(data.site.last_contact);
     var missing = data.site.missing_bindings || [];
-    var anyHand = data.rooms.some(function (r) { return r.hand; });
-    $note.textContent = (AUTOMATION_ON ? "" : "Automaatio on pois päältä: mökille ei lähetetä " +
-      (anyHand ? "muita kuin käsin asetettuja tavoitteita" : "tavoitteita") +
+    $note.textContent = (AUTOMATION_ON ? "" : "Automaatio on pois päältä: mökille lähetetään " +
+      "vain vierailun ja käsin asetetut tavoitteet") +
       ", ja muut patterit siirtyvät turvalämpöön noin minuutin kuluttua. ") +
       (missing.length ? "Home Assistantista puuttuu liitettyjä laitteita: " +
       missing.join(", ") + ". " : "") + alarmNote(data);

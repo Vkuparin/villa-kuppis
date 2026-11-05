@@ -281,6 +281,38 @@ class TargetTests(IsolatedAsyncioTestCase):
         await self.settle(self.sender.tick())
         self.assertNotEqual(self.sender.last["large"].reason, "visit")
 
+    async def test_visit_is_sent_with_automation_off(self):
+        from villa_kuppis.visit import VisitStore
+        visits = VisitStore(Path(self.tmp.name) / "visits.db")
+        self.addCleanup(visits.close)
+        self.sender._visits = visits
+        self.ha.schedules = True
+        await self.settle(self.sender.tick())       # the cottage now keeps schedules
+        self.automation = False
+        arrival = self.clock() + timedelta(hours=14)
+        departure = arrival + timedelta(hours=3)
+        visits.start(arrival, 21.0, ["large"], "Ville", self.clock(), departure)
+        sent = self.sender.tick()
+        await self.settle(sent)
+        latest = {t["room"]: t for t in self.ha.targets[-2:]}
+        # Before the heat-up the visit room is at the fallback, with the
+        # visit in its schedule and the fallback again after the departure.
+        self.assertEqual(latest["large"]["target"], 0.0)
+        targets = [step["target"] for step in latest["large"]["schedule"]]
+        self.assertIn(21.0, targets)
+        self.assertEqual(targets[-1], 0.0)
+        self.assertEqual(set(targets) - {21.0}, {0.0})       # no economic heating
+        self.assertEqual((latest["small"]["target"], latest["small"]["valid_minutes"]), (0.0, 1))
+        self.clock.now = arrival - timedelta(hours=12)
+        await self.settle(self.sender.tick())
+        self.assertEqual((self.ha.targets[-1]["room"], self.ha.targets[-1]["target"]), ("large", 21.0))
+        self.assertEqual(self.sender.last["large"].reason, "visit")
+        # Ending the visit releases the room.
+        visits.end(self.clock())
+        sent = self.sender.tick()
+        self.assertEqual([(c["value"]["room"], c["value"]["target"]) for c in sent],
+                         [("large", 0.0)])
+
     async def test_visit_ends_by_itself_at_the_departure(self):
         from villa_kuppis.visit import VisitStore
         visits = VisitStore(Path(self.tmp.name) / "visits.db")
