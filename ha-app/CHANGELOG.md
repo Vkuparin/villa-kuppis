@@ -1,5 +1,10 @@
 # Muutokset
 
+## 0.4.57
+
+- Korjattu Mökki-sivu: versiossa 0.4.56 sivun skripti kaatui, joten Sisällä-lukemat, yhteys ja huonekortit puuttuivat.
+- Sähkön hintakaaviossa tänään ja huomenna on omat asteikkonsa, joten huomisen piikki ei enää litistä tämän päivän pylväitä.
+
 ## 0.4.56
 
 - Vierailu toimii nyt aina, myös kun mökin Automaatio on pois päältä: vierailun huoneet lämpenevät ajoissa ja pysyvät tavoitteessa lähtöön asti, ja muuten ne ovat turvalämmöllä (ei hintaoptimointia). Muut huoneet pysyvät turvalämmöllä kuten ennenkin.
