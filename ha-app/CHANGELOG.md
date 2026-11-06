@@ -1,5 +1,10 @@
 # Muutokset
 
+## 0.4.58
+
+- Mökin huoneen käsin asetettu tavoite kysyy vahvistuksen (Aseta / Peru), kun liukusäätimen päästää irti, joten vahingossa liikahtanut säädin ei jää pitämään huonetta.
+- Mökin integraatio 0.10.4: yksi liian pieni patteri, joka lämmittää täysillä tavoitteen alapuolella, ei enää kasvata anturikorjausta, eikä tavoitetta lämpimämpää huonetta lämmitetä. Aja mökin install.sh uudelleen.
+
 ## 0.4.57
 
 - Korjattu Mökki-sivu: versiossa 0.4.56 sivun skripti kaatui, joten Sisällä-lukemat, yhteys ja huonekortit puuttuivat.

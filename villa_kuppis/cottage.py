@@ -1795,6 +1795,8 @@ section.cottage[hidden] { display: none; }
   width: fit-content; align-self: flex-start; cursor: pointer; }
 .cot-side button.tgt-btn.old { color: var(--text3); text-decoration: line-through; }
 .heater-sw.tgt-edit { grid-template-columns: minmax(0, 1fr) auto; }
+.heater-sw.tgt-edit .tgt-ask { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.heater-sw.tgt-edit .tgt-ask .hs-msg { flex: 1 1 100%; }
 .heater-sw.tgt-edit input[type=range] { grid-column: 1 / -1; width: 100%; min-height: 28px;
   accent-color: var(--heat); }
 .cot-stats { display: flex; flex-wrap: wrap; gap: .4rem; margin: .2rem 0 .5rem; }
@@ -2118,19 +2120,19 @@ function vkHeaterSwitch(heater, onChange) {
     var label = el("span", "hs-name", "Tavoite käsin",
       "Huone pidetään tässä lämpötilassa, myös käynnissä olevan vierailun ja Automaatio pois " +
       "-tilan aikana, kunnes palautat automaation tai aloitat tai muutat vierailun. " +
-      "Muutos lähtee, kun päästät irti.");
+      "Kun päästät irti, Villa Kuppis kysyy vielä vahvistuksen.");
     var val = el("span", "hs-val", temp(start));
     var r = el("input");
     r.type = "range"; r.min = 5; r.max = 25; r.step = 0.5; r.value = start;
     r.setAttribute("aria-label", "Huoneen " + room.name + " tavoite käsin");
     r.addEventListener("pointerdown", function () { HELD = true; });
     r.addEventListener("input", function () { val.textContent = temp(Number(r.value)); });
-    r.addEventListener("change", function () {
-      HELD = false;
+    var ask = null;
+    function send(value) {
       var msg = el("span", "hs-msg", "Lähetetään…");
       wrap.appendChild(msg);
       fetch("api/cottage/room_target", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ room: room.id, target: Number(r.value) }) })
+        body: JSON.stringify({ room: room.id, target: value }) })
         .then(function (res) { return res.json().then(function (j) { return [res.ok, j]; }); })
         .then(function (res) {
           if (!res[0] || res[1].state === "failed") {
@@ -2141,8 +2143,32 @@ function vkHeaterSwitch(heater, onChange) {
           EDIT_ROOM = null;
           load();
         }).catch(function () { msg.className = "hs-msg err"; msg.textContent = "Yhteys palveluun katkesi."; });
+    }
+    // A hand-set target holds the room until "Palauta automaatio", so a stray
+    // drag on the phone asks once before it is sent. Until then refreshes wait.
+    r.addEventListener("change", function () {
+      if (ask) ask.remove();
+      var value = Number(r.value);
+      ask = el("div", "tgt-ask");
+      ask.appendChild(el("span", "hs-msg", "Asetetaanko " + room.name + " käsin " + temp(value) + "?"));
+      var yes = el("button", "", "Aseta");
+      var no = el("button", "", "Peru");
+      yes.type = no.type = "button";
+      yes.addEventListener("click", function () {
+        HELD = false; ask.remove(); ask = null; send(value);
+      });
+      no.addEventListener("click", function () {
+        HELD = false; ask.remove(); ask = null;
+        r.value = start; val.textContent = temp(start);
+        EDIT_ROOM = null; load();
+      });
+      ask.appendChild(yes);
+      ask.appendChild(no);
+      wrap.appendChild(ask);
+      HELD = true;
+      yes.focus();
     });
-    r.addEventListener("blur", function () { HELD = false; });
+    r.addEventListener("blur", function () { if (!ask) HELD = false; });
     wrap.appendChild(label);
     wrap.appendChild(val);
     wrap.appendChild(r);
