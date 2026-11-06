@@ -29,7 +29,9 @@ Modes, in precedence order:
   heaters' own thermostats hold the room sensor at the target. It learns
   near the target and while a heater's own reading sits at its setpoint
   with the room still off target; not while the heaters run flat out or
-  stay off, where it would only wind up. (The gap is not fixed: a Mill
+  stay off, where it would only wind up. A room more than ``trim_band``
+  over its target never gets a setpoint above the heaters' own reading
+  minus ``hold_window``. (The gap is not fixed: a Mill
   read 0.5 °C under the ALPSTUGA in a cold room and 5 °C under it at
   25 °C.) A setpoint changes by whole steps, at most once per
   ``min_dwell`` unless it moves by ``big_change``. A heater that misses a
@@ -551,8 +553,8 @@ def _follow_setpoint(value: float, room: float, heaters, memory: RoomMemory,
         # Near the target, or while the heaters' own thermostats hold their
         # setpoint and the room stays off target. Not while they run flat
         # out or stay off: whatever the trim, it would only wind up.
-        if abs(error) <= settings.trim_band or (
-                abs(error) <= settings.boost and _holding(heaters, error, room, memory, settings)):
+        if not _saturated(owns, error, memory, settings) and (abs(error) <= settings.trim_band or (
+                abs(error) <= settings.boost and _holding(heaters, error, room, memory, settings))):
             change = settings.trim_gain * error
             memory.trim += min(max(change, -settings.trim_step), settings.trim_step)
         memory.trim_at = now
@@ -564,7 +566,13 @@ def _follow_setpoint(value: float, room: float, heaters, memory: RoomMemory,
     # the setpoint does not chase that.
     push = 0.0 if abs(error) <= settings.hold_band else settings.prop_gain * error
     push = min(max(push, -settings.boost), settings.boost)
-    raw = max(value + trim + push, settings.low_setpoint)
+    raw = value + trim + push
+    if owns and error < -settings.trim_band:
+        # The room is warmer than the target: no heater is told to heat,
+        # whatever the trim says (6.11.2026: a wound-up trim of 7.5 kept
+        # Tienpuoli at 14.5 °C, flat out, in a 9 °C room with an 8 °C target).
+        raw = min(raw, min(owns) - settings.hold_window)
+    raw = max(raw, settings.low_setpoint)
     step = max((h.step or settings.default_step for h in heaters if h.enabled),
                default=settings.default_step)
     last = memory.setpoint
@@ -578,6 +586,20 @@ def _follow_setpoint(value: float, room: float, heaters, memory: RoomMemory,
              "low" if error < -settings.hysteresis else "hold")
     memory.drive = drive
     return memory.setpoint, drive
+
+
+def _saturated(owns, error: float, memory: RoomMemory, settings: Settings) -> bool:
+    """The heaters already run flat out (or stay off) the way the room
+    error asks for, so the trim says nothing about their sensors. A heater
+    too small to reach the target sat flat out 0.5 °C under it all night
+    (5.-6.11.2026) and the trim learned that as a sensor gap of 7.5 °C."""
+    if not owns or memory.setpoint is None:
+        return False
+    if error > 0:
+        return max(owns) < memory.setpoint - settings.hold_window
+    if error < 0:
+        return min(owns) > memory.setpoint + settings.hold_window
+    return False
 
 
 def _holding(heaters, error: float, room: float, memory: RoomMemory, settings: Settings) -> bool:

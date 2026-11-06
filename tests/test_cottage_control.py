@@ -223,6 +223,30 @@ class RealisticSetpointTests(unittest.TestCase):
         self.assertGreater(heater.setpoint, heater.own + 1.0)
         self.assertEqual(sim.decisions[-1][1].drive, "high")
 
+    def test_a_heater_too_small_for_the_target_does_not_wind_up_the_trim(self):
+        # 5.-6.11.2026: Tienpuoli alone (two Mills unplugged) ran flat out all
+        # night 0.5 °C under a 12 °C target; the trim grew to 7.5 and after the
+        # target fell to 8 °C it kept heating a 9 °C room at a 14.5 °C setpoint.
+        room = Room([SimHeater("climate.tienpuoli", 690, step=0.1)], temp=11.0, outdoor=0.0,
+                    ua=60.0, capacity=3.0e6, bias=0.8)
+        sim = Sim(room, target=12.0)
+        sim.run(15 * 60)
+        self.assertAlmostEqual(sim.memory.trim, 0.8, delta=1.0)
+        sim.target = control.Target(8.0, 2, sim.now + timedelta(hours=48))
+        drop = sim.now
+        sim.run(10 * 60)
+        heater = room.heaters[0]
+        for at, cmd in sim.commands:
+            if at >= drop and cmd.service == "set_temperature":
+                # While the room is warm, never a setpoint the heater would heat to.
+                temp = next(t for when, _, t in sim.decisions if when >= at)
+                if temp > 8.5:
+                    self.assertLess(cmd.value, temp + room.BIAS, (at, cmd.value, temp))
+        settled = sim.temps_since(drop + timedelta(hours=8))
+        self.assertLess(max(settled), 8.9)
+        self.assertGreater(min(settled), 7.3)
+        self.assertLess(heater.setpoint, 12.0)
+
     def test_the_trim_recovers_from_a_misleading_start(self):
         # 5.11.2026: Kammari had heated to 25 °C, the Mill read 5.5 °C under
         # the ALPSTUGA while the room cooled, and the trim started there.
