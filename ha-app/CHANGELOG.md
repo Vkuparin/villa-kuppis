@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.59
+
+- Huonekortti ei enää näytä "Tiedot vanhentuneet", kun ilmanlaatumittarin muuttumaton lukema (esim. PM2.5 = 0) ei päivity mutta saman laitteen muut lukemat tulevat ajallaan.
+
 ## 0.4.58
 
 - Mökin huoneen käsin asetettu tavoite kysyy vahvistuksen (Aseta / Peru), kun liukusäätimen päästää irti, joten vahingossa liikahtanut säädin ei jää pitämään huonetta.

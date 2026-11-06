@@ -628,6 +628,7 @@ class HomeAssistantGateway:
         self._registry: dict | None = None
         self._registry_error: str | None = None
         self._registry_entities: frozenset = frozenset()
+        self._entity_device: dict[str, str] = {}   # entity -> Home Assistant device
         self._area_labels: dict[str, str] = {}   # home pump entity -> area name
         self._registry_dirty: asyncio.Event | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -736,9 +737,30 @@ class HomeAssistantGateway:
         if not state["available"]:
             return "unavailable"
         seen = _parse_ts(state["source_ts"])
-        if seen is not None and (now - seen).total_seconds() > self._entity_stale_after:
+        if (seen is not None and (now - seen).total_seconds() > self._entity_stale_after
+                and not self._device_heard_locked(state["entity_id"], now)):
             return "stale"
         return "ok"
+
+    def _device_heard_locked(self, entity_id: str, now: datetime) -> bool:
+        """Another entity of the same Home Assistant device reported recently.
+
+        Matter sensors report only on change: an air monitor's PM2.5 can sit
+        at 0 for hours while its temperature keeps arriving, and that held
+        value is still current.
+        """
+        device = self._entity_device.get(entity_id)
+        if device is None:
+            return False
+        for other, raw in self._raw.items():
+            if other == entity_id or self._entity_device.get(other) != device:
+                continue
+            if raw.get("state") in UNAVAILABLE or raw.get("state") is None:
+                continue
+            seen = _seen_at(raw)
+            if seen is not None and (now - seen).total_seconds() <= self._entity_stale_after:
+                return True
+        return False
 
     def raw_states(self) -> dict[str, dict]:
         """The latest Home Assistant state of every entity (entity_id -> state)."""
@@ -1128,6 +1150,9 @@ class HomeAssistantGateway:
         with self._lock:
             self._registry = registry
             self._registry_entities = frozenset(e.get("entity_id") for e in registry["entities"])
+            self._entity_device = {e["entity_id"]: e["device_id"] for e in registry["entities"]
+                                   if isinstance(e.get("entity_id"), str)
+                                   and isinstance(e.get("device_id"), str)}
             self._registry_error = None
             labels = area_labels(registry, self._bindings.values())
             if labels != self._area_labels:

@@ -411,6 +411,35 @@ class SnapshotTests(GatewayTestCase):
         await eventually(lambda: gw.snapshot()["large-target"]["value"] == 6.0)
         self.assertEqual(gw.snapshot()["large-temp"]["status"], "ok")
 
+    async def test_held_value_of_a_reporting_device_is_not_stale(self):
+        # Matter sends a reading only when it changes: an air monitor's PM2.5
+        # stays at 0 for hours while its temperature keeps coming.
+        self.ha.set_state("sensor.monitor_pm2_5", "0.0", {"unit_of_measurement": "µg/m³"},
+                          push=False)
+        self.ha.set_state("sensor.lone_pm2_5", "0.0", {"unit_of_measurement": "µg/m³"},
+                          push=False)
+        self.ha.registry = {"areas": [], "floors": [], "devices": [{"id": "dev-monitor"}],
+                            "entities": [
+                                {"entity_id": "sensor.iso_huone_temperature",
+                                 "device_id": "dev-monitor"},
+                                {"entity_id": "sensor.monitor_pm2_5", "device_id": "dev-monitor"},
+                                {"entity_id": "sensor.lone_pm2_5", "device_id": "dev-other"}]}
+        self.store.bind("home", "large-pm25", "sensor.monitor_pm2_5", "sensor")
+        self.store.bind("home", "lone-pm25", "sensor.lone_pm2_5", "sensor")
+        gw = await self.start_gateway(entity_stale_after=600, site_stale_after=10_000)
+        await eventually(lambda: gw.registry() is not None)
+        self.clock.advance(601)
+        self.assertEqual(gw.snapshot()["large-pm25"]["status"], "stale")
+        self.ha.set_state("sensor.iso_huone_temperature", "5.6",
+                          {"unit_of_measurement": "°C", "device_class": "temperature"})
+        await eventually(lambda: gw.snapshot()["large-temp"]["value"] == 5.6)
+        self.assertEqual(gw.snapshot()["large-pm25"]["status"], "ok")
+        # A device with no fresh entity stays stale.
+        self.assertEqual(gw.snapshot()["lone-pm25"]["status"], "stale")
+        # So does the held value once the whole device goes quiet.
+        self.clock.advance(601)
+        self.assertEqual(gw.snapshot()["large-pm25"]["status"], "stale")
+
 
 class ConnectionTests(GatewayTestCase):
     async def test_wrong_token_is_reported_and_retried_slowly(self):
