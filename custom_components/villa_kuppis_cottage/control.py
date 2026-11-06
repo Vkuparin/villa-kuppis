@@ -486,6 +486,10 @@ def decide(now: datetime, target: Target | None, sensor: Sensor | None,
         memory.manual_until = now + settings.manual_hold
         memory.manual_by = changed
         memory.drive = memory.drive_since = memory.setpoint = None
+        # The trim learned before the hand change goes stale while the person's
+        # setpoint stands (6.11.2026: a wound-up 7.5 came back after the hold);
+        # follow mode starts it again from the heaters' own readings.
+        memory.trim = memory.trim_at = memory.trim_room = None
     ok, why = sensor_valid(sensor, now, settings)
     room = sensor.value if ok else None
 

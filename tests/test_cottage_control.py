@@ -247,6 +247,24 @@ class RealisticSetpointTests(unittest.TestCase):
         self.assertGreater(min(settled), 7.3)
         self.assertLess(heater.setpoint, 12.0)
 
+    def test_a_hand_change_restarts_the_trim(self):
+        now = START
+        memory = control.RoomMemory(trim=7.5, trim_at=now, setpoint=14.5, drive_since=now)
+        target = control.Target(8.0, 1, now + timedelta(days=1))
+        sent = control.Heater("climate.tienpuoli", True, "heat", 14.5, 5.0, 35.0, 0.1, current=9.9)
+        control.decide(now, target, control.Sensor(9.1, now), [sent], memory)
+        by_hand = replace(sent, setpoint=20.0)
+        later = now + timedelta(minutes=5)
+        decision = control.decide(later, target, control.Sensor(9.1, later), [by_hand], memory)
+        self.assertEqual(decision.mode, "manual")
+        self.assertIsNone(memory.trim)
+        after = memory.manual_until + timedelta(minutes=1)
+        decision = control.decide(after, target, control.Sensor(8.4, after),
+                                  [replace(by_hand, current=9.2)], memory)
+        self.assertAlmostEqual(memory.trim, 0.8, places=1)
+        value = next(c.value for c in decision.commands if c.service == "set_temperature")
+        self.assertLess(value, 9.5)
+
     def test_the_trim_recovers_from_a_misleading_start(self):
         # 5.11.2026: Kammari had heated to 25 °C, the Mill read 5.5 °C under
         # the ALPSTUGA while the room cooled, and the trim started there.
