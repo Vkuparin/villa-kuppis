@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.60
+
+- Sähkön hintakaaviossa tänään ja huomenna on taas sama asteikko, joten päivien hintatasot näkyvät suoraan pylväiden korkeuksista.
+
 ## 0.4.59
 
 - Huonekortti ei enää näytä "Tiedot vanhentuneet", kun ilmanlaatumittarin muuttumaton lukema (esim. PM2.5 = 0) ei päivity mutta saman laitteen muut lukemat tulevat ajallaan.
