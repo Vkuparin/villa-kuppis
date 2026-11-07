@@ -40,7 +40,7 @@ class ValidateTest(unittest.TestCase):
         event = validate({"kind": "event", "trigger": {"type": "above", "key": "t", "value": 25},
                           "actions": [{"key": "fan", "action": "power", "value": True}],
                           "only": {"start": "08:00", "end": "22:00"}, "max_price": 10})
-        self.assertEqual((event["trigger"]["value"], event["max_price"]), (25.0, 10.0))
+        self.assertEqual((event["triggers"][0]["value"], event["max_price"]), (25.0, 10.0))
 
     def test_refuses_broken_rules(self):
         for bad in ({"kind": "x"}, {**FESTIVE, "key": ""},
@@ -311,6 +311,166 @@ class EngineTest(unittest.TestCase):
         self.catalog.devices["temp"]["value"] = 25.5
         self.engine.tick()
         self.assertEqual(len(self.catalog.sent), 2)
+
+
+class FlexibleRuleTest(EngineTest):
+    """Several devices, weekdays, conditions, sensor rules and "off after"."""
+
+    def setUp(self):
+        super().setUp()
+        for key in ("plug2", "light"):
+            self.catalog.devices[key] = {"key": key, "available": True, "on": False, "caps": {"power": True}}
+
+    def test_old_single_device_rules_still_load(self):
+        self.store.save_rule("home", None, {**FESTIVE}, self.now)   # stored before keys/triggers
+        self.store.save_rule("home", None, {"kind": "event", "trigger": {"type": "time", "at": "12:00"},
+                                            "actions": [{"key": "plug", "action": "power", "value": True}]},
+                             self.now)
+        loaded = [r["rule"] for r in self.store.rules("home")]
+        self.assertEqual((loaded[0]["keys"], loaded[1]["triggers"][0]["at"]), (["plug"], "12:00"))
+        self.engine.tick()
+        self.assertEqual([c[:3] for c in self.catalog.sent], [("plug", "power", False), ("plug", "power", True)])
+
+    def test_two_plugs_on_weekday_mornings(self):
+        self.add({"kind": "between", "keys": ["plug", "plug2"], "days": [0, 1, 2, 3, 4],
+                  "start": {"type": "time", "at": "07:00"}, "end": {"type": "time", "at": "09:00"}})
+        self.now = local(2026, 11, 20, 7, 5)          # a Friday
+        self.engine.tick()
+        self.assertEqual([c[:3] for c in self.catalog.sent], [("plug", "power", True), ("plug2", "power", True)])
+        self.now = local(2026, 11, 21, 7, 5)          # Saturday: off
+        self.engine.tick()
+        self.assertEqual([c[2] for c in self.catalog.sent[2:]], [False, False])
+
+    def test_one_failed_device_is_retried_alone(self):
+        self.add({"kind": "between", "keys": ["plug", "plug2"],
+                  "start": {"type": "time", "at": "07:00"}, "end": {"type": "time", "at": "09:00"}})
+        self.catalog.devices["plug2"]["available"] = False
+        real = self.catalog.command
+
+        def command(key, action, value, actor):
+            if not self.catalog.devices[key]["available"]:
+                raise ValueError("Laite ei ole saatavilla")
+            return real(key, action, value, actor)
+        self.catalog.command = command
+        self.engine.tick()
+        stored = self.store.rules("home")[0]
+        self.assertEqual((stored["last_result"], stored["last_state"]), ("failed", None))
+        self.catalog.devices["plug2"]["available"] = True
+        self.now += timedelta(minutes=6)
+        self.engine.tick()
+        self.assertEqual([c[0] for c in self.catalog.sent], ["plug", "plug2"])
+        self.assertEqual(self.store.rules("home")[0]["last_state"], 0)
+
+    def test_level_rule_keeps_a_dead_band_and_its_conditions(self):
+        self.add({"kind": "level", "keys": ["plug"], "sensor": "temp", "mode": "below",
+                  "on_at": 18, "off_at": 19, "when": [{"type": "home"}]})
+        self.catalog.states["person.one"] = {"state": "home"}
+        self.catalog.devices["temp"]["value"] = 18.5
+        self.engine.tick()
+        self.assertEqual(self.catalog.sent, [])          # in the band without a state: wait
+        self.catalog.devices["temp"]["value"] = 17.5
+        self.engine.tick()
+        self.catalog.devices["temp"]["value"] = 18.8
+        self.engine.tick()
+        self.assertEqual([c[2] for c in self.catalog.sent], [True])
+        self.catalog.states["person.one"]["state"] = "not_home"   # condition fails: off
+        self.engine.tick()
+        self.catalog.states["person.one"]["state"] = "home"
+        self.catalog.devices["temp"]["value"] = 19.5
+        self.engine.tick()
+        self.assertEqual([c[2] for c in self.catalog.sent], [True, False])
+
+    def test_any_trigger_fires_and_off_after_switches_off(self):
+        self.add({"kind": "event", "triggers": [{"type": "time", "at": "12:00"},
+                                                {"type": "turns_on", "key": "light"}],
+                  "actions": [{"key": "plug", "action": "power", "value": True},
+                              {"key": "plug2", "action": "power", "value": True}],
+                  "off_after": 10, "when": [{"type": "below", "key": "temp", "value": 25}]})
+        self.now = local(2026, 11, 20, 12, 1)
+        self.engine.tick()
+        self.assertEqual(len(self.catalog.sent), 2)
+        self.assertIsNotNone(self.store.rules("home")[0]["off_due"])
+        self.catalog.devices["light"]["on"] = True          # the second trigger restarts the timer
+        self.now += timedelta(minutes=8)
+        self.engine.tick()
+        self.now += timedelta(minutes=8)
+        self.engine.tick()
+        self.assertEqual([c[2] for c in self.catalog.sent], [True, True, True, True])
+        self.auto = False                                  # off-after runs even with Automaatio off
+        self.now += timedelta(minutes=3)
+        self.engine.tick()
+        self.assertEqual([c[:3] for c in self.catalog.sent[4:]], [("plug", "power", False), ("plug2", "power", False)])
+        self.assertIsNone(self.store.rules("home")[0]["off_due"])
+
+    def test_condition_blocks_event(self):
+        self.add({"kind": "event", "triggers": [{"type": "time", "at": "12:00"}],
+                  "actions": [{"key": "plug", "action": "power", "value": True}],
+                  "when": [{"type": "is_on", "key": "light"}]})
+        self.now = local(2026, 11, 20, 12, 1)
+        self.engine.tick()
+        self.assertEqual(self.catalog.sent, [])
+
+    def test_two_close_time_triggers_each_run_once(self):
+        self.add({"kind": "event", "triggers": [{"type": "time", "at": "12:00"}, {"type": "time", "at": "12:10"}],
+                  "actions": [{"key": "plug", "action": "power", "value": True}]})
+        for minute in (1, 5, 11, 15, 20):
+            self.now = local(2026, 11, 20, 12, minute)
+            self.engine.tick()
+        self.assertEqual(len(self.catalog.sent), 2)
+
+    def test_price_trigger_on_crossing(self):
+        self.add({"kind": "event", "triggers": [{"type": "price_below", "value": 3}],
+                  "actions": [{"key": "plug", "action": "power", "value": True}]})
+        cur = int(self.now.timestamp()) // 900 * 900
+        self.prices = [(cur, 5.0)]
+        self.engine.tick()
+        self.prices = [(cur, 2.0)]
+        self.engine.tick()
+        self.engine.tick()
+        self.assertEqual(len(self.catalog.sent), 1)
+
+    def test_validation_of_new_fields(self):
+        for bad in ({"kind": "level", "keys": ["p"], "sensor": "t", "mode": "below", "on_at": 19, "off_at": 18},
+                    {**FESTIVE, "days": []}, {**FESTIVE, "days": [7]},
+                    {**FESTIVE, "keys": [f"k{i}" for i in range(11)]},
+                    {"kind": "event", "triggers": [], "actions": [{"key": "p", "action": "power", "value": True}]},
+                    {"kind": "event", "triggers": [{"type": "leave"}],
+                     "actions": [{"key": "p", "action": "power", "value": True}], "off_after": 0},
+                    {**FESTIVE, "when": [{"type": "above", "key": "t"}]}):
+            with self.assertRaises(RuleError):
+                validate(bad)
+        self.assertNotIn("days", validate({**FESTIVE, "days": list(range(7))}))
+        self.assertEqual(validate({**FESTIVE, "keys": ["a", "a", "b"]})["keys"], ["a", "b"])
+
+    def test_store_adds_new_column_to_an_old_database(self):
+        import sqlite3
+        path = Path(self.tmp.name) / "old.db"
+        conn = sqlite3.connect(path)
+        conn.executescript(rules.SCHEMA)
+        conn.close()
+        DeviceStore(path).close()
+        conn = sqlite3.connect(path)
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(device_rule)")}
+        conn.close()
+        self.assertIn("off_due_utc", cols)
+
+
+class SharedRoomSensorTest(unittest.TestCase):
+    def test_one_sensor_serves_two_pumps(self):
+        from villa_kuppis.devices import DeviceCatalog, FakeDeviceSource
+        with tempfile.TemporaryDirectory() as tmp:
+            store = DeviceStore(Path(tmp) / "pumps.db")
+            catalog = DeviceCatalog("home", FakeDeviceSource("home"), store,
+                                    rooms=lambda: [("olo", "Olohuone"), ("eteinen", "Eteinen"), ("iso", "Iso huone")])
+            key = "demo-sensor.ruokahuone_alpstuga_temperature"
+            for room in ("olo", "eteinen"):
+                catalog.set_room_sensor({"room": room, "key": key})
+            self.assertIsNotNone(catalog.room_temperature("olo"))
+            self.assertEqual(catalog.room_temperature("olo"), catalog.room_temperature("eteinen"))
+            self.assertIsNone(catalog.room_temperature("iso"))
+            self.assertEqual(catalog.room_sensor_names(), {"olo": "Ruokahuone ALPSTUGA lämpötila",
+                                                           "eteinen": "Ruokahuone ALPSTUGA lämpötila"})
+            store.close()
 
 
 class RuleApiTest(unittest.TestCase):

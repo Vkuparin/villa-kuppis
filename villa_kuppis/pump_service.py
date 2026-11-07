@@ -1295,7 +1295,12 @@ class PumpService:
         # Overlay pending slots on the matching units.
         pending_by_unit = self.gateway._pending_snapshot()
         holds = self.automation.holds() if self.automation.enabled else {}
+        try:
+            sensors = self.devices.room_sensor_names("home")
+        except Exception:
+            sensors = {}
         for unit in units:
+            unit["room_sensor"] = sensors.get(unit["id"])
             if unit["id"] in pending_by_unit:
                 unit["pending"] = pending_by_unit[unit["id"]]
             unit["hold_until"] = holds.get(unit["id"])

@@ -1,5 +1,14 @@
 # Muutokset
 
+## 0.4.62
+
+- Säännöt ovat monipuolisemmat: yhteen sääntöön voi liittää useita laitteita (esim. Olohuoneen ja Keittiön pistoke päälle samaan aikaan).
+- Uusi säännön tyyppi "Anturin mukaan": laitteet päälle, kun lukema alittaa tai ylittää rajan, ja pois, kun se palaa (lämmitin, tuuletin, ilmankuivain).
+- "Kun tapahtuu" -sääntöön voi lisätä useita käynnistäjiä ("Tai kun…"), uudet käynnistäjät hinta alle / yli, uusia toimintoja (värilämpötila, asento, nopeus, tavoitelämpötila) ja "Pois päältä taas N min kuluttua".
+- Lisäehdot kaikkiin sääntöihin: viikonpäivät, kellonajat, hintaraja ja "vain kun" (anturi yli/alle, laite päällä/pois, joku kotona / kukaan ei kotona).
+- Säännön voi kopioida pohjaksi uudelle.
+- Sama lämpötila-anturi voi ohjata useaa pumppua (esim. Olohuone ja Eteinen Ruokahuoneen ALPSTUGAn mukaan): anturin tiedoissa on kytkin jokaiselle pumpulle. Pumpun kortissa näkyy, minkä anturin lukema on käytössä.
+
 ## 0.4.61
 
 - Lämpöpumpun "Standby"-kytkin näkyy nimellä "<huone> pumppu" (päällä = pumppu päällä), ei enää "valmiustila".

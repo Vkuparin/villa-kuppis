@@ -555,6 +555,8 @@ button.switch[aria-checked="true"] .track::after { transform: translateX(18px); 
                font-variant-numeric: tabular-nums; line-height: 1; }
 .gauge-num b small { font-size: .9rem; font-weight: 600; color: var(--text3); margin-left: 1px; }
 .gauge-num span { font-size: .72rem; color: var(--text3); margin-top: .3rem; }
+.gauge-num span.g-src { max-width: 76%; text-align: center; line-height: 1.15; overflow: hidden; text-overflow: ellipsis;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .pump-side { display: flex; flex-direction: column; gap: .55rem; min-width: 0; }
 .fld { display: flex; flex-direction: column; gap: .2rem; min-width: 0; }
 .fld-l { font-size: .75rem; color: var(--text3); cursor: help; }
@@ -1051,7 +1053,11 @@ function cardHtml(unit) {
     esc(sub) + "</span></div>" + badge + "</header>" +
     '<div class="pump-main"><div class="gauge" title="Mitattu lämpötila; piste on tavoite.">' +
     vkGauge(unit.room_temp, target, gaugeColor) +
-    '<div class="gauge-num"><b>' + tempText + "</b><span>mitattu</span></div></div>" +
+    '<div class="gauge-num"><b>' + tempText + "</b>" + (unit.room_sensor
+      ? '<span class="g-src" title="Pumppu ohjataan anturin ' + esc(unit.room_sensor) +
+        ' mukaan. Anturin valinta: Laitteet, anturin tiedot.">' +
+        esc(unit.room_sensor.replace(/ lämpötila$/i, "")) + "</span>"
+      : "<span>mitattu</span>") + "</div></div>" +
     '<div class="pump-side">' + power + setpoint + "</div></div>" +
     '<div class="pump-ctl">' + mode + fan + "</div>" +
     holdHtml + pendingHtml + "</article>"

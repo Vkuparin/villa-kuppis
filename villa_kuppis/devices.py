@@ -456,6 +456,10 @@ class DeviceStore:
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.executescript(_SCHEMA + rules_mod.SCHEMA)
+        have = {r[1] for r in self._conn.execute("PRAGMA table_info(device_rule)")}
+        for column, kind in rules_mod.COLUMNS:
+            if column not in have:
+                self._conn.execute(f"ALTER TABLE device_rule ADD COLUMN {column} {kind}")
         self._conn.commit()
 
     # layout
@@ -620,7 +624,7 @@ class DeviceStore:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT id, body, enabled, last_key, last_state, last_run_utc, last_result, "
-                "last_detail FROM device_rule WHERE site_id = ? ORDER BY COALESCE(position, id), id",
+                "last_detail, off_due_utc FROM device_rule WHERE site_id = ? ORDER BY COALESCE(position, id), id",
                 (site_id,)).fetchall()
         return rules_mod.rows_to_rules(rows)
 
@@ -663,6 +667,11 @@ class DeviceStore:
         with self._lock, self._conn:
             self._conn.execute("UPDATE device_rule SET last_state = ? WHERE id = ?",
                                (int(on), rule_id))
+
+    def rule_due(self, rule_id: int, due: str | None) -> None:
+        """When an event rule switches its devices off again (None: not pending)."""
+        with self._lock, self._conn:
+            self._conn.execute("UPDATE device_rule SET off_due_utc = ? WHERE id = ?", (due, rule_id))
 
     def rule_key(self, rule_id: int, key: str) -> None:
         with self._lock, self._conn:
@@ -872,6 +881,20 @@ class DeviceCatalog:
         self._store.set_room_sensor(self.site_id, room, key, self._now())
         return {"ok": True}
 
+    def room_sensor_names(self) -> dict[str, str]:
+        """Room -> the chosen sensor's name, for rooms whose sensor reports now."""
+        chosen = self._store.room_sensors(self.site_id)
+        if not chosen or self._source.health().get("state") != "ok":
+            return {}
+        devices = self.devices_by_key()
+        layout = self._store.layout(self.site_id)[0]
+        out = {}
+        for room, key in chosen.items():
+            d = devices.get(key)
+            if d and d.get("available") and d["kind"] == "temperature" and d.get("value") is not None:
+                out[room] = (layout.get(key) or {}).get("name") or d["ha_name"]
+        return out
+
     def room_temperature(self, room: str) -> float | None:
         """The chosen sensor's reading for a room, while it reports one."""
         key = self._store.room_sensors(self.site_id).get(room)
@@ -1036,6 +1059,10 @@ class DeviceHub:
         catalog = self.catalogs.get(site)
         return None if catalog is None else catalog.room_temperature(room)
 
+    def room_sensor_names(self, site: str) -> dict[str, str]:
+        catalog = self.catalogs.get(site)
+        return {} if catalog is None else catalog.room_sensor_names()
+
     def events(self, limit: int) -> list[dict]:
         pending = self._store.pending_events()
         for catalog in self.catalogs.values():
@@ -1179,7 +1206,7 @@ def _demo_site(site_id: str, ts: str) -> tuple[dict, dict]:
         automations = []
     else:
         areas = [("olohuone", "Olohuone", "1"), ("keittio", "Keittiö", "1"),
-                 ("piha", "Piha", None)]
+                 ("ruokahuone", "Ruokahuone", "1"), ("piha", "Piha", None)]
         devices = [
             ("olohuone", "sensor.olohuone_temperature", "Olohuoneen lämpötila",
              {"device_class": "temperature", "unit_of_measurement": "°C", "base": 22}, "22.0"),
@@ -1190,6 +1217,9 @@ def _demo_site(site_id: str, ts: str) -> tuple[dict, dict]:
               "color_temp_kelvin": 2700, "min_color_temp_kelvin": 2200,
               "max_color_temp_kelvin": 6500}, "on"),
             ("olohuone", "scene.elokuvailta", "Elokuvailta", {}, ts),
+            ("olohuone", "switch.olohuone_pistoke", "Olohuone pistoke", {"device_class": "outlet"}, "off"),
+            ("ruokahuone", "sensor.ruokahuone_alpstuga_temperature", "Ruokahuone ALPSTUGA lämpötila",
+             {"device_class": "temperature", "unit_of_measurement": "°C", "base": 22.5}, "22.5"),
             ("keittio", "switch.kahvinkeitin", "Kahvinkeitin", {"device_class": "outlet"}, "off"),
             ("keittio", "sensor.kahvinkeitin_power", "Kahvinkeittimen teho",
              {"device_class": "power", "unit_of_measurement": "W"}, "0"),

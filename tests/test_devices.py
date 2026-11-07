@@ -165,13 +165,13 @@ class CatalogTest(unittest.TestCase):
     def test_layout_order_hide_and_rename(self):
         view = self.catalog.view()
         names = [a["name"] for a in view["areas"]]
-        self.assertEqual(names, ["Keittiö", "Olohuone", "Piha"])   # floor first, then name
+        self.assertEqual(names, ["Keittiö", "Olohuone", "Ruokahuone", "Piha"])   # floor first, then name
         piha = self.keys(view, "piha")
         self.catalog.layout({"order": list(reversed(piha))})
-        self.catalog.layout({"areas": ["piha", "olohuone", "keittio"]})
+        self.catalog.layout({"areas": ["piha", "olohuone", "keittio", "ruokahuone"]})
         self.catalog.layout({"key": piha[0], "hidden": True, "name": "  Jouluvalot   ulkona "})
         view = self.catalog.view()
-        self.assertEqual([a["id"] for a in view["areas"]], ["piha", "olohuone", "keittio"])
+        self.assertEqual([a["id"] for a in view["areas"]], ["piha", "olohuone", "keittio", "ruokahuone"])
         self.assertEqual(self.keys(view, "piha"), list(reversed(piha)))
         moved = [d for a in view["areas"] for d in a["devices"] if d["key"] == piha[0]][0]
         self.assertTrue(moved["hidden"])
