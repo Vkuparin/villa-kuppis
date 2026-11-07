@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.61
+
+- Lämpöpumpun "Standby"-kytkin näkyy nimellä "<huone> pumppu" (päällä = pumppu päällä), ei enää "valmiustila".
+
 ## 0.4.60
 
 - Sähkön hintakaaviossa tänään ja huomenna on taas sama asteikko, joten päivien hintatasot näkyvät suoraan pylväiden korkeuksista.

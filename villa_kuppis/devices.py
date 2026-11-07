@@ -141,7 +141,7 @@ NAME_TAILS = {
     "heating power": "lämmitysteho", "limited heating": "rajoitettu lämmitys",
     # MELCloud Home (heat pump) entities
     "room temperature": "huonelämpötila", "outdoor temperature": "ulkolämpötila",
-    "standby": "valmiustila", "energy consumed (monthly)": "energiankulutus (kuukausi)",
+    "standby": "pumppu", "energy consumed (monthly)": "energiankulutus (kuukausi)",
     "energy consumed": "energiankulutus", "energy consumed (daily)": "energiankulutus (päivä)",
     "energy consumed (yearly)": "energiankulutus (vuosi)",
     "energy produced": "energiantuotto", "power consumption": "tehonkulutus",
