@@ -25,9 +25,10 @@ means off.
 
 ``between``, ``cheapest`` and ``level`` act only when the wanted state
 changes, so a person's own change holds until the next change point.
-Every rule waits while the site's Automaatio switch is off; only a pending
-"off after" of an event rule still runs, so nothing a rule switched on is
-left on. Sun times come from Home Assistant's ``sun.sun`` entity; presence
+Rules do not follow the site's Automaatio switch, which is only the home
+cooling and cottage heating automation (Ville, 2026-11-08); a rule runs
+while it is enabled. ``automation_on`` stays as a hook for tests. A pending
+"off after" of an event rule runs even after the rule is disabled. Sun times come from Home Assistant's ``sun.sun`` entity; presence
 from its ``person`` entities.
 """
 

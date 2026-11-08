@@ -1211,8 +1211,8 @@ class PumpService:
         from .devices import DeviceHub
         self.devices = DeviceHub(
             self._data_dir, device_sources(self.cottage) if device_sources else {}, now=now,
-            automation_on=lambda site: (self.cottage_automation_on() if site == "cottage"
-                                        else self.automation.automation_on()),
+            # Device rules run whatever Automaatio says: that switch is the
+            # home cooling and cottage heating automation only (Ville, 2026-11-08).
             prices=self.device_prices,
             rooms=lambda site: (list(COTTAGE_ROOMS.items()) if site == "cottage" else
                                 [(u["id"], u["name"]) for u in self.store.unit_states()]))

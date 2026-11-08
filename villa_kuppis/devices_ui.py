@@ -13,7 +13,7 @@ SECTION_HTML = r"""
     <div id="dev-areas" class="dev-areas"></div>
     <div class="panel dev-rules" id="dev-rules" hidden>
       <div class="panel-head">
-        <h2 title="Villa Kuppiksen omat säännöt tämän kohteen laitteille. Ne odottavat, kun Automaatio on pois päältä."><span data-icon="clock"></span>Säännöt</h2>
+        <h2 title="Villa Kuppiksen omat säännöt tämän kohteen laitteille. Ne toimivat aina, kun sääntö on käytössä; Automaatio-kytkin koskee vain jäähdytystä ja mökin lämmitystä."><span data-icon="clock"></span>Säännöt</h2>
         <div class="tools"><button type="button" id="dev-rule-add" class="primary">Uusi sääntö</button></div>
       </div>
       <p id="dev-rules-note" class="detail"></p>
@@ -689,7 +689,6 @@ SCRIPT = r"""
   var RESULT = { confirmed: "tehty", pending: "lähetetty", failed: "epäonnistui", unknown: "ei vahvistusta" };
   function renderRules(list) {
     $rules.hidden = !DATA.registry;
-    $rulesNote.textContent = autoOn() ? "" : "Automaatio on pois päältä: säännöt odottavat, kunnes kytket sen päälle.";
     $rulesList.textContent = "";
     if (!list.length) $rulesList.appendChild(el("p", "detail",
       "Ei sääntöjä. Esimerkiksi pistokkeet päälle arkiaamuisin, jouluvalot auringonlaskusta klo 23:een, " +
@@ -719,10 +718,6 @@ SCRIPT = r"""
       row.appendChild(ed);
       $rulesList.appendChild(row);
     });
-  }
-  function autoOn() {
-    var b = document.getElementById("auto-btn");
-    return !b || b.getAttribute("aria-checked") === "true";
   }
   function select(options, value, label) {
     var s = el("select");

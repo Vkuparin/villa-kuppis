@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.64
+
+- Laitteiden säännöt (esim. jouluvalojen pistokkeet) toimivat aina, kun sääntö on käytössä. Automaatio-kytkin koskee vain kodin jäähdytystä ja mökin lämmitystä.
+
 ## 0.4.63
 
 - Koti-näkymässä jokainen huone on oma korttinsa: oma tausta, reunus ja korostettu otsikko, joten huoneet erottuvat toisistaan. Mökki-sivun huonekortit saivat saman korostetun otsikon ja selvemmän reunan.

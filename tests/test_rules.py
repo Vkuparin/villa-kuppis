@@ -501,6 +501,20 @@ class RuleApiTest(unittest.TestCase):
         with urllib.request.urlopen(self.base + "/api/devices?site=home", timeout=5) as r:
             return json.loads(r.read())["rules"]
 
+    def test_rules_run_with_automaatio_off(self):
+        # Automaatio is cooling (home) and heating (cottage) only: rules still switch devices.
+        self.service.set_automation(False, "test")
+        self.assertFalse(self.service.automation.automation_on())
+        status, saved = self.post({"site": "home", "rule": {
+            "kind": "between", "name": "Jouluvalot", "keys": ["demo-switch.jouluvalot"],
+            "start": {"type": "time", "at": "00:00"}, "end": {"type": "time", "at": "00:00"}}})
+        self.assertEqual(status, 200)
+        sent = self.service.devices.tick_rules()
+        self.assertEqual([(s["key"], s["state"]) for s in sent], [("demo-switch.jouluvalot", "confirmed")])
+        plug = [d for a in self.service.devices.view("home")["areas"] for d in a["devices"]
+                if d["key"] == "demo-switch.jouluvalot"][0]
+        self.assertTrue(plug["on"])
+
     def test_save_toggle_and_delete(self):
         rule = {**FESTIVE, "key": "demo-switch.jouluvalot"}
         status, saved = self.post({"site": "home", "rule": rule})
