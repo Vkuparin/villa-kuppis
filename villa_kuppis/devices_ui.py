@@ -46,12 +46,15 @@ section.devices[hidden] { display: none; }
 #dev-note:not(:empty) { margin: 0; padding: .6rem .8rem; border-radius: 10px;
                         background: var(--surface2); border-left: 3px solid var(--info); }
 .dev-areas { display: flex; flex-direction: column; gap: 1.1rem; }
+.dev-area { padding: .75rem .75rem .85rem; background: var(--surface2); border: 1px solid var(--line);
+            border-radius: 18px; }
 .dev-area-head { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .7rem;
-                 margin-bottom: .55rem; }
-.dev-area-head h3 { margin: 0; font-size: .98rem; letter-spacing: -.01em; }
+                 margin: 0 0 .7rem; padding-left: .65rem; border-left: 4px solid var(--accent); }
+.dev-area-head h3 { margin: 0; font-size: 1.05rem; letter-spacing: -.01em; }
 .dev-area-head .floor { font-size: .78rem; color: var(--text3); font-weight: 500; margin-left: .35rem; }
 .dev-area-head .tools { margin-left: auto; display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
 .dev-area-head .tools button { min-height: 36px; font-size: .84rem; }
+.dev-area.hidden-area { border-style: dashed; }
 .dev-area.hidden-area > .dev-grid, .dev-area.hidden-area h3 { opacity: .45; }
 .dev-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(178px, 1fr)); gap: .75rem; }
 .tile { position: relative; display: flex; flex-direction: column; gap: .3rem; min-height: 132px;

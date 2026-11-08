@@ -1784,6 +1784,8 @@ section.cottage[hidden] { display: none; }
 #cottage-note:empty { display: none; }
 .cottage-rooms { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
                  gap: 1rem; }
+.cottage-rooms .card { border-radius: 18px; border-color: var(--line3); }
+.cottage-rooms .card-head { padding-left: .65rem; border-left: 4px solid var(--accent); }
 .cottage-rooms .card.offline { border-color: var(--err); }
 .cot-main { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: .9rem; align-items: center;
             margin-bottom: .5rem; }

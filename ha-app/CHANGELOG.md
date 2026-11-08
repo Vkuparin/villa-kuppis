@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.63
+
+- Koti-näkymässä jokainen huone on oma korttinsa: oma tausta, reunus ja korostettu otsikko, joten huoneet erottuvat toisistaan. Mökki-sivun huonekortit saivat saman korostetun otsikon ja selvemmän reunan.
+
 ## 0.4.62
 
 - Säännöt ovat monipuolisemmat: yhteen sääntöön voi liittää useita laitteita (esim. Olohuoneen ja Keittiön pistoke päälle samaan aikaan).
