@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.65
+
+- Pumpun "Standby"-kytkin poistettu laitekorteista: se on MELCloudin tilatieto (pumppu odottaa tavoitelämpötilassa), ei virtakytkin, joten sen vaihtaminen ei tehnyt mitään. Pumpun päälle/pois-ohjaus on pumpun omassa kortissa.
+
 ## 0.4.64
 
 - Laitteiden säännöt (esim. jouluvalojen pistokkeet) toimivat aina, kun sääntö on käytössä. Automaatio-kytkin koskee vain kodin jäähdytystä ja mökin lämmitystä.

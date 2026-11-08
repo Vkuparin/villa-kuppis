@@ -169,6 +169,16 @@ def finnish_name(name: str) -> str:
     return name
 
 
+def _is_pump_standby(entry: dict, state: dict) -> bool:
+    """MELCloud's 'Standby' entity: the unit idles at its target, it is not an on/off
+    switch (toggling it does nothing). The pump's own card controls power."""
+    if "melcloud" not in str(entry.get("platform") or "").lower():
+        return False
+    name = str(entry.get("name") or entry.get("original_name")
+               or (state.get("attributes") or {}).get("friendly_name") or "")
+    return name.lower().endswith("standby") or str(entry.get("entity_id", "")).endswith("_standby")
+
+
 def _name(state: dict, entry: dict | None, device: dict | None) -> str:
     return finnish_name(_raw_name(state, entry, device))
 
@@ -288,7 +298,8 @@ def build(registry: dict | None, states: dict[str, dict], skip_entities=()) -> d
         # device cards show them with history; only controlled entities are skipped.
         if (domain not in DOMAINS or (entity_id in skip and domain != "sensor")
                 or entry.get("entity_category") in SKIP_CATEGORIES
-                or entry.get("platform") in SKIP_PLATFORMS):
+                or entry.get("platform") in SKIP_PLATFORMS
+                or _is_pump_standby(entry, state)):
             continue
         device = devices.get(entry.get("device_id"))
         if device is not None and device.get("disabled_by"):

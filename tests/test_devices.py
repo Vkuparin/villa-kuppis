@@ -92,6 +92,14 @@ class BuildTest(unittest.TestCase):
         shown = [d["entity_id"] for a in out["areas"] for d in a["devices"]]
         self.assertEqual(shown, ["switch.plug"])
 
+    def test_melcloud_standby_is_not_shown_as_a_switch(self):
+        reg = registry([entry("switch.makuuhuone_standby", area="olohuone", platform="melcloudhome"),
+                        entry("switch.plug", area="olohuone")])
+        states = {e: state(e, "off", friendly_name=n) for e, n in
+                  (("switch.makuuhuone_standby", "Makuuhuone Standby"), ("switch.plug", "Plug"))}
+        out = build(reg, states)
+        self.assertEqual([d["entity_id"] for a in out["areas"] for d in a["devices"]], ["switch.plug"])
+
     def test_bound_sensors_stay_visible(self):
         reg = registry([entry("sensor.hum", area="olohuone"), entry("climate.pump", area="olohuone")])
         states = {e: state(e, "50") for e in ("sensor.hum", "climate.pump")}
