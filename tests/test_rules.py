@@ -429,6 +429,27 @@ class FlexibleRuleTest(EngineTest):
         self.engine.tick()
         self.assertEqual(len(self.catalog.sent), 1)
 
+    def test_window_already_started_catches_up(self):
+        evening = {"kind": "between", "keys": ["plug"], "start": {"type": "time", "at": "16:30"},
+                   "end": {"type": "time", "at": "22:30"}}
+        self.now = local(2026, 11, 20, 16, 42)        # made after the start time
+        rule_id = self.add(evening)
+        self.engine.tick()
+        self.assertEqual([c[2] for c in self.catalog.sent], [True])
+        # The app was down over the end time: a new engine still switches off.
+        self.now = local(2026, 11, 20, 23, 40)
+        engine = RuleEngine("home", self.catalog, self.store, automation_on=lambda: True,
+                            prices=lambda day: [], now=lambda: self.now)
+        engine.tick()
+        self.assertEqual([c[2] for c in self.catalog.sent], [True, False])
+        # Disabled over the start time, enabled inside the window: on.
+        self.store.set_rule("home", rule_id, enabled=False)
+        self.now = local(2026, 11, 21, 17, 0)
+        engine.tick()
+        self.store.set_rule("home", rule_id, enabled=True)
+        engine.tick()
+        self.assertEqual([c[2] for c in self.catalog.sent], [True, False, True])
+
     def test_validation_of_new_fields(self):
         for bad in ({"kind": "level", "keys": ["p"], "sensor": "t", "mode": "below", "on_at": 19, "off_at": 18},
                     {**FESTIVE, "days": []}, {**FESTIVE, "days": [7]},
