@@ -548,8 +548,8 @@ class ManualPauseApiTests(AppTestCase):
         server, _ = self._start_app(FakeClient(make_unit_payloads()),
                                     automation_interval=3600.0)
         service = server.service
-        # The automation's first pass sets unit-1 to the 25 °C maximum.
-        self.wait_for(lambda: self._unit(self._view(server), "unit-1")["setpoint"] == 25.0)
+        # The automation's first pass sets unit-1 to the 24 °C maximum.
+        self.wait_for(lambda: self._unit(self._view(server), "unit-1")["setpoint"] == 24.0)
         self.wait_for(lambda: not any(u["pending"] for u in self._view(server)["units"]))
         status, _ = self._post(server, "unit-1", "setpoint", 23.0)
         self.assertEqual(status, 202)
@@ -567,7 +567,7 @@ class ManualPauseApiTests(AppTestCase):
         self.assertEqual(status, 200)
         self.assertIsNone(self._unit(view, "unit-1")["hold_until"])
         # Resuming runs the plan again: back to the maximum.
-        self.wait_for(lambda: self._unit(self._view(server), "unit-1")["setpoint"] == 25.0)
+        self.wait_for(lambda: self._unit(self._view(server), "unit-1")["setpoint"] == 24.0)
 
 
 class AutomationSwitchTests(AppTestCase):

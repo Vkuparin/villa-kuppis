@@ -34,7 +34,11 @@ class StoreTests(unittest.TestCase):
 
     def test_defaults_and_precedence(self):
         res = S.resolve(self.store.overrides(), "home", "r1")
-        self.assertEqual(res["cool_max_c"], {"value": 25.0, "source": "default"})
+        # Ville's band (10.11.2026): 23-24 °C, 25 °C while the price is high.
+        self.assertEqual(res["cool_max_c"], {"value": 24.0, "source": "default"})
+        self.assertEqual(res["precool_c"]["value"], 23.0)
+        self.assertEqual(res["cool_high_max_c"]["value"], 25.0)
+        self.assertIs(res["cool_season_pause"]["value"], True)
         self.assertEqual(res["min_off_minutes"]["value"], 30)
         self.assertEqual(res["away_max_c"]["value"], 28.0)
         self.assertEqual(res["night_start"]["value"], "22:00")
@@ -92,7 +96,15 @@ class StoreTests(unittest.TestCase):
         rooms = ["r1", "r2"]
         before = plan_day(periods, S.plan_settings(self.store.overrides(),
                                                    "home", rooms))
-        # Defaults: cool to 21 below 5 c/kWh, otherwise the 25 maximum.
+        # Optimoitu (the default) has no price thresholds: the base plan
+        # holds the maximum and the optimizer does the precooling.
+        self.assertEqual([p.temperature_c for p in before["r1"]], [Decimal("24.0")] * 3)
+        self.store.set("site:home", "price_control", "fixed", "Ville")
+        self.store.set("site:home", "cool_max_c", 25, "Ville")
+        self.store.set("site:home", "precool_c", 21, "Ville")
+        before = plan_day(periods, S.plan_settings(self.store.overrides(),
+                                                   "home", rooms))
+        # Fixed thresholds: cool to 21 below 5 c/kWh, otherwise the 25 maximum.
         self.assertEqual([p.temperature_c for p in before["r1"]],
                          [Decimal("21.0"), Decimal("25.0"), Decimal("25.0")])
         self.store.set("site:home", "low_price_c_kwh", 10, "Ville")
@@ -109,13 +121,19 @@ class StoreTests(unittest.TestCase):
         plan = plan_day(_periods([3, 20]), S.plan_settings(
             self.store.overrides(), "home", ["r1"]))["r1"]
         self.assertEqual([p.temperature_c for p in plan],
-                         [Decimal("25.0"), Decimal("25.0")])
+                         [Decimal("24.0"), Decimal("24.0")])
 
-    def test_cottage_defaults_heat_only_at_negative_prices(self):
-        # Transfer and tax are paid on every kWh, so storing heat in an
-        # empty cottage pays only when the spot price is very low.
+    def test_cottage_thresholds_apply_only_with_fixed_limits(self):
+        # Optimoitu (the default): the base level, whatever the price; the
+        # heating optimizer plans above it (heat_optimizer.py).
         plan = plan_day(_periods([-3, -1, 4, 9]),
                         S.plan_settings({}, "cottage", ["sauna"]))["sauna"]
+        self.assertEqual([p.temperature_c for p in plan], [Decimal("5.0")] * 4)
+        # Kiinteät rajat: transfer and tax are paid on every kWh, so the
+        # default thresholds store heat only when the spot price is negative.
+        fixed = {"site:cottage": {"heat_price_control": "fixed"}}
+        plan = plan_day(_periods([-3, -1, 4, 9]),
+                        S.plan_settings(fixed, "cottage", ["sauna"]))["sauna"]
         self.assertEqual([p.temperature_c for p in plan],
                          [Decimal("12.0"), Decimal("8.0"), Decimal("5.0"), Decimal("5.0")])
 
@@ -133,12 +151,20 @@ class StoreTests(unittest.TestCase):
             self.assertEqual(len(blocks), len(set(blocks)), kind)
 
     def test_cottage_heating_texts_match_what_is_built(self):
-        # The thresholds drive the cottage; the storage band only the optimizer.
-        for key in ("heat_base_c", "heat_rule1_price_c_kwh", "heat_rule1_c",
-                    "heat_rule2_price_c_kwh", "heat_rule2_c", "smart_max_c"):
+        # The band drives an Optimoitu room, the thresholds one with fixed limits;
+        # each mode shows only its own settings.
+        rules = ("heat_rule1_price_c_kwh", "heat_rule1_c", "heat_rule2_price_c_kwh",
+                 "heat_rule2_c")
+        for key in ("heat_base_c", "heat_max_c", *rules):
             self.assertNotIn("ei vielä", S.BY_KEY[key].help.lower())
             self.assertEqual(S.BY_KEY[key].kinds, ("heat",))
-        self.assertEqual(S.BY_KEY["smart_max_c"].shown_if, ("heat_price_control", ("optimized",)))
+        self.assertEqual(S.BY_KEY["heat_max_c"].shown_if, ("heat_price_control", ("optimized",)))
+        self.assertEqual(S.BY_KEY["heat_max_c"].default, 8.0)     # Ville's 5-8 °C band
+        for key in rules:
+            self.assertEqual(S.BY_KEY[key].shown_if, ("heat_price_control", ("fixed",)))
+        self.assertEqual(S.BY_KEY["low_price_c_kwh"].shown_if, ("price_control", ("fixed",)))
+        # A stored value of the removed storage maximum is ignored.
+        self.assertNotIn("smart_max_c", S.BY_KEY)
         self.assertNotIn("smart_enabled", S.BY_KEY)
         self.assertNotIn("smart_min_c", S.BY_KEY)     # Perustaso is the floor
 
@@ -280,7 +306,7 @@ class ApiTests(unittest.TestCase):
         ids = [s["id"] for s in data["scopes"]]
         self.assertEqual(ids[:2], ["site:home", "site:cottage"])
         room = next(i for i in ids if i.startswith("room:home/"))
-        self.assertEqual(data["effective"]["site:home"]["cool_max_c"]["value"], 25.0)
+        self.assertEqual(data["effective"]["site:home"]["cool_max_c"]["value"], 24.0)
         self.assertEqual({s["id"]: s["kind"] for s in data["scopes"]}["site:cottage"],
                          "heat")
         precool = next(d for d in data["definitions"] if d["key"] == "precool_c")

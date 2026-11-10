@@ -98,13 +98,15 @@ SCRIPT = r"""
   });
   function optimizerText(u) {
     var o = u.optimizer;
+    if (u.season) return "Lämmityskausi: ulkona on koko päivän alle 12 °C, joten pumppua ei käynnistetä.";
     if (u.price_control === "off") return "Hintaohjaus pois: tavoite on aina enimmäislämpötila.";
-    if (!o) return "Kiinteät hintarajat (optimointi pois tai huoneen jäähdytysnopeutta ei ole vielä opittu).";
+    if (u.price_control === "fixed") return "Kiinteät hintarajat.";
+    if (!o) return "Huoneen jäähtymisnopeutta ei ole vielä opittu: huone pidetään enimmäislämpötilassa.";
     var pct = o.fixed_cost_c > 0 ? Math.round(100 * (o.fixed_cost_c - o.cost_c) / o.fixed_cost_c) : null;
     if (!o.optimized || pct === 0)
-      return "Optimoitu suunnitelma on nyt sama kuin kiinteillä hintarajoilla.";
+      return "Optimoitu: nyt halvinta on pitää enimmäislämpötila.";
     return "Optimoitu opituilla nopeuksilla" + (pct === null ? "." :
-      ": arvioitu säästö " + pct + " % kiinteisiin hintarajoihin verrattuna.");
+      ": arvioitu säästö " + pct + " % tasaiseen enimmäislämpötilaan verrattuna.");
   }
   // Colder targets are deeper blue: the plan reads at a glance.
   function shade(target) {
@@ -124,7 +126,7 @@ SCRIPT = r"""
       seg.style.width = (100 * (b - a) / span) + "%";
       if (!w.off) seg.style.background = shade(w.target_c);
       seg.title = hm(w.start) + "–" + hm(w.end) + " " +
-        (w.off ? "kallis: pumppu sammuksissa, ellei huone ylitä " + temp : temp);
+        (w.off ? "pumppu sammuksissa, ellei huone ylitä " + temp : temp);
       if ((b - a) / span > 0.08) seg.textContent = w.off ? "pois" : String(w.target_c).replace(".", ",") + "°";
       bar.appendChild(seg);
     });
@@ -193,7 +195,7 @@ SCRIPT = r"""
         var li = document.createElement("li");
         var temp = String(w.target_c).replace(".", ",") + " °C";
         li.textContent = hm(w.start) + "–" + hm(w.end) + " " +
-          (w.off ? "kallis: pumppu sammuksissa, ellei huone ylitä " + temp : temp);
+          (w.off ? "pumppu sammuksissa, ellei huone ylitä " + temp : temp);
         if (w.off) li.className = "plan-off";
         ul.appendChild(li);
       });

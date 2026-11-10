@@ -140,6 +140,70 @@ class RecordedDayTests(unittest.TestCase):
             self.assertAlmostEqual(ours, theirs)
 
 
+class BandTests(unittest.TestCase):
+    """A comfort band with a higher maximum while the price is high."""
+
+    START = 1_785_000_000 // 900 * 900
+
+    def day(self, high_hours=range(16, 20), base=8.0, peak=40.0):
+        return [(self.START + i * 900, peak if (i // 4) % 24 in high_hours else base)
+                for i in range(96)]
+
+    def plan(self, model, prices, *, room=23.8, lowest=None, off=True):
+        limits = Limits(24.0, 23.0, float("-inf"), float("-inf"), off, 2)
+        highest = [25.0 if p >= 15.0 else 24.0 for _, p in prices]
+        outdoor = Outdoor([(self.START + h * 3600,
+                            22 + 6 * math.sin(((h % 24) - 9) / 24 * 2 * math.pi))
+                           for h in range(-1, 30)])
+        return optimize(model, room, 0, prices, outdoor, limits,
+                        [(False, top) for top in highest], lowest=lowest, highest=highest), highest
+
+    def test_room_rises_toward_25_only_around_the_expensive_hours(self):
+        prices = self.day()
+        plan, highest = self.plan(SUMMER, prices)
+        self.assertTrue(plan.optimized)
+        self.assertLess(plan.cost_c, plan.fixed_cost_c)
+        self.assertLessEqual(max(s.room_c for s in plan.steps), 25.05)
+        self.assertGreaterEqual(min(s.target_c for s in plan.steps), 23.0)
+        for step, top in zip(plan.steps, highest):
+            self.assertLessEqual(step.target_c, top)
+        over = [i for i, s in enumerate(plan.steps) if s.room_c > 24.05]
+        self.assertTrue(over)                                  # the 25 °C allowance is used
+        # Above 24 °C only in the expensive stretch and the hour it takes to come back.
+        self.assertGreaterEqual(min(over), 16 * 4)
+        self.assertLess(max(over), 21 * 4)
+        self.assertEqual(plan.over_max_c_h, 0.0)
+
+    def test_slow_room_is_planned_between_the_grid_points(self):
+        # 0.1 °C/h is a quarter of a grid step per period: on the grid alone
+        # the room would seem never to warm with the unit off.
+        slow = RoomModel(True, drift_c_per_h=0.1, cool_c_per_h=1.5)
+        plan, _ = self.plan(slow, self.day())
+        self.assertTrue(plan.optimized)
+        self.assertEqual(plan.over_max_c_h, 0.0)
+        self.assertLessEqual(max(s.room_c for s in plan.steps), 25.05)
+        self.assertLess(plan.cost_c, plan.fixed_cost_c)
+
+    def test_a_day_too_cool_to_precool_keeps_the_maximum_as_its_floor(self):
+        prices = self.day()
+        plan, highest = self.plan(SUMMER, prices, lowest=[24.0] * len(prices))
+        self.assertGreaterEqual(min(s.target_c for s in plan.steps), 24.0)
+
+    def test_cooling_takes_less_power_when_it_is_cool_outside(self):
+        self.assertEqual(optimizer.power_factor(None), 1.0)
+        self.assertEqual(optimizer.power_factor(25.0), 1.0)
+        self.assertLess(optimizer.power_factor(15.0), optimizer.power_factor(30.0))
+        self.assertGreaterEqual(optimizer.power_factor(-20.0), 0.5)
+        self.assertLessEqual(optimizer.power_factor(50.0), 1.5)
+        # At one flat price the cold is made in the cool night, not in the afternoon heat.
+        flat = self.day(high_hours=(), base=10.0)
+        plan, _ = self.plan(STEADY, flat, off=False)
+        night = sum(s.cooling for s in plan.steps[:6 * 4])
+        base = sum(1 for s in plan.steps[:6 * 4] if s.target_c < 24.0)
+        self.assertGreater(base, 0)
+        self.assertGreater(night, 0)
+
+
 DAY = date(2026, 10, 19)          # the FakeClock's Helsinki day (15:00 local)
 
 
@@ -188,10 +252,16 @@ class OptimizerServiceTests(ServiceTestCase):
         view = next(u for u in service.plan_view()["units"]
                     if u["id"] == "unit-1")
         self.assertTrue(view["optimizer"]["optimized"])
-        # The fixed plan holds 25 °C until 14:00 UTC; the optimizer goes lower.
+        # The base plan holds 24 °C until 14:00 UTC; the optimizer goes lower,
+        # down to the precooling temperature at most.
         before = [w for w in view["windows"]
                   if "T12:00" <= w["start"][10:16] < "T14:00" and not w["off"]]
-        self.assertLess(min(w["target_c"] for w in before), 25.0)
+        self.assertLess(min(w["target_c"] for w in before), 24.0)
+        self.assertGreaterEqual(min(w["target_c"] for w in view["windows"]), 23.0)
+        # In the expensive stretch the room may rise to 25 °C, never above.
+        during = [w for w in view["windows"] if "T14:00" <= w["start"][10:16] < "T18:00"]
+        self.assertEqual(max(w["target_c"] for w in during), 25.0)
+        self.assertLessEqual(max(w["target_c"] for w in view["windows"]), 25.0)
         self.assertLessEqual(view["optimizer"]["cost_c"],
                              view["optimizer"]["fixed_cost_c"])
         self.assertTrue(any(w["off"] for w in view["windows"]))
@@ -203,7 +273,7 @@ class OptimizerServiceTests(ServiceTestCase):
         SettingsStore(service.store.path).set(
             "room:home/unit-1", "price_control", "fixed", "test")
         self.set_prices()
-        self.assertEqual(self.run_plan(service), [("unit-1", "setpoint", 25.0)])
+        self.assertEqual(self.run_plan(service), [("unit-1", "setpoint", 24.0)])
         view = next(u for u in service.plan_view()["units"]
                     if u["id"] == "unit-1")
         self.assertIsNone(view["optimizer"])
@@ -214,10 +284,10 @@ class OptimizerServiceTests(ServiceTestCase):
         service.set_away(True, "Ville")
         self.assertEqual(self.run_plan(service), [("unit-1", "setpoint", 28.0)])
 
-    def test_unlearned_room_keeps_fixed_thresholds(self):
+    def test_unlearned_room_holds_the_maximum(self):
         service, _ = self.start(model=RoomModel(False, "too_little_data"))
         self.set_prices()
-        self.assertEqual(self.run_plan(service), [("unit-1", "setpoint", 25.0)])
+        self.assertEqual(self.run_plan(service), [("unit-1", "setpoint", 24.0)])
 
     def test_fixed_plan_keeps_a_hot_room_at_the_maximum_when_expensive(self):
         service, clock = self.start(price_control="fixed")

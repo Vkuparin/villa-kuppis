@@ -90,6 +90,7 @@ PRICE_DB_FILENAME = "prices.db"
 FORECAST_HOURS = 48.0
 # Learned room rates (card F5.1) are recomputed at most this often.
 ROOM_RATES_CACHE_SECONDS = 600.0
+THERMAL_CACHE_SECONDS = 1800.0     # the cottage heat balance: hourly statistics
 ROOM_RATES_PREDICT_HOURS = 6
 
 
@@ -1183,6 +1184,7 @@ class PumpService:
         self._room_rates_lock = threading.Lock()
         self._models_cache: dict[str, tuple[datetime, tuple]] = {}
         self._checked_cache: tuple[datetime, dict] | None = None
+        self._thermal_cache: tuple[datetime, dict] | None = None
         self._models_lock = threading.Lock()
         self._prices_db = (Path(prices_db) if prices_db is not None
                            else self._data_dir / PRICE_DB_FILENAME)
@@ -1204,6 +1206,7 @@ class PumpService:
                 prices_db=self._prices_db, overrides=settings_store.overrides,
                 automation_on=self.cottage_automation_on,
                 models=self.cottage_heating_models,
+                thermal=self.cottage_thermal_models,
                 after_tick=self.sync_visit_away)
         # Other Home Assistant devices by area (devices.py): ``device_sources``
         # gets the cottage site and returns {site: gateway}.
@@ -1663,6 +1666,7 @@ class PumpService:
         with self._models_lock:
             self._models_cache.pop("cottage", None)
             self._checked_cache = None
+            self._thermal_cache = None
         with self._room_rates_lock:
             self._room_rates_cache = None
         return since
@@ -1706,6 +1710,73 @@ class PumpService:
         return ({room: model for room, model in models.items() if passed.get(room)},
                 future)
 
+    def cottage_thermal(self) -> dict:
+        """Each cottage room's heat balance (thermal.py) from its measured
+        hours, or from its floor area alone before any; cached. A cottage
+        that does not answer gives the last fit, else the area's."""
+        from . import thermal
+        from .cottage import ROOM_AREAS_M2
+        now = self._now()
+        with self._models_lock:
+            cached = self._thermal_cache
+        if cached is not None and 0 <= (now - cached[0]).total_seconds() \
+                < THERMAL_CACHE_SECONDS:
+            return cached[1]
+        start = now - timedelta(days=thermal.LEARN_DAYS)
+        outdoor = learning.Outdoor(self.store.outdoor_rows(
+            "cottage", start - timedelta(hours=2), now + timedelta(hours=1)))
+        fits, complete = {}, True
+        for room, area in ROOM_AREAS_M2.items():
+            prior = thermal.Prior.for_area(area)
+            try:
+                temps, power = self.cottage.thermal_inputs(room, start, now)
+                fits[room] = thermal.estimate(temps, power, outdoor, prior)
+            except Exception as error:
+                logging.warning("Cottage heat model for %s: %s", room, type(error).__name__)
+                complete = False
+                fits[room] = (cached[1].get(room) if cached is not None else None) \
+                    or thermal.estimate({}, {}, outdoor, prior)
+        if complete:
+            with self._models_lock:
+                self._thermal_cache = (now, fits)
+        return fits
+
+    def cottage_thermal_models(self) -> tuple[dict, learning.Outdoor]:
+        """({room: (room model from its heat balance, kW of its heaters)},
+        the outdoor forecast) for the heating optimizer (card F5.2)."""
+        now = self._now()
+        observed = self.store.outdoor_rows("cottage", now - timedelta(hours=6),
+                                           now + timedelta(hours=1))
+        ahead = self.store.forecast_rows("cottage", now - timedelta(hours=1),
+                                         now + timedelta(hours=FORECAST_HOURS))
+        future = learning.Outdoor([r for r in observed if r[0] < _to_epoch(now)]
+                                  + [r for r in ahead if r[0] >= _to_epoch(now)])
+        out = {}
+        for room, fit in self.cottage_thermal().items():
+            kw = self.cottage.heat_kw(room)
+            if kw > 0:
+                out[room] = (fit.room_model(kw), kw)
+        return out, future
+
+    def _cottage_heat(self, future: learning.Outdoor, now_ts: int) -> dict:
+        """Each cottage room's heat balance and plan for the room card."""
+        overrides = SettingsStore(self.store.path).overrides()
+        out_now = future.at(now_ts)
+        if out_now is None:
+            out_now = future.last_before(now_ts)
+        out = {}
+        for room, fit in self.cottage_thermal().items():
+            values = resolve(overrides, "cottage", room)
+            base = float(values["heat_base_c"]["value"])
+            out[room] = {
+                **fit.public(), "heater_kw": round(self.cottage.heat_kw(room), 2),
+                "optimized": values["heat_price_control"]["value"] == "optimized",
+                "base_c": base,
+                "hold_w": (None if out_now is None
+                           else round(fit.hold_kw(base, out_now) * 1000)),
+                "plan": self.cottage.heat_plan(room)}
+        return out
+
     def _compute_room_rates(self, site: str, now: datetime) -> dict:
         start = now - timedelta(days=_learn_days(site))
         models, (outdoor, future), ahead = self.learned_models(site)
@@ -1713,6 +1784,7 @@ class PumpService:
         units = []
         rooms_now = ({} if site == "cottage" else
                      {state["id"]: state["room_temp"] for state in self.store.unit_states()})
+        heat = self._cottage_heat(future, now_ts) if site == "cottage" else {}
         for subject, name in self._learning_subjects(site):
             readings = self._learning_readings(site, subject, start, now)
             model = models.get(subject) or learning.fit(readings, outdoor)
@@ -1752,7 +1824,8 @@ class PumpService:
                 "model": model.public(),
                 "validation": None if check is None else check.public(),
                 "now": current, "predicted": predicted,
-                **({"since": _since_iso(self.cottage.learning_since(subject))}
+                **({"since": _since_iso(self.cottage.learning_since(subject)),
+                    "heat": heat.get(subject)}
                    if site == "cottage" else {}),
             })
         return {

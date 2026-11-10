@@ -26,12 +26,17 @@ following the last plan for up to a day. A sender that starts with
 ``Automaatio`` off releases every room once too, since the cottage may
 still hold a plan from before the restart. After that nothing is sent.
 
-With ``Hintaohjaus`` set to ``Optimoitu`` a room whose learned model passed
-its held-out day gets the heating optimizer's target instead (card F5.2,
-``heat_optimizer``), planned once per period over all known prices; the
-fixed thresholds stay its fallback and its baseline. The optimizer's floor
-is ``heat_base_c``. A visit heat-up uses
-the optimizer only in ``Optimoitu`` rooms, and plans with
+With ``Hintaohjaus`` set to ``Optimoitu`` (the default) a room has no price
+thresholds. It is kept between ``heat_base_c`` and ``heat_max_c`` by the
+heating optimizer (card F5.2, ``heat_optimizer``), planned again every
+period over all known prices with the room's measured heat balance
+(``thermal``): heat is stored before expensive hours when that is cheaper
+than heating through them. The baseline and the fallback is holding the
+base level, so a plan never costs more than that under the model, and a
+room without a temperature or a forecast simply holds the base level. A
+damp room's band starts ``HUMIDITY_RAISE_C`` higher. A visit heat-up uses
+the optimizer only in ``Optimoitu`` rooms whose learned rates
+(``learning``) passed their held-out day, and plans with
 ``VISIT_HEAT_MARGIN`` of the learned heating rate so the room is warm by
 the arrival even if the heaters are slower than learned.
 
@@ -48,6 +53,7 @@ of the plan stays off.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -56,7 +62,7 @@ from typing import Callable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 from . import settings as app_settings
-from .heat_optimizer import HeatLimits, optimize_heating
+from .heat_optimizer import STORE_MARGIN, HeatLimits, optimize_heating
 from .planning import Period, plan_day
 from .prices import INTERVAL_SECONDS
 from .storage import PriceStore
@@ -135,10 +141,16 @@ def schedule(steps: Sequence[RoomTarget]) -> list[dict]:
     return out
 
 
-def heat_limits(values: Mapping) -> HeatLimits:
-    """The optimizer's band for a room: never below its base level."""
-    floor = float(values["heat_base_c"]["value"])
-    return HeatLimits(floor, max(floor, float(values["smart_max_c"]["value"])))
+def heat_limits(values: Mapping, damp: bool = False) -> HeatLimits:
+    """The optimizer's band for a room: never below its base level, and
+    ``HUMIDITY_RAISE_C`` higher at the bottom while the room is damp."""
+    floor = float(values["heat_base_c"]["value"]) + (HUMIDITY_RAISE_C if damp else 0.0)
+    return HeatLimits(floor, max(floor, float(values["heat_max_c"]["value"])))
+
+
+def optimized_room(overrides: Mapping, room: str) -> bool:
+    return (app_settings.resolve(overrides, SITE, room)["heat_price_control"]["value"]
+            == "optimized")
 
 
 def takes_schedule(state: dict | None) -> bool:
@@ -169,6 +181,7 @@ class CottageTargetSender:
                  overrides: Callable[[], Mapping], automation_on: Callable[[], bool],
                  now: Callable[[], datetime], visits: VisitStore | None = None,
                  models: Callable[[], tuple] | None = None,
+                 thermal: Callable[[], tuple] | None = None,
                  room_temps: Callable[[], Mapping[str, float]] | None = None,
                  room_humidity: Callable[[], Mapping[str, float]] | None = None,
                  hand_targets: Callable[[], Mapping[str, float]] | None = None,
@@ -185,11 +198,15 @@ class CottageTargetSender:
         # models() -> ({room: validated RoomModel}, outdoor forecast);
         # room_temps() -> {room: °C now}; room_humidity() -> {room: % now}.
         self._models = models
+        # thermal() -> ({room: (RoomModel from the heat balance, heater kW)},
+        # outdoor forecast): the maintenance plan of Optimoitu rooms.
+        self._thermal = thermal
         self._room_temps = room_temps
         self._room_humidity = room_humidity
         self._hand_targets = hand_targets        # () -> {room: hand-set °C}
         self.damp: set[str] = set()              # rooms the humidity guard heats
         self._optimized: dict[str, tuple] = {}   # room -> (key, HeatPlan or None)
+        self.heat_plans: dict[str, object] = {}  # room -> its latest HeatPlan or None
         self._valid_minutes = valid_minutes
         self._retry = timedelta(seconds=retry_seconds)
         # room -> (target, revision, request_id, sent_at)
@@ -238,7 +255,8 @@ class CottageTargetSender:
         rooms = list(self._rooms)
         period_ts = now_ts - now_ts % INTERVAL_SECONDS
         ahead = [p for p in periods if p.ts_utc >= period_ts]
-        if not ahead or ahead[0].ts_utc != period_ts:
+        priced = bool(ahead) and ahead[0].ts_utc == period_ts
+        if not priced:
             out = {room: [target] for room, target
                    in current_targets(overrides, [], rooms, now_ts).items()}
         else:
@@ -246,8 +264,10 @@ class CottageTargetSender:
             out = {room: [RoomTarget(room, row.ts_utc, float(row.temperature_c),
                                      row.price_c_kwh, row.reason) for row in fixed[room]]
                    for room in rooms}
-            if self._models is not None:
-                self._optimize(out, overrides, ahead, extra)
+        self._mark_damp(out, overrides)
+        self.heat_plans = {}
+        if priced and self._thermal is not None:
+            self._optimize(out, overrides, ahead, extra)
         self._humidity_guard(out, overrides)
         visit = self._visits.active() if self._visits is not None else None
         if visit is not None and visit.departure is not None and now >= visit.departure:
@@ -295,10 +315,11 @@ class CottageTargetSender:
 
     def _outdoor_at(self, at: datetime) -> float | None:
         """The outdoor forecast at ``at``, or None when there is none."""
-        if self._models is None:
+        source = self._models or self._thermal
+        if source is None:
             return None
         try:
-            _models, outdoor = self._models()
+            _models, outdoor = source()
             ts = int(at.timestamp())
             value = outdoor.at(ts)
             return value if value is not None else outdoor.last_before(ts)
@@ -306,10 +327,19 @@ class CottageTargetSender:
             return None
 
     def _humidity_guard(self, out: dict[str, list[RoomTarget]], overrides: Mapping) -> None:
-        """Setting humidity_heat: a room over the humidity limit is kept at
-        least HUMIDITY_RAISE_C above its base level until the humidity is
-        HUMIDITY_CLEAR %-points below the limit. A missing reading keeps
-        the room as it was."""
+        """Setting humidity_heat: a damp room (``_mark_damp``) is kept at
+        least HUMIDITY_RAISE_C above its base level."""
+        for room in self.damp & set(out):
+            floor = app_settings.resolve(overrides, SITE, room)["heat_base_c"]["value"] \
+                + HUMIDITY_RAISE_C
+            out[room] = [t if t.target_c >= floor
+                         else RoomTarget(room, t.period_ts, floor, t.price_c_kwh, "humidity")
+                         for t in out[room]]
+
+    def _mark_damp(self, out: Mapping[str, list], overrides: Mapping) -> None:
+        """Keep ``damp``: the rooms over the humidity limit, until they are
+        HUMIDITY_CLEAR %-points below it. A missing reading keeps the room
+        as it was."""
         values = app_settings.resolve(overrides, SITE)
         if self._room_humidity is None or not values["humidity_heat"]["value"]:
             self.damp.clear()
@@ -322,39 +352,42 @@ class CottageTargetSender:
                 self.damp.add(room)
             elif value is not None and value < limit - HUMIDITY_CLEAR:
                 self.damp.discard(room)
-        for room in self.damp & set(out):
-            floor = app_settings.resolve(overrides, SITE, room)["heat_base_c"]["value"] \
-                + HUMIDITY_RAISE_C
-            out[room] = [t if t.target_c >= floor
-                         else RoomTarget(room, t.period_ts, floor, t.price_c_kwh, "humidity")
-                         for t in out[room]]
 
     def _optimize(self, out: dict[str, list[RoomTarget]], overrides: Mapping,
                   ahead: Sequence[Period], extra: float = 0.0) -> None:
-        """Replace the economic plans of optimized rooms (card F5.2);
-        ``ahead`` are the known periods from the current one on."""
-        rooms = [room for room in out
-                 if app_settings.resolve(overrides, SITE, room)["heat_price_control"]["value"]
-                 == "optimized"]
+        """Replace the plans of optimized rooms (card F5.2); ``ahead`` are
+        the known periods from the current one on. The baseline is holding
+        the floor, which ``out`` already has for these rooms."""
+        rooms = [room for room in out if optimized_room(overrides, room)]
         models = outdoor = temps = None
         for room in rooms:
-            values = app_settings.resolve(overrides, SITE, room)
-            fixed = [target.target_c for target in out[room]]
-            limits = heat_limits(values)
-            key = (ahead[0].ts_utc, len(ahead), limits, tuple(fixed), extra)
+            limits = heat_limits(app_settings.resolve(overrides, SITE, room),
+                                 room in self.damp)
+            key = (ahead[0].ts_utc, len(ahead), limits, extra)
             cached = self._optimized.get(room)
             if cached is None or cached[0] != key:
-                if models is None:
-                    models, outdoor = self._models()
-                    temps = self._room_temps() if self._room_temps is not None else {}
-                model = models.get(room)
-                plan = None if model is None else optimize_heating(
-                    model, temps.get(room), [(p.ts_utc, float(p.price_c_kwh) + extra) for p in ahead],
-                    outdoor, limits, fixed)
+                plan = None
+                try:
+                    if models is None:
+                        models, outdoor = self._thermal()
+                        temps = self._room_temps() if self._room_temps is not None else {}
+                    model, heat_kw = models.get(room) or (None, 0.0)
+                    if model is not None and heat_kw > 0:
+                        plan = optimize_heating(
+                            model, temps.get(room),
+                            [(p.ts_utc, float(p.price_c_kwh) + extra) for p in ahead],
+                            outdoor, limits, [limits.min_c] * len(ahead),
+                            heat_kw=heat_kw, store_margin=STORE_MARGIN)
+                except Exception as error:      # no plan: the room holds its floor
+                    logging.warning("Cottage heating plan for %s: %s", room,
+                                    type(error).__name__)
                 cached = self._optimized[room] = (key, plan)
             plan = cached[1]
+            self.heat_plans[room] = plan
             if plan is not None and plan.optimized:
-                out[room] = [RoomTarget(room, t.period_ts, step.target_c, t.price_c_kwh, "optimized")
+                out[room] = [t if step.target_c <= limits.min_c + 1e-9
+                             else RoomTarget(room, t.period_ts, step.target_c,
+                                             t.price_c_kwh, "optimized")
                              for t, step in zip(out[room], plan.steps)]
 
     def _optimize_visit(self, out: dict[str, list[RoomTarget]], visit, plan: VisitPlan,
@@ -369,8 +402,7 @@ class CottageTargetSender:
         if self._models is None or visit.ended_at is not None or now_ts >= arrival:
             return set()
         rooms = [r for r in visit.rooms if r in out and out[r][0].reason != "noprice"
-                 and app_settings.resolve(overrides, SITE, r)["heat_price_control"]["value"]
-                 == "optimized"]
+                 and optimized_room(overrides, r)]
         ahead = [p for p in periods if p.ts_utc >= now_ts - now_ts % INTERVAL_SECONDS]
         if not rooms or not ahead or ahead[-1].ts_utc < arrival:
             return set()   # the arrival is past the known prices

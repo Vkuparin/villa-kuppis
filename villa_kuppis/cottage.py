@@ -63,6 +63,10 @@ SITE_LABEL = "Mökki"
 SITES_DB = "sites.db"
 # Room names follow the cottage Home Assistant areas (Ville, 2026-10-31).
 ROOMS = {"large": "Mökki", "small": "Kammari"}
+# Floor areas (Ville, 2026-11-10): where a room's heat model starts before
+# its own measured hours take over (thermal.py).
+ROOM_AREAS_M2 = {"large": 35.0, "small": 8.0}
+DEFAULT_HEATER_KW = 1.0     # a heater whose name does not give its power
 
 
 def room_label(name: str) -> str:
@@ -757,15 +761,19 @@ class CottageSite:
     def configure_targets(self, *, prices_db, overrides: Callable[[], dict],
                           automation_on: Callable[[], bool],
                           models: Callable[[], tuple] | None = None,
+                          thermal: Callable[[], tuple] | None = None,
                           after_tick: Callable[[], None] | None = None) -> None:
         """Enable the price target sender; call before ``start``.
 
         ``models`` returns the validated room models and the outdoor
-        forecast for the heating optimizer (card F5.2); ``after_tick`` runs
-        after each target tick (the home away mode during a visit).
+        forecast for a visit heat-up (card F5.3), ``thermal`` each room's
+        heat balance model with its heater power and the forecast for the
+        heating optimizer (card F5.2); ``after_tick`` runs after each
+        target tick (the home away mode during a visit).
         """
         self._targets_cfg = {"prices_db": Path(prices_db), "overrides": overrides,
                              "automation_on": automation_on, "models": models,
+                             "thermal": thermal,
                              "room_temps": self.room_temperatures,
                              "room_humidity": self.room_humidity,
                              "hand_targets": self.hand_targets}
@@ -1308,6 +1316,115 @@ class CottageSite:
         if temperature is None:
             return []
         return self._store.energy_estimate(SITE_ID, temperature, heaters, start, end, hold)
+
+    def _heater_power_entities(self) -> dict[str, tuple[str, float]]:
+        """Bound heater entity -> (its power sensor, kW per unit): the
+        sensor of the same Home Assistant device with the device class
+        power, as Mill's local connection gives. Matter Mills have none."""
+        registry = getattr(self._gateway, "registry", lambda: None)() or {}
+        raw = getattr(self._gateway, "raw_states", dict)()
+        device_of = {e.get("entity_id"): e.get("device_id") for e in registry.get("entities") or []}
+        out = {}
+        for binding in self._bindings():
+            if binding.room not in ROOMS or self._role(binding) != "heater":
+                continue
+            device = device_of.get(binding.entity_id)
+            if device is None:
+                continue
+            for entity_id in sorted(e for e, d in device_of.items() if d == device):
+                attrs = (raw.get(entity_id) or {}).get("attributes") or {}
+                unit = attrs.get("unit_of_measurement")
+                if (isinstance(entity_id, str) and entity_id.startswith("sensor.")
+                        and (attrs.get("device_class") == "power"
+                             or (unit in ("W", "kW") and "power" in entity_id))):
+                    out[binding.entity_id] = (entity_id, 1.0 if unit == "kW" else 0.001)
+                    break
+        return out
+
+    def heat_kw(self, room_id: str) -> float:
+        """Rated power of the room's heaters that can heat now: reachable
+        and not switched off in Villa Kuppis. The power is read from the
+        heater's name; ``DEFAULT_HEATER_KW`` for a name without one."""
+        snapshot = self._gateway.snapshot()
+        disabled, heaters = (), []
+        for binding in self._bindings():
+            if binding.room != room_id:
+                continue
+            role = self._role(binding)
+            state = snapshot.get(binding.device_id) or {}
+            if role == "status":
+                value = (state.get("attributes") or {}).get("disabled_heaters")
+                disabled = value if isinstance(value, list) else ()
+            elif role == "heater" and state.get("available"):
+                heaters.append(binding)
+        return sum(rated_kw(b.label, b.entity_id) or DEFAULT_HEATER_KW
+                   for b in heaters if b.entity_id not in disabled)
+
+    def thermal_inputs(self, room_id: str, start, end) -> tuple[dict, dict]:
+        """The room's hours for its heat model (thermal.py): ({hour start:
+        mean room °C}, {hour start: mean heater kW}) from ``learning_since``
+        on. The room temperature and the measured heater power come from the
+        cottage Home Assistant's hourly statistics; a heater without a power
+        sensor gets the estimate the energy table uses. Empty without a
+        gateway that keeps statistics, a temperature sensor or a heater.
+        Raises what the gateway raises when the cottage does not answer."""
+        statistics = getattr(self._gateway, "statistics", None)
+        temperature, heaters = None, []
+        for binding in sorted(self._bindings(), key=lambda b: b.device_id):
+            if binding.room != room_id:
+                continue
+            role = self._role(binding)
+            if role == "temperature" and temperature is None:
+                temperature = binding
+            elif role == "heater":
+                heaters.append(binding)
+        if statistics is None or temperature is None or not heaters:
+            return {}, {}
+        since = self.learning_since(room_id)
+        s = max(_to_epoch(start), int(since.timestamp()) if since is not None else 0)
+        s += -s % 3600                 # whole hours after the start
+        e = _to_epoch(end)
+        if s >= e:
+            return {}, {}
+        begin = datetime.fromtimestamp(s, timezone.utc)
+        temps = {ts: value for ts, value in statistics(temperature.entity_id, begin)
+                 if s <= ts < e}
+        sensors = self._heater_power_entities()
+        power = dict.fromkeys(temps, 0.0)
+        estimated = {}
+        first = s
+        for heater in heaters:
+            sensor = sensors.get(heater.entity_id)
+            rows = statistics(sensor[0], begin) if sensor is not None else []
+            if not rows:
+                estimated[heater.device_id] = (rated_kw(heater.label, heater.entity_id)
+                                               or DEFAULT_HEATER_KW)
+                continue
+            # Before the sensor's first hour the heater's power is not known.
+            first = max(first, rows[0][0])
+            for ts, value in rows:
+                if ts in power:
+                    power[ts] += max(0.0, value) * sensor[1]
+        if estimated:
+            for ts, kwh in self._store.energy_estimate(
+                    SITE_ID, temperature.device_id, estimated, begin,
+                    datetime.fromtimestamp(e, timezone.utc)):
+                if ts in power:
+                    power[ts] += kwh
+        if first > s:
+            temps = {ts: v for ts, v in temps.items() if ts >= first}
+            power = {ts: v for ts, v in power.items() if ts >= first}
+        return temps, power
+
+    def heat_plan(self, room_id: str) -> dict | None:
+        """The room's latest optimized heating plan against holding the
+        base level, over the known prices; None without one."""
+        sender = self._sender
+        plan = sender.heat_plans.get(room_id) if sender is not None else None
+        if plan is None:
+            return None
+        return {"optimized": plan.optimized, "hours": round(len(plan.steps) / 4, 1),
+                "cost_c": round(plan.cost_c, 1), "hold_cost_c": round(plan.fixed_cost_c, 1)}
 
     def learning_since(self, room_id: str) -> datetime | None:
         """Where the room's learning history starts: when its temperature

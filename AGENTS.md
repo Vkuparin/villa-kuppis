@@ -28,6 +28,7 @@ Codex, Hermes and Claude Code (through `CLAUDE.md`) all read this file. This is 
 | Learned room rates tests (synthetic rooms, fake forecast, localhost HTTP) | .venv\Scripts\python -m unittest discover -s tests -p "test_learning.py" -v |
 | Cooling optimizer tests (recorded price days, synthetic room, mock devices) | .venv\Scripts\python -m unittest discover -s tests -p "test_optimizer.py" -v |
 | Cottage heating optimizer tests (recorded price days, learned cottage room) | .venv\Scripts\python -m unittest discover -s tests -p "test_heat_optimizer.py" -v |
+| Cottage heat balance tests (synthetic rooms with measured heater power) | .venv\Scripts\python -m unittest discover -s tests -p "test_thermal.py" -v |
 | Home Assistant gateway tests (fake HA WebSocket server on localhost) | .venv\Scripts\python -m unittest discover -s tests -p "test_ha_gateway.py" -v |
 | Cottage controller simulations (no Home Assistant) | .venv\Scripts\python -m unittest discover -s tests -p "test_cottage_control.py" -v |
 | Cottage target sender and site integration tests (fake Home Assistant on localhost, temporary data) | .venv\Scripts\python -m unittest discover -s tests -p "test_cottage_targets.py" -v; .venv\Scripts\python -m unittest discover -s tests -p "test_cottage_site_targets.py" -v |

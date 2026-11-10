@@ -1,11 +1,21 @@
 """Cooling control for the home pumps (cards F4.1, F5.4, F6.1, F6.2).
 
 ``plan_day`` (planning.py) turns the stored settings into a target per room
-and 15-minute period; ``build_plan`` adds the cooling rules, and the
-optimizer (card F5.4, optimizer.py) replaces the plan from the current
-period on for rooms with ``price_control`` "optimized" once the room's
-cooling rate is learned (card F5.1). With ``price_control`` "off" the
-target is always the maximum and the price is not used.
+and 15-minute period and ``build_plan`` adds the cooling rules. With
+``price_control`` "optimized" (the default) the base plan holds the
+maximum, ``cool_max_c``, and the higher ``cool_high_max_c`` while the spot
+price is at or above ``high_price_c_kwh``; the optimizer (card F5.4,
+optimizer.py) replaces it from the current period on once the room's
+cooling rate is learned (card F5.1): it precools down to ``precool_c`` and
+rests the unit where that is cheapest over the known prices. "fixed"
+precools below ``low_price_c_kwh`` and may switch the unit off in the
+expensive periods. With "off" the target is always the maximum and the
+price is not used.
+
+Heating season (``cool_season_pause``): on a day whose outdoor forecast
+stays under ``SEASON_MIN_OUTDOOR_C`` no unit is switched on and a unit
+running in Cool mode is switched off, so the automation can stay on all
+year without cooling against the building's heating.
 
 One controller per unit then applies the current period (audit 2.1):
 
@@ -14,8 +24,8 @@ One controller per unit then applies the current period (audit 2.1):
    mode is never changed.
 2. The target is the plan's: the maximum, the precooling temperature, the
    optimizer's target or, in away mode (card F6.1), the away maximum. In an
-   expensive period (``off`` in the plan) the target is the maximum. A day
-   whose outdoor forecast stays under ``PRECOOL_MIN_OUTDOOR_C`` is not
+   expensive period the target is the high-price maximum. A day whose
+   outdoor forecast stays under ``PRECOOL_MIN_OUTDOOR_C`` is not
    precooled: the cheap periods keep the maximum too.
 3. Power, only with ``cool_power``: a unit that is on is switched off once
    the room is ``STOP_BAND_C`` below the target; a unit that is off is
@@ -81,6 +91,10 @@ QUIET_FAN = "One"
 # cheap periods keep the maximum: a cheap autumn day would otherwise cool
 # the rooms to the precooling temperature all day (review 4.11.2026).
 PRECOOL_MIN_OUTDOOR_C = 18.0
+# Heating season: on a day that stays under this the building's heating is
+# on, and cooling would only work against it.
+SEASON_MIN_OUTDOOR_C = 12.0
+SEASON_RECENT = timedelta(days=3)   # without a forecast: the latest readings
 
 
 def in_night(values: dict, now: datetime) -> bool:
@@ -104,7 +118,8 @@ class CoolPeriod:
     price_c_kwh: Decimal
     target_c: float
     off: bool
-    reason: str                    # "off" | "precool" | "max" | "away" | "optimizer" | "noprice"
+    # "off" | "precool" | "max" | "high" | "away" | "optimizer" | "season" | "noprice"
+    reason: str
 
 
 def _setting_values(overrides, room: str) -> dict:
@@ -112,13 +127,21 @@ def _setting_values(overrides, room: str) -> dict:
     return {k: v["value"] for k, v in resolved.items()}
 
 
-def build_plan(overrides, unit_ids, periods, away: bool = False,
-               cool_days: frozenset = frozenset()) -> dict[str, list[CoolPeriod]]:
-    """Cooling plan per unit.
+def high_max(values) -> float:
+    """The room's maximum while the price is high: never under its maximum."""
+    return max(float(values["cool_max_c"]), float(values["cool_high_max_c"]))
 
-    An expensive period is ``off`` (the unit may be switched off) when the
-    automation may switch the unit's power; its target is the maximum.
-    ``cool_days`` are Helsinki dates too cool outside to precool.
+
+def build_plan(overrides, unit_ids, periods, away: bool = False,
+               cool_days: frozenset = frozenset(),
+               cold_days: frozenset = frozenset()) -> dict[str, list[CoolPeriod]]:
+    """Cooling plan per unit, before the optimizer.
+
+    In an expensive period the target is the high-price maximum; with the
+    fixed thresholds it is also ``off`` (the unit may be switched off) when
+    the automation may switch the unit's power. ``cool_days`` are Helsinki
+    dates too cool outside to precool and ``cold_days`` those of the heating
+    season, when nothing is cooled (setting ``cool_season_pause``).
     """
     if not periods:
         return {}
@@ -127,20 +150,24 @@ def build_plan(overrides, unit_ids, periods, away: bool = False,
     for unit_id in unit_ids:
         values = _setting_values(overrides, unit_id)
         high = Decimal(str(values["high_price_c_kwh"]))
-        off_allowed = (bool(values["cool_power"])
-                       and values["price_control"] != "off")
+        control = values["price_control"]
+        power = bool(values["cool_power"])
         limit = float(values["away_max_c" if away else "cool_max_c"])
         rows = []
         for room_plan in plan[unit_id]:
-            off = off_allowed and room_plan.price_c_kwh >= high
-            if off:
-                target, reason = limit, "off"
+            day = _helsinki_date(room_plan.ts_utc)
+            expensive = control != "off" and room_plan.price_c_kwh >= high
+            off = expensive and power and (control == "fixed" or away)
+            if values["cool_season_pause"] and day in cold_days:
+                target, off, reason = limit, True, "season"
             elif away:
-                target, reason = limit, "away"
+                target, reason = limit, "off" if off else "away"
+            elif expensive:
+                target, reason = high_max(values), "off" if off else "high"
             else:
                 target = float(room_plan.temperature_c)
                 reason = "precool" if room_plan.reason == "threshold" else "max"
-                if reason == "precool" and _helsinki_date(room_plan.ts_utc) in cool_days:
+                if reason == "precool" and day in cool_days:
                     target, reason = float(values["cool_max_c"]), "max"
             rows.append(CoolPeriod(room_plan.ts_utc, room_plan.price_c_kwh,
                                    target, off, reason))
@@ -460,37 +487,54 @@ class CoolingAutomation:
             periods += self._periods(today + timedelta(days=1))
         overrides = self._settings.overrides()
         away = self.away()
+        days = sorted({_helsinki_date(p.ts_utc) for p in periods})
+        cool_days = self._days_under(days, PRECOOL_MIN_OUTDOOR_C)
         plan = build_plan(overrides, [u["id"] for u in units], periods, away,
-                          self._cool_days(periods))
+                          cool_days, self._days_under(days, SEASON_MIN_OUTDOOR_C, True))
         results: dict[str, optimizer.Plan | None] = {}
         if plan and not away:
             for state in units:
                 if state["id"] in plan:
                     results[state["id"]] = self._optimize(
-                        state, plan, overrides, now)
+                        state, plan, overrides, now, cool_days)
         return units, plan, results
 
-    def _cool_days(self, periods) -> frozenset:
-        """The planned Helsinki days whose known outdoor temperatures (the
-        forecast and the readings so far) all stay under
-        PRECOOL_MIN_OUTDOOR_C. A day without any is not one of them."""
+    def _days_under(self, days, limit_c: float, recent: bool = False) -> frozenset:
+        """The Helsinki days whose known outdoor temperatures (the forecast
+        and the readings so far) all stay under ``limit_c``. A day without
+        any is not one of them, unless ``recent``: then the readings of the
+        last ``SEASON_RECENT`` decide."""
         out = set()
         store = self._service.store
-        for day in sorted({_helsinki_date(p.ts_utc) for p in periods}):
+        for day in days:
             start, end = helsinki_day_bounds(day)
             try:
                 values = [v for _ts, v in store.forecast_rows(SITE, start, end)
                           + store.outdoor_rows(SITE, start, end)]
-            except Exception as error:      # no forecast: precool as before
+                if not values and recent:
+                    values = [v for _ts, v in store.outdoor_rows(
+                        SITE, start - int(SEASON_RECENT.total_seconds()), start)]
+            except Exception as error:      # no forecast: cool as before
                 logging.warning("Outdoor forecast read failed: %s", type(error).__name__)
                 continue
-            if values and max(values) < PRECOOL_MIN_OUTDOOR_C:
+            if values and max(values) < limit_c:
                 out.add(day)
         return frozenset(out)
 
-    def _optimize(self, state, plan, overrides, now) -> optimizer.Plan | None:
+    def season_pause(self, now: datetime, overrides=None) -> bool:
+        """True when today is a heating-season day and the pause is on."""
+        overrides = self._settings.overrides() if overrides is None else overrides
+        values = {k: v["value"] for k, v in app_settings.resolve(overrides, SITE).items()}
+        if not values["cool_season_pause"]:
+            return False
+        today = now.astimezone(HELSINKI).date()
+        return today in self._days_under([today], SEASON_MIN_OUTDOOR_C, True)
+
+    def _optimize(self, state, plan, overrides, now,
+                  cool_days: frozenset = frozenset()) -> optimizer.Plan | None:
         """Replace the plan from the current period on with the optimizer's
-        (card F5.4); planned once per period and cached."""
+        (card F5.4); planned once per period and cached. The plan runs to
+        the end of the known prices or to the first heating-season day."""
         unit_id = state["id"]
         values = _setting_values(overrides, unit_id)
         if values["price_control"] != "optimized" or state["room_temp"] is None:
@@ -499,8 +543,10 @@ class CoolingAutomation:
         now_ts = int(now.timestamp())
         i = next((k for k, r in enumerate(rows)
                   if r.ts_utc <= now_ts < r.ts_utc + INTERVAL_SECONDS), None)
-        if i is None:
+        if i is None or rows[i].reason == "season":
             return None
+        end = next((k for k in range(i, len(rows)) if rows[k].reason == "season"), len(rows))
+        ahead = rows[i:end]
         changed = self._load(unit_id)["power_changed_utc"]
         need = max(1, -(-int(values["min_off_minutes"]) * 60 // INTERVAL_SECONDS))
         start_off = 0
@@ -508,31 +554,36 @@ class CoolingAutomation:
             since = _parse(changed)
             start_off = (need if since is None else
                          1 + int((now - since).total_seconds()) // INTERVAL_SECONDS)
-        key = (rows[i].ts_utc, len(rows), rows[-1].ts_utc,
-               tuple(sorted(values.items())), min(start_off, need))
+        maximum, precool = float(values["cool_max_c"]), float(values["precool_c"])
+        # A day too cool outside to precool keeps the maximum as its floor.
+        lowest = [maximum if _helsinki_date(r.ts_utc) in cool_days else precool
+                  for r in ahead]
+        key = (rows[i].ts_utc, len(ahead), ahead[-1].ts_utc,
+               tuple(sorted(values.items())), min(start_off, need),
+               tuple(r.target_c for r in ahead), tuple(lowest))
         cached = self._optimized.get(unit_id)
         if cached is not None and cached[0] == key:
             result = cached[1]
         else:
             models, (_observed, future), _ahead = self._service.learned_models(SITE)
             model = models.get(unit_id)
-            # The whole price per kWh weighs the energy; the thresholds
-            # (compared with spot) move with it so they mean the same hours.
+            # The whole price per kWh weighs the energy. The base plan
+            # holds each period's maximum; the optimizer may rest the unit
+            # in any period (when it may switch it) and precool in any.
             extra = float(values["price_extra_c_kwh"])
             limits = optimizer.Limits(
-                float(values["cool_max_c"]), float(values["precool_c"]),
-                float(values["low_price_c_kwh"]) + extra,
-                float(values["high_price_c_kwh"]) + extra,
+                maximum, precool, float("-inf"), float("-inf"),
                 bool(values["cool_power"]), need)
             result = None if model is None else optimizer.optimize(
                 model, float(state["room_temp"]), start_off,
-                [(r.ts_utc, float(r.price_c_kwh) + extra) for r in rows[i:]],
-                future, limits, [(r.off, r.target_c) for r in rows[i:]])
+                [(r.ts_utc, float(r.price_c_kwh) + extra) for r in ahead],
+                future, limits, [(r.off, r.target_c) for r in ahead],
+                lowest=lowest, highest=[r.target_c for r in ahead])
             self._optimized[unit_id] = (key, result)
         if result is not None and result.optimized:
-            rows[i:] = [CoolPeriod(r.ts_utc, rows[i + k].price_c_kwh, r.target_c,
-                                   r.off, "off" if r.off else "optimizer")
-                        for k, r in enumerate(result.steps)]
+            rows[i:end] = [CoolPeriod(r.ts_utc, rows[i + k].price_c_kwh, r.target_c,
+                                      r.off, "off" if r.off else "optimizer")
+                           for k, r in enumerate(result.steps)]
         return result
 
     def day_plan(self) -> dict:
@@ -552,6 +603,7 @@ class CoolingAutomation:
                 "active": u["mode"] == "Cool",
                 "hold_until": holds.get(u["id"]),
                 "price_control": _setting_values(overrides, u["id"])["price_control"],
+                "season": any(r.reason == "season" for r in plan[u["id"]] if r.ts_utc < end),
                 "windows": merge_windows([r for r in plan[u["id"]]
                                           if r.ts_utc < end]),
                 "optimizer": None if result is None else {
@@ -625,10 +677,11 @@ class CoolingAutomation:
                 if current is None:
                     # No price for this period: cool to the maximum (or the
                     # away maximum). Nothing is written to the stored plan.
+                    season = self.season_pause(now, overrides)
                     current = CoolPeriod(
                         now_ts - now_ts % INTERVAL_SECONDS, Decimal(0),
                         float(values["away_max_c" if away else "cool_max_c"]),
-                        False, "away" if away else "noprice")
+                        season, "season" if season else "away" if away else "noprice")
                 sent.extend(self._control(state, row, current, values, now))
             finally:
                 self._save(row)
@@ -685,6 +738,17 @@ class CoolingAutomation:
         """One unit's controller: power by the room, then the setpoint."""
         target = float(current.target_c)
         room = state["room_temp"]
+        if current.reason == "season":
+            # Heating season: nothing is cooled; a running unit is stopped.
+            changed = _parse(row["power_changed_utc"])
+            if (values["cool_power"] and state["power"]
+                    and (changed is None or now - changed >= timedelta(
+                        minutes=float(values["min_off_minutes"])))):
+                result = self._command(state, "power", False)
+                if result["status"] == 202:
+                    row["power_changed_utc"] = now.isoformat()
+                return [result]
+            return []
         if values["cool_power"] and room is not None:
             changed = _parse(row["power_changed_utc"])
             rested = changed is None or now - changed >= timedelta(

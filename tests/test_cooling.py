@@ -19,9 +19,14 @@ DAY = date(2026, 10, 19)          # the FakeClock's Helsinki day
 
 
 class CoolingTests(ServiceTestCase):
-    def start(self, **settings):
+    def start(self, defaults=False, **settings):
         """The service with the given site:home settings stored first."""
         store = SettingsStore(f"{self.tmp}/pumps.db")
+        if not defaults:
+            # Most tests here were written for the fixed thresholds with a
+            # 25 °C maximum and precooling to 21 °C (the defaults until 0.4.66).
+            settings = {"price_control": "fixed", "cool_max_c": 25.0, "precool_c": 21.0,
+                        **settings}
         for key, value in settings.items():
             store.set("site:home", key, value, "test")
         self.client = FakeClient(make_unit_payloads())
@@ -91,9 +96,9 @@ class CoolingTests(ServiceTestCase):
         service, _ = self.start()
         self.set_prices(30)                       # 3 c/kWh: below 5
         start, end = helsinki_day_bounds(DAY)
-        # A recorded October day at Kumpula: 8-12 °C.
+        # A cool early-summer day: 13-17 °C.
         service.store.forecast_upsert("home", [
-            (datetime.fromtimestamp(ts, timezone.utc), 8.0 + 4.0 * (ts - start) / (end - start))
+            (datetime.fromtimestamp(ts, timezone.utc), 13.0 + 4.0 * (ts - start) / (end - start))
             for ts in range(start, end, 3600)])
         self.run_plan(service)
         self.assertEqual(self._unit(service, "unit-1")["setpoint"], 25.0)
@@ -103,6 +108,59 @@ class CoolingTests(ServiceTestCase):
             (datetime.fromtimestamp(start + 14 * 3600, timezone.utc), 19.0)])   # warm afternoon
         self.run_plan(service)
         self.assertEqual(self._unit(service, "unit-1")["setpoint"], 21.0)
+
+    def october_forecast(self, service):
+        """A recorded October day at Kumpula: 8-12 °C."""
+        start, end = helsinki_day_bounds(DAY)
+        service.store.forecast_upsert("home", [
+            (datetime.fromtimestamp(ts, timezone.utc), 8.0 + 4.0 * (ts - start) / (end - start))
+            for ts in range(start, end, 3600)])
+
+    def test_heating_season_day_cools_nothing_and_stops_a_running_unit(self):
+        service, _ = self.start(defaults=True)
+        self.set_prices(100)
+        self.october_forecast(service)
+        # Rooms at 26 and 27 °C from the radiators: unit-2 is not started,
+        # unit-1 (running in Cool mode) is stopped, and that is all.
+        self.assertEqual(self.brief(self.run_plan(service)), [("unit-1", "power", False)])
+        self.assertEqual(self.run_plan(service), [])
+        self.assertFalse(self._unit(service, "unit-2")["power"])
+        view = service.plan_view()["units"]
+        self.assertTrue(all(u["season"] for u in view))
+        self.assertTrue(all(w["off"] for u in view for w in u["windows"]))
+
+    def test_heating_season_day_without_prices_cools_nothing_either(self):
+        service, _ = self.start(defaults=True)
+        self.october_forecast(service)
+        self.assertEqual(self.brief(self.run_plan(service)), [("unit-1", "power", False)])
+
+    def test_heating_season_pause_can_be_switched_off(self):
+        service, _ = self.start(defaults=True, cool_season_pause=False)
+        self.set_prices(100)
+        self.october_forecast(service)
+        self.assertEqual(self.brief(self.run_plan(service)),
+                         [("unit-1", "setpoint", 24.0), ("unit-2", "power", True)])
+
+    def test_default_band_is_24_and_25_when_the_price_is_high(self):
+        service, _ = self.start(defaults=True, cool_power=False)
+        self.set_prices(100)                      # 10 c/kWh: under the 15 c limit
+        self.assertEqual(self.brief(self.run_plan(service)), [("unit-1", "setpoint", 24.0)])
+        self.set_prices(200)                      # 20 c/kWh: high
+        self.assertEqual(self.brief(self.run_plan(service)), [("unit-1", "setpoint", 25.0)])
+        unit = next(u for u in service.plan_view()["units"] if u["id"] == "unit-1")
+        # Not learned yet: the base plan, and Optimoitu never rests a unit by a threshold.
+        self.assertEqual([(w["target_c"], w["off"]) for w in unit["windows"]], [(25.0, False)])
+        self.assertIsNone(unit["optimizer"])
+
+    def test_fixed_thresholds_allow_the_high_price_maximum_when_expensive(self):
+        service, _ = self.start(cool_max_c=24.0, cool_high_max_c=25.5, cool_power=False)
+        self.set_prices(200)
+        self.assertEqual(self.brief(self.run_plan(service)), [("unit-1", "setpoint", 25.5)])
+
+    def test_high_price_maximum_is_never_under_the_maximum(self):
+        service, _ = self.start(defaults=True, cool_power=False, cool_max_c=26.0)
+        self.set_prices(200)
+        self.assertEqual(self.brief(self.run_plan(service)), [("unit-1", "setpoint", 26.0)])
 
     def test_master_switch_off_sends_nothing_and_on_applies_at_once(self):
         service, _ = self.start()
@@ -203,7 +261,8 @@ class CoolingTests(ServiceTestCase):
         unit = next(u for u in view["units"] if u["id"] == "unit-1")
         self.assertEqual([(w["target_c"], w["off"]) for w in unit["windows"]],
                          [(25.0, False)])
-        self.assertEqual(unit["price_control"], "optimized")
+        self.assertEqual(unit["price_control"], "fixed")
+        self.assertFalse(unit["season"])
         self.run_plan(service)
         start, end = helsinki_day_bounds(DAY)
         rows = service.store.plan_series(

@@ -31,8 +31,10 @@ PATTERN = [20, 60, 90, 150]
 EXPECTED = {20: 12.0, 60: 8.0, 90: 5.0, 150: 5.0}   # default cottage thresholds
 
 # The thresholds these price fixtures were written for (the defaults until
-# 0.4.35, when the defaults became heat only at negative prices).
-RULES = {"heat_rule1_price_c_kwh": 8.0, "heat_rule2_price_c_kwh": 5.0}
+# 0.4.35, when the defaults became heat only at negative prices), in the
+# mode that uses thresholds (the default is Optimoitu, which has none).
+RULES = {"heat_price_control": "fixed",
+         "heat_rule1_price_c_kwh": 8.0, "heat_rule2_price_c_kwh": 5.0}
 
 
 def with_rules(overrides):
@@ -473,7 +475,7 @@ class PureTests(unittest.TestCase):
 
 
 class OptimizedTargetTests(unittest.TestCase):
-    """Card F5.2: a learned room takes the heating optimizer's target."""
+    """Card F5.2: an Optimoitu room takes the heating optimizer's target."""
 
     def setUp(self):
         from villa_kuppis.learning import Outdoor, RoomModel
@@ -488,49 +490,99 @@ class OptimizedTargetTests(unittest.TestCase):
         self.now = datetime.fromtimestamp(start, timezone.utc) + timedelta(minutes=1)
         self.overrides = {}
         self.temps = {"large": 6.0, "small": 6.0}
+        self.humidity = {}
         self.calls = 0
-        model = RoomModel(True, drift_c_per_h=-0.5, heat_c_per_h=2.0)
+        # The visit heat-up's learned room, and the maintenance plan's heat
+        # balance: a 35 m² room with 2.5 kW of heaters in frost.
+        learned = RoomModel(True, drift_c_per_h=-0.5, heat_c_per_h=2.0)
+        balance = RoomModel(True, loss_per_h=0.07, heat_c_per_h=1.9, uses_outdoor=True)
+        start_ts = int(self.now.timestamp())
+        outdoor = Outdoor([(start_ts + h * 3600, -5.0) for h in range(-2, 50)])
 
-        def models():
+        def thermal():
             self.calls += 1
-            return {"large": model}, Outdoor([])
+            return {"large": (balance, 2.5)}, outdoor
         self.sender = CottageTargetSender(
             None, {"large": "large-status", "small": "small-status"},
-            prices_db=data / "prices.db", overrides=lambda: with_rules(self.overrides),
+            prices_db=data / "prices.db", overrides=lambda: self.overrides,
             automation_on=lambda: True, now=lambda: self.now,
-            models=models, room_temps=lambda: self.temps)
+            models=lambda: ({"large": learned}, Outdoor([])), thermal=thermal,
+            room_temps=lambda: self.temps, room_humidity=lambda: self.humidity)
 
-    def test_learned_room_follows_the_optimizer_within_its_band(self):
-        reasons = set()
-        for _ in range(8):
+    def test_room_stores_heat_in_cheap_periods_within_its_band(self):
+        by_price = {}
+        for i in range(8):
             targets = self.sender.targets()
-            self.assertIn(targets["small"].reason, ("base", "threshold"))   # not learned
+            self.assertEqual(targets["small"].reason, "base")   # no heater power known
+            self.assertEqual(targets["small"].target_c, 5.0)
             large = targets["large"]
-            reasons.add(large.reason)
-            if large.reason == "optimized":
-                self.assertGreaterEqual(large.target_c, 5.0)
-                self.assertLessEqual(large.target_c, 12.0)
+            self.assertGreaterEqual(large.target_c, 5.0)
+            self.assertLessEqual(large.target_c, 8.0)
+            self.assertEqual(large.reason, "optimized" if large.target_c > 5.0 else "base")
+            by_price.setdefault(PATTERN[i % 4], set()).add(large.target_c)
             self.now += timedelta(seconds=INTERVAL_SECONDS)
-        self.assertEqual(reasons, {"optimized"})
+        # 2, 6, 9 and 15 c quarters: heat goes in at 2 c, never at 15 c.
+        self.assertGreater(min(by_price[20]), 5.0)
+        self.assertEqual(by_price[150], {5.0})
         # Planned once per period, not on every call.
         calls = self.calls
         self.sender.targets()
         self.sender.targets()
         self.assertEqual(self.calls, calls + 1)
 
-    def test_fixed_setting_or_unknown_temperature_keep_the_thresholds(self):
-        self.overrides = {"site:cottage": {"heat_price_control": "fixed"}}
-        self.assertEqual(self.sender.targets()["large"].reason, "threshold")
+    def test_optimized_room_has_no_thresholds(self):
+        # The fixed mode's thresholds would give 12 °C at 2 c/kWh.
+        self.overrides = {"site:cottage": {"heat_rule1_price_c_kwh": 8.0,
+                                           "heat_rule2_price_c_kwh": 5.0}}
+        self.assertEqual(self.sender.targets()["small"].target_c, 5.0)
+        self.assertLessEqual(self.sender.targets()["large"].target_c, 8.0)
+
+    def test_fixed_setting_keeps_the_thresholds_and_unknown_temperature_the_base(self):
+        self.overrides = with_rules({})
+        large = self.sender.targets()["large"]
+        self.assertEqual((large.reason, large.target_c), ("threshold", 12.0))
         self.overrides = {}
         self.temps = {}
-        self.assertEqual(self.sender.targets()["large"].reason, "threshold")
+        large = self.sender.targets()["large"]
+        self.assertEqual((large.reason, large.target_c), ("base", 5.0))
+
+    def test_failing_heat_model_holds_the_base_level(self):
+        def broken():
+            raise OSError("cottage away")
+        self.sender._thermal = broken
+        with self.assertLogs(level="WARNING"):
+            large = self.sender.targets()["large"]
+        self.assertEqual((large.reason, large.target_c), ("base", 5.0))
+
+    def test_damp_room_is_planned_above_the_humidity_floor(self):
+        self.humidity = {"large": 85.0}
+        seen = set()
+        for _ in range(8):
+            large = self.sender.targets()["large"]
+            self.assertGreaterEqual(large.target_c, 7.0)
+            self.assertLessEqual(large.target_c, 8.0)
+            self.assertEqual(large.reason, "optimized" if large.target_c > 7.0 else "humidity")
+            seen.add(large.target_c)
+            self.now += timedelta(seconds=INTERVAL_SECONDS)
+        self.assertIn(7.0, seen)
+
+    def test_band_comes_from_the_base_level_and_the_upper_limit(self):
+        from villa_kuppis import settings
+        from villa_kuppis.cottage_targets import heat_limits
+        from villa_kuppis.heat_optimizer import HeatLimits
+        values = settings.resolve({}, "cottage", "large")
+        self.assertEqual(heat_limits(values), HeatLimits(5.0, 8.0))
+        self.assertEqual(heat_limits(values, damp=True), HeatLimits(7.0, 8.0))
+        values = settings.resolve({"site:cottage": {"heat_base_c": 9.0}}, "cottage", "large")
+        self.assertEqual(heat_limits(values), HeatLimits(9.0, 9.0))
 
     def test_optimizer_weighs_the_whole_price_per_kwh(self):
         from unittest import mock
         from villa_kuppis import cottage_targets
         seen = []
 
-        def fake(model, start, prices, outdoor, limits, fixed, visit=None):
+        def fake(model, start, prices, outdoor, limits, fixed, visit=None, **kwargs):
+            self.assertEqual(kwargs["heat_kw"], 2.5)
             seen.append(prices[0][1])
             return None
         with mock.patch.object(cottage_targets, "optimize_heating", fake):

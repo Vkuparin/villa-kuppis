@@ -43,7 +43,9 @@ Käyttöliittymän kieli on suomi. Sovellusta käytetään selaimella tietokonee
 | Start / end visit | Vierailu / Lopeta vierailu |
 | Arrival time | Saapumisaika |
 | Optimized heating | Hintaohjaus: Optimoitu |
-| Maximum storage temperature | Suurin varaava lämpötila |
+| Upper limit (heating band) | Yläraja (lämmitys) |
+| Maximum temperature at a high price | Enimmäislämpötila kalliilla hinnalla |
+| Pause in the heating season | Tauko lämmityskaudella |
 | Low / high price | Halpa hinta / Kallis hinta |
 | Site connected / link down, local fallback | Yhteydessä / Yhteys poikki — paikallinen ylläpitolämmitys käytössä |
 | Fetch prices | Hae hinnat |

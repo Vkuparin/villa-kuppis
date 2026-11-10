@@ -327,9 +327,36 @@ class CottageLearningTests(unittest.TestCase):
         self.assertTrue(models["large"].ready)
         # The home units are learned apart from the cottage rooms.
         self.assertEqual(self.service.learned_models("home")[0], {})
-        # Only a room whose held-out day passed reaches the heating optimizer.
+        # Only a room whose held-out day passed plans a visit heat-up.
         trusted, _future = self.service.cottage_heating_models()
         self.assertEqual(set(trusted), {"large"})
+
+    def test_every_cottage_room_has_a_heat_model_from_the_start(self):
+        # No statistics in the stand-in cottage: each room starts from its
+        # floor area, with the power of the heaters that can heat now.
+        from villa_kuppis import thermal
+        models, _future = self.service.cottage_thermal_models()
+        self.assertEqual(set(models), {"large", "small"})
+        model, kw = models["large"]
+        self.assertTrue(model.ready and model.uses_outdoor)
+        self.assertAlmostEqual(kw, self.service.cottage.heat_kw("large"))
+        self.assertGreater(kw, 0)
+        prior = thermal.Prior.for_area(35.0)
+        self.assertAlmostEqual(model.loss_per_h, prior.ua_kw_k / prior.c_kwh_k)
+        self.assertAlmostEqual(model.heat_c_per_h, kw / prior.c_kwh_k)
+        units = {u["id"]: u for u in self.service.room_rates()["units"]}
+        heat = units["cottage:small"]["heat"]
+        self.assertEqual((heat["hours"], heat["ua_w_k"], heat["optimized"], heat["base_c"]),
+                         (0, 22.4, True, 5.0))
+        self.assertIsNone(heat["plan"])            # no prices here
+        # A cottage that does not answer keeps the model it had.
+        def away(*_args):
+            raise OSError("cottage away")
+        self.service._thermal_cache = None
+        self.service.cottage.thermal_inputs = away
+        with self.assertLogs(level="WARNING"):
+            again, _future = self.service.cottage_thermal_models()
+        self.assertEqual(again["large"][0].loss_per_h, model.loss_per_h)
 
 
 def _state(unit_id, name, room, updated):

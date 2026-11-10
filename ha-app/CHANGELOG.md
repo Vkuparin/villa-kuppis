@@ -1,5 +1,15 @@
 # Muutokset
 
+## 0.4.66
+
+- Mökin Optimoitu lämmitys toimii nyt heti eikä odota oppimista. Huone pidetään perustason ja uuden Yläraja-asetuksen välissä (oletus 5–8 °C) mahdollisimman halvalla: lämpöä varataan halvoilla tunneilla vain, kun se tulee halvemmaksi kuin lämmittäminen kalliilla tunneilla, ja muuten huone pysyy perustasolla. Suunnitelma lasketaan vartin välein sähkön kokonaishinnalla (pörssihinta, siirto, vero, marginaali) ja sääennusteella.
+- Huoneen lämpöhäviö ja varaava massa opitaan pattereiden mitatusta tehosta (Mill, paikallinen yhteys), joten malli tarkentuu joka tunti, vaikka huone pysyisi tasaisessa lämmössä. Ennen mittauksia käytetään huoneen koon mukaista arviota. Mökki-sivun "Huoneiden lämpömalli" näyttää luvut ja arvion siitä, paljonko suunnitelma säästää tasaiseen perustasoon verrattuna.
+- Optimoitu-tilassa ei enää ole hintarajoja: aiemmin ne pitivät mökin 10–12 °C:ssa lähes koko ajan, mikä maksoi leudolla säällä noin kolminkertaisesti 5 °C:n pitämiseen verrattuna. Hintarajat näkyvät ja toimivat vain Kiinteät rajat -tilassa. Vanha "Suurin varaava lämpötila" on korvattu Ylärajalla (8 °C).
+- Kostean huoneen 2 °C:n korotus on mukana optimoinnissa: suunnitelma tehdään korotetun alarajan päälle.
+- Kodin jäähdytys: oletukset ovat nyt 23–24 °C (esijäähdytys 23, enimmäislämpötila 24), ja kalliilla hinnalla huone saa nousta uuteen "Enimmäislämpötila kalliilla hinnalla" -arvoon (25 °C). Optimoitu-tilassa suunnitelma päättää itse, milloin esijäähdytetään ja milloin pumppu lepää; Halpa hinta -raja on käytössä vain Kiinteät rajat -tilassa.
+- Jäähdytyksen optimointi ottaa huomioon, että viileällä ulkoilmalla (yöllä) jäähdytys vie vähemmän sähköä, ja toimii nyt myös hitaasti lämpenevissä huoneissa (aiemmin laskenta saattoi hylätä oman suunnitelmansa).
+- Uusi asetus "Tauko lämmityskaudella" (päällä): päivänä, jonka sääennuste pysyy alle 12 °C:n, automaatio ei käynnistä pumppuja ja sammuttaa Jäähdytys-tilassa käyvän pumpun. Kodin Automaation voi siis pitää päällä ympäri vuoden.
+
 ## 0.4.65
 
 - Pumpun "Standby"-kytkin poistettu laitekorteista: se on MELCloudin tilatieto (pumppu odottaa tavoitelämpötilassa), ei virtakytkin, joten sen vaihtaminen ei tehnyt mitään. Pumpun päälle/pois-ohjaus on pumpun omassa kortissa.

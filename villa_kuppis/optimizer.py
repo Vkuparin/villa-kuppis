@@ -13,20 +13,32 @@ maximum in expensive ones and switches the unit off when that is cheapest:
   share of a period it works, at ``COOL_KW``, is its energy; a unit that
   is on also runs its fan at ``FAN_KW``. These nominal powers only rank
   plans against each other, so the estimated costs are relative.
+* The same cooling takes less electricity when it is cool outside
+  (``power_factor``), so of two equally priced hours the plan cools in the
+  cooler one, usually the night.
 * Setpoints run from the precooling temperature to the maximum in
   ``SETPOINT_STEP_C`` steps, so the unit never cools below the precooling
-  temperature. "Off" is allowed only where the fixed rule allows it: the
-  room may switch the pump (``cool_power``) and the price is at or above
-  the high price. Once off, the unit stays off for the minimum off time.
+  temperature; ``lowest`` can raise that floor per period (a day too cool
+  outside to precool). "Off" is allowed where the room may switch the pump
+  (``cool_power``) and the price is at or above the high price (minus
+  infinity: any period). Once off, the unit stays off for the minimum off
+  time.
 * A room above the maximum costs ``OVER_MAX_PENALTY`` cents per °C·h, far
   more than any energy, so the plan stays at or below the maximum whenever
   the unit can hold it.
+* ``highest`` gives each period its own maximum: the comfort maximum, or
+  the higher one allowed while the price is high. A room above its
+  period's maximum but not above the highest of them costs
+  ``SOFT_OVER_PENALTY`` cents per °C·h: enough to bring the room back to
+  the comfort maximum soon after an expensive stretch, not so much that
+  the plan cools at the top price just to be back the moment it ends.
 * The cold left in the room at the end of the known prices is valued at
   the median price of the horizon, so the plan neither spends it nor
   hoards it just before the prices run out.
 
-Dynamic programming over a 0.1 °C room grid finds the cheapest plan; the
-chosen plan is then simulated without the grid. The same simulation runs
+Dynamic programming over a 0.1 °C room grid, read between its points (a
+well-insulated room moves less than a grid step in a period), finds the
+cheapest plan; the chosen plan is then simulated without the grid. The same simulation runs
 the fixed-threshold plan (card F4.1), and the optimizer returns the fixed
 plan whenever its own plan does not score at least as well. So it never
 costs more than the fixed thresholds under the learned model.
@@ -46,6 +58,19 @@ FAN_KW = 0.02                # nominal fan power while the unit is on
 GRID_C = 0.1
 SETPOINT_STEP_C = 0.5
 OVER_MAX_PENALTY = 1000.0    # cents per °C·h above the maximum
+SOFT_OVER_PENALTY = 50.0     # cents per °C·h above a period's own maximum
+# Electricity for the same cooling against the outdoor temperature: about
+# 2.5 % less per °C cooler outside (the compressor lifts the heat a shorter
+# way), within sensible bounds.
+COP_REF_OUTDOOR_C = 25.0
+COP_SLOPE_PER_C = 0.025
+
+
+def power_factor(outdoor_c: float | None) -> float:
+    """Electric power for one unit of cooling, relative to ``COP_REF_OUTDOOR_C``."""
+    if outdoor_c is None:
+        return 1.0
+    return min(1.5, max(0.5, 1.0 + COP_SLOPE_PER_C * (outdoor_c - COP_REF_OUTDOOR_C)))
 
 
 @dataclass(frozen=True)
@@ -76,8 +101,9 @@ class Step:
 class Result:
     steps: list[Step]
     cost_c: float            # energy cost at the nominal powers
-    over_max_c_h: float      # °C·h above the maximum
+    over_max_c_h: float      # °C·h above the highest maximum
     end_c: float
+    penalty_c: float = 0.0   # what the time above the maximums costs the plan
 
     @property
     def max_room_c(self) -> float:
@@ -132,31 +158,41 @@ def setpoints(limits: Limits) -> list[float]:
     return out
 
 
-def _energy_cost(price: float, off: bool, cooling: float) -> float:
+def _energy_cost(price: float, off: bool, cooling: float, factor: float = 1.0) -> float:
     hours = PERIOD_SECONDS / 3600
-    return (cooling * COOL_KW + (0.0 if off else FAN_KW)) * hours * price
+    return (cooling * COOL_KW * factor + (0.0 if off else FAN_KW)) * hours * price
+
+
+def _over_cost(room: float, period_max: float, top: float) -> float:
+    """The penalty of ending a period at ``room``: hard above ``top`` (the
+    highest maximum), soft between the period's own maximum and ``top``."""
+    hours = PERIOD_SECONDS / 3600
+    return (max(0.0, room - top) * OVER_MAX_PENALTY
+            + max(0.0, min(room, top) - period_max) * SOFT_OVER_PENALTY) * hours
 
 
 def _stage_cost(price: float, off: bool, cooling: float, room: float,
-                limits: Limits) -> float:
-    over = max(0.0, room - limits.max_c) * PERIOD_SECONDS / 3600
-    return _energy_cost(price, off, cooling) + over * OVER_MAX_PENALTY
+                period_max: float, top: float, factor: float = 1.0) -> float:
+    return _energy_cost(price, off, cooling, factor) + _over_cost(room, period_max, top)
 
 
 def _run(model, start_room: float, start_off: int, prices: Sequence[tuple[int, float]],
-         outdoors: Sequence[float | None], limits: Limits,
+         outdoors: Sequence[float | None], maxes: Sequence[float],
          choose: Callable[[int, float, int], tuple[bool, float]]) -> Result:
-    """Simulate a policy; ``choose(i, room, off_periods)`` -> (off, setpoint)."""
+    """Simulate a policy; ``choose(i, room, off_periods)`` -> (off, setpoint).
+    ``maxes`` is each period's maximum."""
     hours = PERIOD_SECONDS / 3600
-    steps, room, k, cost, over = [], start_room, start_off, 0.0, 0.0
+    top = max(maxes)
+    steps, room, k, cost, over, penalty = [], start_room, start_off, 0.0, 0.0, 0.0
     for i, (ts, price) in enumerate(prices):
         off, sp = choose(i, room, k)
         room, share = period_step(model, room, outdoors[i], off, sp)
-        cost += _energy_cost(price, off, share)
-        over += max(0.0, room - limits.max_c) * hours
+        cost += _energy_cost(price, off, share, power_factor(outdoors[i]))
+        over += max(0.0, room - top) * hours
+        penalty += _over_cost(room, maxes[i], top)
         k = k + 1 if off else 0
         steps.append(Step(ts, price, off, sp, room, share))
-    return Result(steps, cost, over, room)
+    return Result(steps, cost, over, room, penalty)
 
 
 def fixed_policy(fixed: Sequence[tuple[bool, float]], limits: Limits):
@@ -164,8 +200,8 @@ def fixed_policy(fixed: Sequence[tuple[bool, float]], limits: Limits):
 
     ``fixed`` is the fixed plan's (off, target) per period. A unit off in
     an expensive stretch comes back once the minimum off time is over and
-    the room has reached the maximum, and then holds the maximum until the
-    stretch ends.
+    the room has reached the period's target (its maximum), and then holds
+    it until the stretch ends.
     """
     need = max(1, limits.min_off_periods)
     held = {"on": False}
@@ -179,7 +215,7 @@ def fixed_policy(fixed: Sequence[tuple[bool, float]], limits: Limits):
             return False, target
         if held["on"]:
             return False, target
-        if k and room >= limits.max_c:
+        if k and room >= target:
             held["on"] = True
             return False, target
         return True, target
@@ -187,19 +223,23 @@ def fixed_policy(fixed: Sequence[tuple[bool, float]], limits: Limits):
 
 
 def _score(result: Result, ref_end: float, cold_value: float) -> float:
-    return (result.cost_c + result.over_max_c_h * OVER_MAX_PENALTY
-            + (result.end_c - ref_end) * cold_value)
+    return result.cost_c + result.penalty_c + (result.end_c - ref_end) * cold_value
 
 
 def optimize(model: learning.RoomModel, start_room: float, start_off: int,
              prices: Sequence[tuple[int, float]],
              outdoor: learning.Outdoor, limits: Limits,
-             fixed: Sequence[tuple[bool, float]]) -> Plan | None:
+             fixed: Sequence[tuple[bool, float]],
+             lowest: Sequence[float] | None = None,
+             highest: Sequence[float] | None = None) -> Plan | None:
     """Cheapest plan from now to the end of the known prices.
 
     ``prices`` are (ts, c/kWh) from the current period on; ``start_off`` is
     how many periods the unit has been off by the automation (0 when on);
-    ``fixed`` is the fixed plan's (off, target) for the same periods.
+    ``fixed`` is the baseline's (off, target) for the same periods (the
+    fixed thresholds, or holding the maximum); ``lowest`` is the lowest
+    setpoint allowed in each period (default: the precooling temperature)
+    and ``highest`` each period's maximum (default: ``limits.max_c``).
     Returns None when the room's cooling rate is not learned yet.
     """
     if (not prices or not model.ready or not model.cool_c_per_h
@@ -209,23 +249,34 @@ def optimize(model: learning.RoomModel, start_room: float, start_off: int,
     for ts, _ in prices:
         value = outdoor.at(ts)
         outdoors.append(value if value is not None else outdoor.last_before(ts))
+    factors = [power_factor(value) for value in outdoors]
     n, need = len(prices), max(1, limits.min_off_periods)
     start_off = min(start_off, need)
+    maxes = list(highest) if highest is not None else [limits.max_c] * n
+    top = max(maxes)
 
-    base = _run(model, start_room, start_off, prices, outdoors, limits,
+    base = _run(model, start_room, start_off, prices, outdoors, maxes,
                 fixed_policy(fixed, limits))
     ref_end = base.end_c
     cold_value = COOL_KW * median(p for _, p in prices) / model.cool_c_per_h
 
     lo = min(limits.precool_c, start_room) - 3.0
-    hi = max(limits.max_c, start_room) + 5.0
+    hi = max(top, start_room) + 5.0
     bins = int(round((hi - lo) / GRID_C)) + 1
     temps = [lo + b * GRID_C for b in range(bins)]
 
-    def index(t: float) -> int:
-        return min(bins - 1, max(0, int(round((t - lo) / GRID_C))))
+    def at(table: list[float], t: float) -> float:
+        """The table between its two nearest bins (no rounding bias)."""
+        x = min(bins - 1.0, max(0.0, (t - lo) / GRID_C))
+        b = min(bins - 2, int(x))
+        w = x - b
+        return table[b] * (1 - w) + table[b + 1] * w
 
-    sps = setpoints(limits)
+    every = setpoints(Limits(top, limits.precool_c, limits.low_c_kwh, limits.high_c_kwh,
+                             limits.off_allowed, limits.min_off_periods))
+    choices = [[sp for sp in every
+                if sp <= maxes[i] + 1e-9 and (lowest is None or sp >= lowest[i] - 1e-9)]
+               or [maxes[i]] for i in range(n)]
     # value[k][b]: cheapest score from period i on, k periods off so far
     # (k == need: free to switch on).
     value = [[(t - ref_end) * cold_value for t in temps] for _ in range(need + 1)]
@@ -233,27 +284,28 @@ def optimize(model: learning.RoomModel, start_room: float, start_off: int,
     for i in range(n - 1, -1, -1):
         price = prices[i][1]
         may_off = limits.off_allowed and price >= limits.high_c_kwh
-        out_c = outdoors[i]
+        out_c, factor = outdoors[i], factors[i]
         on_best = [0.0] * bins
-        off_next = [0] * bins
+        off_room = [0.0] * bins
         off_cost = [0.0] * bins
         for b, t in enumerate(temps):
             best = None
-            for sp in sps:
+            for sp in choices[i]:
                 room, share = period_step(model, t, out_c, False, sp)
-                c = _stage_cost(price, False, share, room, limits) + value[0][index(room)]
+                c = (_stage_cost(price, False, share, room, maxes[i], top, factor)
+                     + at(value[0], room))
                 if best is None or c < best:
                     best = c
             on_best[b] = best
             room, _ = period_step(model, t, out_c, True, 0.0)
-            off_next[b] = index(room)
-            off_cost[b] = _stage_cost(price, True, 0.0, room, limits)
+            off_room[b] = room
+            off_cost[b] = _stage_cost(price, True, 0.0, room, maxes[i], top)
         new = []
         for k in range(need + 1):
             row = []
+            nk = min(k + 1, need)
             for b in range(bins):
-                nk = min(k + 1, need)
-                off_total = off_cost[b] + value[nk][off_next[b]]
+                off_total = off_cost[b] + at(value[nk], off_room[b])
                 if 0 < k < need:
                     row.append(off_total)          # minimum off time
                 elif may_off:
@@ -269,23 +321,23 @@ def optimize(model: learning.RoomModel, start_room: float, start_off: int,
         after = tables[i]
         nk = min(k + 1, need) if k else 1
         off_room, _ = period_step(model, room, outdoors[i], True, 0.0)
-        off_total = (_stage_cost(price, True, 0.0, off_room, limits)
-                     + after[nk][index(off_room)])
+        off_total = (_stage_cost(price, True, 0.0, off_room, maxes[i], top)
+                     + at(after[nk], off_room))
         if 0 < k < need:
-            return True, limits.max_c
+            return True, maxes[i]
         best, pick = None, None
-        for sp in sps:
+        for sp in choices[i]:
             r, share = period_step(model, room, outdoors[i], False, sp)
-            c = _stage_cost(price, False, share, r, limits) + after[0][index(r)]
+            c = (_stage_cost(price, False, share, r, maxes[i], top, factors[i])
+                 + at(after[0], r))
             if best is None or c < best - 1e-12:
                 best, pick = c, sp
         if limits.off_allowed and price >= limits.high_c_kwh \
                 and off_total < best - 1e-12:
-            return True, limits.max_c
+            return True, maxes[i]
         return False, pick
 
-    opt = _run(model, start_room, start_off, prices, outdoors,
-               limits, choose)
+    opt = _run(model, start_room, start_off, prices, outdoors, maxes, choose)
     use_opt = _score(opt, ref_end, cold_value) <= _score(base, ref_end, cold_value) + 1e-9
     chosen = opt if use_opt else base
     # The cost counts the cold left at the end against the fixed plan's.

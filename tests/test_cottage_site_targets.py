@@ -17,7 +17,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest import IsolatedAsyncioTestCase
+from unittest import IsolatedAsyncioTestCase, mock
 
 from tests.common import elering_payload
 from tests.test_cottage_targets import DAY, PATTERN, FakeCottageHA, with_rules
@@ -109,40 +109,79 @@ class SiteTargetTests(IsolatedAsyncioTestCase):
         self.assertFalse(view["automation_on"])
         self.assertEqual(self.room("large")["plan"]["target"], 12.0)
 
-    async def test_optimized_rooms_with_a_learning_restart_still_get_their_thresholds(self):
-        # Ville's settings on 2026-11-04: Optimoitu, below 15 c -> 8 °C, below 8 c -> 12 °C.
-        # The rooms are not learned yet, so the thresholds are the plan. Reading
-        # the learning history after a restart once crashed every tick.
-        overrides = {"site:cottage": {"heat_price_control": "optimized", "heat_base_c": 5,
-                                      "smart_max_c": 12,
-                                      "heat_rule1_price_c_kwh": 15, "heat_rule1_c": 8,
-                                      "heat_rule2_price_c_kwh": 8, "heat_rule2_c": 12}}
+    async def test_optimized_rooms_get_the_plan_from_their_measured_heat(self):
+        # Optimoitu (the default): no thresholds. The plan comes from the room's
+        # hours in the cottage Home Assistant's statistics, read through the site.
+        from villa_kuppis import thermal
+        from villa_kuppis.learning import Outdoor
         for room in ("large", "small"):
             self.bindings.bind("cottage", f"{room}-temperature",
                                f"sensor.{room}_temperature", "sensor", "", room)
-            self.bindings.bind("cottage", f"{room}-heater", f"climate.{room}_heater",
+            self.bindings.bind("cottage", f"{room}-heater", f"climate.{room}_1000w",
                                "climate", "", room)
-            self.site.restart_learning(room, "test")
-        self.clock.advance(3600)
-        read = []
+            self.ha.set_state(f"sensor.{room}_temperature", "6.0",
+                              {"device_class": "temperature", "unit_of_measurement": "°C"})
+            self.ha.set_state(f"climate.{room}_1000w", "heat", {"temperature": 6.0})
+            self.ha.set_state(f"sensor.{room}_power", "400",
+                              {"device_class": "power", "unit_of_measurement": "W"})
+        self.ha.registry = {"areas": [], "floors": [],
+                            "devices": [{"id": "dev-large"}, {"id": "dev-small"}],
+                            "entities": [
+            {"entity_id": f"{kind}.{room}_{name}", "device_id": f"dev-{room}"}
+            for room in ("large", "small")
+            for kind, name in (("climate", "1000w"), ("sensor", "power"))]}
+        self.gateway.reload_bindings()
+        with mock.patch("villa_kuppis.ha_gateway.REGISTRY_DEBOUNCE", 0.0):
+            self.ha.fire("entity_registry_updated", {"action": "update"})
+            await eventually(lambda: self.gateway.registry() is not None)
+        await eventually(
+            lambda: self.gateway.snapshot().get("small-heater", {}).get("available"))
+        now = self.clock()
+        hour = int(now.timestamp()) // 3600 * 3600
+        hours = [hour - 3600 * k for k in range(30, 0, -1)]
+        self.ha.answers["recorder/statistics_during_period"] = {
+            **{f"sensor.{room}_temperature": [{"start": ts * 1000, "mean": 6.0} for ts in hours]
+               for room in ("large", "small")},
+            **{f"sensor.{room}_power": [{"start": ts * 1000, "mean": 400.0} for ts in hours]
+               for room in ("large", "small")}}
+        outdoor = Outdoor([(hour + 3600 * h, 0.0) for h in range(-40, 50)])
+        fits = {}
 
         def models():
-            end = self.clock()
-            for room in ("large", "small"):
-                read.append(self.site.learning_readings(room, end - timedelta(days=7), end))
-            return {}, None
-        self.site._targets_cfg.update(overrides=lambda: overrides, models=models)
+            out = {}
+            for room, area in (("large", 35.0), ("small", 8.0)):
+                temps, power = self.site.thermal_inputs(room, now - timedelta(days=7), now)
+                fits[room] = thermal.estimate(temps, power, outdoor, thermal.Prior.for_area(area))
+                kw = self.site.heat_kw(room)
+                out[room] = (fits[room].room_model(kw), kw)
+            return out, outdoor
+        self.site._targets_cfg.update(overrides=lambda: {}, thermal=models)
         self.site._sender_map = None          # rebuild the sender with the new settings
+        loop = asyncio.get_running_loop()
+        sent = await loop.run_in_executor(None, self.site.tick_targets)
+        await self.settle(sent)
+        self.assertEqual(self.site._heater_power_entities(),
+                         {"climate.large_1000w": ("sensor.large_power", 0.001),
+                          "climate.small_1000w": ("sensor.small_power", 0.001)})
+        self.assertEqual(fits["large"].hours, 29)
+        # 0.4 kW held 6 °C in both rooms: 0.4 / 6 kW per °C, pulled toward the size's value.
+        self.assertGreater(fits["small"].ua_kw_k, thermal.Prior.for_area(8.0).ua_kw_k)
+        self.assertLess(fits["large"].ua_kw_k, thermal.Prior.for_area(35.0).ua_kw_k)
+        self.assertEqual(self.site.heat_kw("small"), 1.0)
+        steps = [t.target_c for t in self.site._sender.schedules["small"]]
+        self.assertEqual(min(steps), 5.0)
+        self.assertLessEqual(max(steps), 8.0)
+        self.assertGreater(max(steps), 5.0)     # heat stored before the 15 c quarters
+        self.assertIn(self.room("small")["plan"]["reason"], ("base", "optimized"))
+
+    async def test_room_without_heater_power_holds_the_base_level(self):
+        self.site._targets_cfg.update(overrides=lambda: {}, thermal=lambda: ({}, None))
+        self.site._sender_map = None
         sent = self.site.tick_targets()
         await self.settle(sent)
-        self.assertEqual(len(read), 2)
-        targets = {t["room"]: t for t in self.ha.targets}
-        # 03:00 local at 2 c/kWh: below both thresholds, the higher target wins.
-        self.assertEqual({room: t["target"] for room, t in targets.items()},
-                         {"large": 12.0, "small": 12.0})
-        steps = [t.target_c for t in self.site._sender.schedules["small"]]
-        self.assertEqual(set(steps), {12.0, 8.0, 5.0})   # 6 c -> 12, 9 c -> 8, 15 c -> 5
-        self.assertEqual(self.room("small")["plan"]["reason"], "threshold")
+        self.assertEqual({t["room"]: t["target"] for t in self.ha.targets},
+                         {"large": 5.0, "small": 5.0})
+        self.assertEqual(self.room("small")["plan"]["reason"], "base")
 
     async def test_room_without_a_status_binding_is_skipped(self):
         self.bindings.unbind("cottage", "small-status")

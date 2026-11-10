@@ -73,11 +73,52 @@ SCRIPT = r"""
     d.appendChild(b); d.appendChild(sp);
     box.appendChild(d);
   }
+  function cents(c) {
+    return Math.abs(c) >= 100 ? num(c / 100, 2) + " €" : num(c, 0) + " snt";
+  }
+  // The cottage room's heat balance: what the heating optimizer plans with.
+  function heatModel(h, head, stats, ul) {
+    var chip = document.createElement("span");
+    var active = h.optimized && h.plan;
+    chip.className = "badge " + (active ? "ok" : "info");
+    chip.textContent = active ? "Optimointi käytössä" : (h.optimized ? "Perustaso" : "Kiinteät rajat");
+    chip.title = active ? "Lämmitys suunnitellaan vartin välein tunnetuille hinnoille."
+      : (h.optimized ? "Suunnitelmaa ei ole: huone pidetään perustasolla. Tarvitaan hinnat, " +
+          "sääennuste, huoneen lämpötila ja vähintään yksi käytettävissä oleva patteri."
+        : "Hintaohjaus on asetuksissa Kiinteät rajat.");
+    head.appendChild(chip);
+    stat(stats, num(h.ua_w_k, 0) + " W/°C", "lämpöhäviö", "",
+      "Teho, jonka huone hukkaa jokaista sisä- ja ulkolämpötilan eron astetta kohden." +
+      (h.hold_w === null ? "" : " Perustason " + num(h.base_c, 0) + " °C pitäminen vie nyt noin " +
+        num(h.hold_w, 0) + " W."));
+    stat(stats, num(h.c_kwh_k, 1) + " kWh/°C", "varaava massa", "",
+      "Lämpö, jonka huone varaa yhtä astetta kohden. Ilman lämmitystä ero ulkolämpötilaan " +
+      "pienenee noin kolmannekseen " + num(h.tau_h, 0) + " tunnissa.");
+    stat(stats, num(h.heater_kw, 2).replace(/0$/, "") + " kW", "patterit", "heat",
+      "Käytettävissä olevien pattereiden yhteisteho.");
+    item(ul, h.hours ? "Lämpömalli on sovitettu " + h.hours + " tunnin mitattuun lämmitystehoon" +
+        (h.error_c_h === null ? "." : " (tunnin ennusteen virhe noin " + num(h.error_c_h, 2) + " °C).")
+      : "Lämpömalli on huoneen koon mukainen arvio; se tarkentuu pattereiden mitatusta tehosta.");
+    if (active) {
+      var p = h.plan, saved = p.hold_cost_c - p.cost_c;
+      item(ul, "Seuraavat " + num(p.hours, 0) + " h: arviolta " + cents(p.cost_c) +
+        (p.optimized && saved >= 0.5 ? ", " + cents(saved) + " vähemmän kuin tasainen perustaso."
+          : ". Lämmön varaaminen ei nyt kannata, joten huone pidetään perustasolla."),
+        p.optimized && saved >= 0.5 ? "rooms-ok" : "");
+    }
+  }
+  var $title = document.querySelector("#rooms-section h2");
   function render(data) {
     $body.textContent = "";
-    $note.textContent = "Opittu viimeisten " + data.learn_days +
-      " päivän lukemista. Hyväksytty virhe: keskimäärin enintään " +
-      num(data.limit_c, 1) + " °C edellisen päivän ennusteessa.";
+    var cottage = typeof vkSite === "function" && vkSite() === "cottage";
+    if ($title.lastChild && $title.lastChild.nodeType === 3)
+      $title.lastChild.nodeValue = cottage ? "Huoneiden lämpömalli" : "Huoneiden opitut nopeudet";
+    $note.textContent = cottage
+      ? "Huoneen lämpöhäviö ja varaava massa opitaan pattereiden mitatusta tehosta. " +
+        "Optimoitu lämmitys suunnittelee niillä."
+      : "Opittu viimeisten " + data.learn_days +
+        " päivän lukemista. Hyväksytty virhe: keskimäärin enintään " +
+        num(data.limit_c, 1) + " °C edellisen päivän ennusteessa.";
     function range(rows) {
       var temps = rows.map(function (p) { return p[1]; });
       return num(Math.min.apply(null, temps), 0) + "…" +
@@ -107,14 +148,18 @@ SCRIPT = r"""
       stats.className = "room-stats";
       var ul = document.createElement("ul");
       var m = u.model;
-      if (!m.ready) {
+      if (cot && u.heat) heatModel(u.heat, head, stats, ul);
+      if (!m.ready && cot) {
+        // The learned rates plan only a visit's heat-up at the cottage.
+        item(ul, "Vierailun esilämmitys alkaa kiinteällä ennakolla, kunnes huoneen " +
+          "lämpenemisnopeus on opittu täydellä teholla lämmittäessä.");
+      } else if (!m.ready) {
         var chip = document.createElement("span");
         chip.className = "badge info";
         chip.textContent = "Opitaan";
         head.appendChild(chip);
         item(ul, "Opitaan vielä: lukemia on " + u.hours + " tunnilta, tarvitaan vähintään " +
-          (cot ? "vuorokausi aikaa, jolloin patterit eivät lämmitä."
-               : "vuorokausi ilman laitteen ohjausta."));
+          "vuorokausi ilman laitteen ohjausta.");
       } else {
         if (u.now) {
           stat(stats, signed(u.now.off_c_per_h) + " °C/h",
@@ -137,7 +182,9 @@ SCRIPT = r"""
         if (!m.uses_outdoor)
           item(ul, "Ulkolämpötilaa ei ole tarpeeksi; malli käyttää vain huoneen omaa muutosta.");
       }
-      if (u.validation) {
+      if (cot && !m.ready) {
+        // Nothing to test yet; the heat model above runs the room.
+      } else if (u.validation) {
         var v = u.validation;
         var period = v.days > 1 ? "Testijakso " + v.days + " päivää " + fiDate(v.day) + " asti"
                                 : "Testipäivä " + fiDate(v.day);
@@ -155,8 +202,9 @@ SCRIPT = r"""
             " °C, suurin " + num(v.max_error_c, 1) + " °C" +
             (v.passed ? " (hyväksytty)." : " (yli rajan).");
         }
-        head.appendChild(ok);
-        item(ul, ok.title, v.reason === "few_moves" ? "" : (v.passed ? "rooms-ok" : "rooms-bad"));
+        if (!cot) head.appendChild(ok);
+        item(ul, (cot ? "Vierailun esilämmityksen malli. " : "") + ok.title,
+          v.reason === "few_moves" ? "" : (v.passed ? "rooms-ok" : "rooms-bad"));
       } else if (m.ready) {
         item(ul, "Testipäivää ei voi vielä arvioida: tarvitaan kokonainen päivä ja sitä edeltävät lukemat.");
       }
