@@ -28,8 +28,18 @@ SECTION_HTML = r"""
               id="ui-dark"><span class="track"></span></button>
     </div>
     <div class="set-row">
-      <label for="ui-accent" class="set-name">Aksenttiväri</label>
-      <select id="ui-accent" aria-label="Aksenttiväri">
+      <label for="ui-accent-home" class="set-name" title="Väri, jota Kodin sivulla käytetään. Oletus: sininen.">Kodin aksenttiväri</label>
+      <select id="ui-accent-home" aria-label="Kodin aksenttiväri">
+        <option value="blue">Sininen</option>
+        <option value="green">Vihreä</option>
+        <option value="purple">Purppura</option>
+        <option value="pink">Pinkki</option>
+        <option value="orange">Oranssi</option>
+      </select>
+    </div>
+    <div class="set-row">
+      <label for="ui-accent-cottage" class="set-name" title="Väri, jota Mökin sivulla käytetään. Oletus: sininen.">Mökin aksenttiväri</label>
+      <select id="ui-accent-cottage" aria-label="Mökin aksenttiväri">
         <option value="blue">Sininen</option>
         <option value="green">Vihreä</option>
         <option value="purple">Purppura</option>
@@ -333,23 +343,35 @@ SCRIPT = r"""
   // Look and feel: per browser, applied at once (the page head applies it at load).
   var root = document.documentElement;
   var $dark = document.getElementById("ui-dark");
-  var $accent = document.getElementById("ui-accent");
   function remember(key, value) {
     try { localStorage.setItem(key, value); } catch (e) {}
   }
   $dark.setAttribute("aria-checked",
     root.getAttribute("data-theme") === "dark" ? "true" : "false");
-  $accent.value = root.getAttribute("data-accent") || "blue";
+  try {  // one shared colour from before becomes each site's own
+    var old = localStorage.getItem("vk-accent");
+    if (old) {
+      ["home", "cottage"].forEach(function (site) {
+        if (!localStorage.getItem("vk-accent-" + site)) localStorage.setItem("vk-accent-" + site, old);
+      });
+      localStorage.setItem("vk-accent", "");
+    }
+  } catch (e) {}
+  ["home", "cottage"].forEach(function (site) {
+    var $sel = document.getElementById("ui-accent-" + site);
+    var v = "";
+    try { v = localStorage.getItem("vk-accent-" + site) || ""; } catch (e) {}
+    $sel.value = v || "blue";
+    $sel.addEventListener("change", function () {
+      remember("vk-accent-" + site, $sel.value === "blue" ? "" : $sel.value);
+      vkApplyAccent();
+    });
+  });
   $dark.addEventListener("click", function () {
     var dark = $dark.getAttribute("aria-checked") !== "true";
     $dark.setAttribute("aria-checked", dark ? "true" : "false");
     root.setAttribute("data-theme", dark ? "dark" : "light");
     remember("vk-theme", dark ? "dark" : "light");
-  });
-  $accent.addEventListener("change", function () {
-    if ($accent.value === "blue") root.removeAttribute("data-accent");
-    else root.setAttribute("data-accent", $accent.value);
-    remember("vk-accent", $accent.value === "blue" ? "" : $accent.value);
   });
 })();
 """

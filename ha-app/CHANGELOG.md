@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.67
+
+- Kodille ja mökille voi valita omat aksenttivärit (Asetukset > Käyttöliittymä). Sivu käyttää näytettävän kohteen väriä; aiemmin valittu väri siirtyy molemmille. Seinänäkymä käyttää kodin väriä.
+
 ## 0.4.66
 
 - Mökin Optimoitu lämmitys toimii nyt heti eikä odota oppimista. Huone pidetään perustason ja uuden Yläraja-asetuksen välissä (oletus 5–8 °C) mahdollisimman halvalla: lämpöä varataan halvoilla tunneilla vain, kun se tulee halvemmaksi kuin lämmittäminen kalliilla tunneilla, ja muuten huone pysyy perustasolla. Suunnitelma lasketaan vartin välein sähkön kokonaishinnalla (pörssihinta, siirto, vero, marginaali) ja sääennusteella.

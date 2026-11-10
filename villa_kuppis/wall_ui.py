@@ -23,7 +23,7 @@ PAGE = r"""<!doctype html>
 <script>
 (function () {
   var a = null;
-  try { a = localStorage.getItem("vk-accent"); } catch (e) {}
+  try { a = localStorage.getItem("vk-accent-home") || localStorage.getItem("vk-accent"); } catch (e) {}
   if (a) document.documentElement.setAttribute("data-accent", a);
 })();
 </script>

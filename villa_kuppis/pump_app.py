@@ -261,12 +261,22 @@ _PAGE = """<!doctype html>
 <script>
 (function () {
   var t = null, a = null;
-  try { t = localStorage.getItem("vk-theme"); a = localStorage.getItem("vk-accent"); } catch (e) {}
+  var site = location.hash === "#mokki" ? "cottage" : "home";
+  try { t = localStorage.getItem("vk-theme");
+        a = localStorage.getItem("vk-accent-" + site) || localStorage.getItem("vk-accent"); } catch (e) {}
   if (t !== "dark" && t !== "light")
     t = window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   document.documentElement.setAttribute("data-theme", t);
   if (a) document.documentElement.setAttribute("data-accent", a);
 })();
+// Each site has its own accent colour; the page applies the one for what is shown.
+function vkApplyAccent() {
+  var a = null;
+  var site = location.hash === "#mokki" ? "cottage" : "home";
+  try { a = localStorage.getItem("vk-accent-" + site) || localStorage.getItem("vk-accent"); } catch (e) {}
+  if (a) document.documentElement.setAttribute("data-accent", a);
+  else document.documentElement.removeAttribute("data-accent");
+}
 // Line icons, drawn inline: a fragment link to a symbol would break under the
 // base address the Tailscale path adds.
 var VK_ICONS = {
@@ -1740,6 +1750,7 @@ function showPage() {
   loadHistory();
   renderEvents(lastEvents);
   showGreeting();
+  vkApplyAccent();
   document.dispatchEvent(new Event("vk-page"));
 }
 window.addEventListener("hashchange", showPage);
