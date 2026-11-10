@@ -392,11 +392,11 @@ var vkEvery = (function () {
   --accent: #5b9cff;
   --shadow: none;
 }
-:root[data-accent="green"] { --accent: #0f8a3e; }
+:root[data-accent="green"] { --accent: #0c7a36; }
 :root[data-accent="purple"] { --accent: #7c3aed; }
 :root[data-accent="pink"] { --accent: #d6336c; }
 :root[data-accent="orange"] { --accent: #d9640b; }
-:root[data-theme="dark"][data-accent="green"] { --accent: #4ade80; }
+:root[data-theme="dark"][data-accent="green"] { --accent: #1f9d55; }
 :root[data-theme="dark"][data-accent="purple"] { --accent: #b794f6; }
 :root[data-theme="dark"][data-accent="pink"] { --accent: #f472b6; }
 :root[data-theme="dark"][data-accent="orange"] { --accent: #fb923c; }

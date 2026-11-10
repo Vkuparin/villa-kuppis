@@ -1,5 +1,9 @@
 # Muutokset
 
+## 0.4.68
+
+- Vihreä aksenttiväri on nyt hieman tummempi, jotta painikkeiden kontrasti ei ole liian kova.
+
 ## 0.4.67
 
 - Kodille ja mökille voi valita omat aksenttivärit (Asetukset > Käyttöliittymä). Sivu käyttää näytettävän kohteen väriä; aiemmin valittu väri siirtyy molemmille. Seinänäkymä käyttää kodin väriä.
