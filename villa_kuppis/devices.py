@@ -61,6 +61,10 @@ SPARK_CACHE = 60.0
 MAX_HISTORY_HOURS = 24 * 400
 MAX_NAME = 60
 RECENT_COMMAND = 600          # a failed command stays on its tile this long (s)
+# A room sensor that has not reported for this long no longer steers its
+# pump; the pump's own reading takes over (s). Matter sensors report only
+# on change, so another entity of the same device reporting also counts.
+ROOM_SENSOR_STALE = 5400
 
 # Tile order inside an area until the owner sorts it.
 KIND_ORDER = ("climate", "temperature", "humidity", "co2", "air", "light", "plug", "switch",
@@ -892,29 +896,66 @@ class DeviceCatalog:
         self._store.set_room_sensor(self.site_id, room, key, self._now())
         return {"ok": True}
 
-    def room_sensor_names(self) -> dict[str, str]:
-        """Room -> the chosen sensor's name, for rooms whose sensor reports now."""
+    def room_links(self) -> dict[str, dict]:
+        """Room -> its chosen sensor: key, shown name and the reading while
+        the sensor reports (``value`` None: lost, the pump's own is used)."""
         chosen = self._store.room_sensors(self.site_id)
-        if not chosen or self._source.health().get("state") != "ok":
+        if not chosen:
             return {}
+        ok = self._source.health().get("state") == "ok"
         devices = self.devices_by_key()
         layout = self._store.layout(self.site_id)[0]
+        states = self._source.raw_states() if ok else {}
         out = {}
         for room, key in chosen.items():
             d = devices.get(key)
-            if d and d.get("available") and d["kind"] == "temperature" and d.get("value") is not None:
-                out[room] = (layout.get(key) or {}).get("name") or d["ha_name"]
+            name = ((layout.get(key) or {}).get("name") or d["ha_name"]) if d else None
+            value = None
+            if (ok and d and d.get("available") and d["kind"] == "temperature"
+                    and d.get("value") is not None and self._heard(d["entity_id"], states)):
+                value = d["value"]
+            out[room] = {"key": key, "name": name, "value": value}
         return out
+
+    def _heard(self, entity_id: str, states: dict) -> bool:
+        """The entity, or another entity of its Home Assistant device,
+        reported within ``ROOM_SENSOR_STALE``. A state without times counts."""
+        def seen(state) -> datetime | None:
+            stamps = []
+            for k in ("last_reported", "last_updated", "last_changed"):
+                try:
+                    t = datetime.fromisoformat(state.get(k) or "")
+                except (TypeError, ValueError):
+                    continue
+                stamps.append(t if t.tzinfo else t.replace(tzinfo=timezone.utc))
+            return max(stamps) if stamps else None
+        own = states.get(entity_id) or {}
+        latest = seen(own)
+        if latest is None:
+            return True
+        registry = self._source.registry() or {}
+        entities = registry.get("entities") or []
+        device = next((e.get("device_id") for e in entities
+                       if e.get("entity_id") == entity_id), None)
+        if device:
+            for e in entities:
+                other = states.get(e.get("entity_id"))
+                if (e.get("device_id") == device and other
+                        and other.get("state") not in UNAVAILABLE):
+                    t = seen(other)
+                    if t is not None and t > latest:
+                        latest = t
+        return (self._now() - latest).total_seconds() <= ROOM_SENSOR_STALE
+
+    def room_sensor_names(self) -> dict[str, str]:
+        """Room -> the chosen sensor's name, for rooms whose sensor reports now."""
+        return {room: link["name"] for room, link in self.room_links().items()
+                if link["value"] is not None}
 
     def room_temperature(self, room: str) -> float | None:
         """The chosen sensor's reading for a room, while it reports one."""
-        key = self._store.room_sensors(self.site_id).get(room)
-        if key is None or self._source.health().get("state") != "ok":
-            return None
-        device = self.devices_by_key().get(key)
-        if device is None or not device.get("available") or device["kind"] != "temperature":
-            return None
-        return device["value"]
+        link = self.room_links().get(room)
+        return None if link is None else link["value"]
 
     def save_rule(self, body: dict) -> dict:
         if "id" in body and (isinstance(body["id"], bool) or not isinstance(body["id"], int)):
@@ -1074,6 +1115,10 @@ class DeviceHub:
         catalog = self.catalogs.get(site)
         return {} if catalog is None else catalog.room_sensor_names()
 
+    def room_links(self, site: str) -> dict[str, dict]:
+        catalog = self.catalogs.get(site)
+        return {} if catalog is None else catalog.room_links()
+
     def events(self, limit: int) -> list[dict]:
         pending = self._store.pending_events()
         for catalog in self.catalogs.values():
@@ -1145,7 +1190,8 @@ class FakeDeviceSource:
             for entity_id, state in out.items():
                 if entity_id.startswith("sensor.") and "temperature" in entity_id:
                     base = float(state["attributes"].get("base", 21))
-                    out[entity_id] = {**state, "state": f"{base + 0.6 * math.sin(t / 3600):.1f}"}
+                    out[entity_id] = {**state, "state": f"{base + 0.6 * math.sin(t / 3600):.1f}",
+                                      "last_reported": self._now().isoformat()}
             return out
 
     def bound_entities(self) -> set:

@@ -193,6 +193,7 @@ section.devices[hidden] { display: none; }
                  margin: .8rem 0 0; }
 .dev-dialog dt { color: var(--text3); }
 .dev-dialog dd { margin: 0; overflow-wrap: anywhere; }
+.dev-dialog p.d-note { font-size: .82rem; color: var(--text3); margin: .4rem 0 0; }
 .dev-dialog .d-row { display: flex; align-items: center; justify-content: space-between; gap: .8rem; margin: .5rem 0; }
 @media (max-width: 560px) {
   .dev-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .6rem; }
@@ -1408,6 +1409,60 @@ SCRIPT = r"""
     $dBody.appendChild(dl);
     if (typeof $dialog.showModal === "function") $dialog.showModal(); else $dialog.setAttribute("open", "");
   }
+  // --- a pump's room sensor, opened from the pump card's gauge ---
+  function homeSensors() {
+    if (!DATA || !DATA.configured || DATA.site !== "home" || DATA.room_target !== "pump") return null;
+    var out = allDevices().filter(function (x) { return x.d.kind === "temperature"; });
+    return out.length ? out : null;
+  }
+  window.vkHomeSensors = homeSensors;
+  window.vkRoomSensorPicker = function (unitId) {
+    var sensors = homeSensors();
+    var room = sensors && DATA.rooms.filter(function (r) { return r.id === unitId; })[0];
+    if (!room) return;
+    OPEN_KEY = null;
+    $dTitle.textContent = room.name;
+    $dBody.textContent = "";
+    var opts = [["", "Pumpun oma anturi"]].concat(sensors.map(function (x) {
+      return [x.d.key, x.d.name + " (" + x.area + ")"];
+    }));
+    if (room.sensor && !sensors.some(function (x) { return x.d.key === room.sensor; })) {
+      opts.push([room.sensor, "(puuttuva anturi)"]);
+    }
+    var sel = select(opts, room.sensor || "", "Huoneen lämpötila");
+    var msg = el("div", "t-msg");
+    var shared = el("p", "d-note");
+    function sharing() {
+      var others = DATA.rooms.filter(function (r) { return r.id !== room.id && r.sensor && r.sensor === sel.value; })
+        .map(function (r) { return r.name; });
+      shared.textContent = others.length ? "Samaa anturia seuraa myös " + others.join(" ja ") + "." : "";
+    }
+    sel.addEventListener("change", function () {
+      var key = sel.value || null;
+      sel.disabled = true;
+      post("room_sensor", { room: room.id, key: key }).then(function (res) {
+        sel.disabled = false;
+        msg.className = res[0] ? "t-msg" : "t-msg err";
+        msg.textContent = res[0] ? (key ? "Tallennettu. Pumppu seuraa nyt tätä anturia." : "Tallennettu. Pumppu käyttää omaa anturiaan.")
+          : (res[1].detail || "Tallennus ei onnistunut.");
+        if (res[0]) {
+          room.sensor = key;
+          sharing();
+          if (typeof refresh === "function") refresh();
+        } else {
+          sel.value = room.sensor || "";
+        }
+      });
+    });
+    $dBody.appendChild(field("Huoneen lämpötila", sel,
+      "Automaatio käynnistää, sammuttaa ja säätää pumppua niin, että valittu anturi pysyy tavoitteessa: " +
+      "pumpun asetuslämpöön lisätään pumpun oman lukeman ja anturin ero. Sama anturi voi ohjata useaa pumppua. " +
+      "Jos anturi ei ilmoita lukemaa puoleentoista tuntiin, käytetään pumpun omaa lukemaa. Oletus: pumpun oma anturi."));
+    $dBody.appendChild(msg);
+    $dBody.appendChild(shared);
+    sharing();
+    if (typeof $dialog.showModal === "function") $dialog.showModal(); else $dialog.setAttribute("open", "");
+  };
   $dialog.addEventListener("close", function () { OPEN_KEY = null; load(); });
   $edit.addEventListener("click", function () {
     EDIT = !EDIT;

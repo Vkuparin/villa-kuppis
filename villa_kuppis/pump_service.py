@@ -368,6 +368,10 @@ class PumpStore:
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            columns = {r[1] for r in self._conn.execute("PRAGMA table_info(unit_state)")}
+            if "own_temp" not in columns:
+                # The pump's own reading while a room sensor stands in (0.4.69).
+                self._conn.execute("ALTER TABLE unit_state ADD COLUMN own_temp REAL")
             self._conn.commit()
 
     @property
@@ -380,8 +384,8 @@ class PumpStore:
                 self._conn.execute(
                     """INSERT INTO unit_state (unit_id, name, power, mode, setpoint,
                                                fan, room_temp, in_error, caps_json,
-                                               updated_at_utc)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                               updated_at_utc, own_temp)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                        ON CONFLICT(unit_id) DO UPDATE SET
                          name=excluded.name,
                          power=excluded.power,
@@ -391,12 +395,13 @@ class PumpStore:
                          room_temp=excluded.room_temp,
                          in_error=excluded.in_error,
                          caps_json=excluded.caps_json,
-                         updated_at_utc=excluded.updated_at_utc""",
+                         updated_at_utc=excluded.updated_at_utc,
+                         own_temp=excluded.own_temp""",
                     (
                         s["id"], s["name"], s["power"], s["mode"], s["setpoint"],
                         s["fan"], s["room_temp"], s["in_error"],
                         json.dumps(s["caps"]) if s["caps"] is not None else None,
-                        s["updated_at"],
+                        s["updated_at"], s.get("own_temp"),
                     ),
                 )
             self._conn.commit()
@@ -460,6 +465,7 @@ class PumpStore:
             "setpoint": row["setpoint"],
             "fan": row["fan"],
             "room_temp": row["room_temp"],
+            "own_temp": row["own_temp"],
             "in_error": bool(in_error) if in_error is not None else None,
             "caps": json.loads(row["caps_json"]) if row["caps_json"] else None,
             "updated_at": row["updated_at_utc"],
@@ -953,7 +959,9 @@ class PumpGateway:
 
     def _with_rooms(self, states: list[dict]) -> list[dict]:
         """A unit's room temperature from the room's own sensor when one is
-        chosen and reporting; otherwise the unit's own reading."""
+        chosen and reporting; otherwise the unit's own reading. While the
+        sensor stands in, ``own_temp`` keeps the unit's own reading (the
+        cooling controller offsets the setpoint by the difference)."""
         if self.room_source is None:
             return states
         for s in states:
@@ -962,6 +970,7 @@ class PumpGateway:
             except Exception:
                 value = None
             if value is not None:
+                s["own_temp"] = s["room_temp"]
                 s["room_temp"] = value
         return states
 
@@ -1289,7 +1298,7 @@ class PumpService:
             units.append({
                 **{k: state[k] for k in (
                     "id", "name", "power", "mode", "setpoint", "fan",
-                    "room_temp", "in_error", "caps",
+                    "room_temp", "own_temp", "in_error", "caps",
                 )},
                 "updated_at": state["updated_at"],
                 "fresh": fresh,
@@ -1299,11 +1308,16 @@ class PumpService:
         pending_by_unit = self.gateway._pending_snapshot()
         holds = self.automation.holds() if self.automation.enabled else {}
         try:
-            sensors = self.devices.room_sensor_names("home")
+            links = self.devices.room_links("home")
         except Exception:
-            sensors = {}
+            links = {}
         for unit in units:
-            unit["room_sensor"] = sensors.get(unit["id"])
+            link = links.get(unit["id"])
+            # room_sensor: the sensor steering the unit now; room_sensor_lost:
+            # a chosen sensor that does not report, so the unit's own reading is used.
+            unit["room_sensor"] = link["name"] if link and link["value"] is not None else None
+            unit["room_sensor_lost"] = (link["name"] or "Valittu anturi") if link and link["value"] is None else None
+            unit["room_sensor_key"] = link["key"] if link else None
             if unit["id"] in pending_by_unit:
                 unit["pending"] = pending_by_unit[unit["id"]]
             unit["hold_until"] = holds.get(unit["id"])

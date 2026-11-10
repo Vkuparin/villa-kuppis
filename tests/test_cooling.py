@@ -197,6 +197,33 @@ class CoolingTests(ServiceTestCase):
         self.assertEqual(self.brief(self.run_plan(service)),
                          [("unit-1", "setpoint", 28.0)])
 
+    def test_room_sensor_steers_the_setpoint_by_the_learned_gap(self):
+        service, clock = self.start()
+        self.set_prices(100)                      # target 25 °C
+        sensor = {"unit-1": 25.5}
+        service.gateway.room_source = lambda unit_id: sensor.get(unit_id)
+        self.wait_for(lambda: self._unit(service, "unit-1")["room_temp"] == 25.5)
+        unit = service.store.unit_state("unit-1")
+        self.assertEqual((unit["room_temp"], unit["own_temp"]), (25.5, 26.0))
+        # The pump reads 0.5 °C warmer than the room sensor: it gets 25.5
+        # so that the sensor ends at 25.
+        self.assertIn(("unit-1", "setpoint", 25.5), self.brief(self.run_plan(service)))
+        self.assertEqual([s for s in self.brief(self.run_plan(service)) if s[0] == "unit-1"], [])
+        # The gap grows to 1 °C: smoothed, so not at once, and a drift
+        # under one step sends nothing.
+        sensor["unit-1"] = 25.1
+        self.wait_for(lambda: self._unit(service, "unit-1")["room_temp"] == 25.1)
+        clock.advance(1800)
+        self.assertEqual([s for s in self.brief(self.run_plan(service)) if s[0] == "unit-1"], [])
+        clock.advance(3 * 3600)
+        self.assertIn(("unit-1", "setpoint", 26.0), self.brief(self.run_plan(service)))
+        # The sensor stops reporting: the pump's own reading and the plain
+        # target are back.
+        sensor.clear()
+        self.wait_for(lambda: self._unit(service, "unit-1")["room_temp"] == 26.0)
+        self.assertIsNone(service.store.unit_state("unit-1")["own_temp"])
+        self.assertIn(("unit-1", "setpoint", 25.0), self.brief(self.run_plan(service)))
+
     def test_price_control_off_keeps_the_maximum_when_cheap(self):
         service, _ = self.start(price_control="off")
         self.set_prices(30)                       # 3 c/kWh: would precool

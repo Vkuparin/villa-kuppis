@@ -261,6 +261,28 @@ class RoomSensorTest(unittest.TestCase):
         self.catalog.set_room_sensor({"room": "unit-1", "key": None})
         self.assertEqual(self.store.room_sensors("home"), {})
 
+    def test_a_silent_room_sensor_hands_back_to_the_pump(self):
+        key = "demo-sensor.olohuone_temperature"
+        self.catalog.set_room_sensor({"room": "unit-1", "key": key})
+        states = dict(self.source.raw_states())
+        old = (self.now - timedelta(hours=2)).isoformat()
+        states["sensor.olohuone_temperature"] = {**states["sensor.olohuone_temperature"],
+                                                 "last_reported": old, "last_changed": old}
+        self.source.raw_states = lambda: states
+        self.assertIsNone(self.catalog.room_temperature("unit-1"))
+        link = self.catalog.room_links()["unit-1"]
+        self.assertEqual((link["key"], link["value"]), (key, None))
+        self.assertEqual(self.catalog.room_sensor_names(), {})
+        # Matter reports only on change: the same device's humidity arriving
+        # keeps the held temperature current.
+        registry = self.source.registry()
+        for entry in registry["entities"]:
+            if entry["entity_id"] in ("sensor.olohuone_temperature", "sensor.olohuone_humidity"):
+                entry["device_id"] = "dev-olohuone"
+        states["sensor.olohuone_humidity"] = {**states["sensor.olohuone_humidity"],
+                                              "last_reported": self.now.isoformat()}
+        self.assertIsNotNone(self.catalog.room_temperature("unit-1"))
+
     def test_new_sensor_history_is_backfilled_once(self):
         self.catalog.sample()
         points = self.catalog.history("demo-sensor.olohuone_humidity", 24)["points"]

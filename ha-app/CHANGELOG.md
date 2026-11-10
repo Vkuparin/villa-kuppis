@@ -1,5 +1,11 @@
 # Muutokset
 
+## 0.4.69
+
+- Pumpun voi kytkeä seuraamaan toista lämpöanturia (esimerkiksi Ruokahuoneen ALPSTUGA): napauta pumpun kortilla lämpötilan alla olevaa tekstiä ("mitattu") ja valitse anturi. Sama anturi voi ohjata useaa pumppua.
+- Kun anturi on valittu, automaatio käynnistää ja sammuttaa pumpun anturin mukaan ja lisää asetuslämpöön pumpun oman lukeman ja anturin eron, jotta huone asettuu tavoitteeseen anturin mittaamana eikä pumpun oman termostaatin mukaan.
+- Jos anturi ei ilmoita lukemaa puoleentoista tuntiin, pumppu käyttää taas omaa lukemaansa; kortilla lukee silloin "oma anturi".
+
 ## 0.4.68
 
 - Vihreä aksenttiväri on nyt hieman tummempi, jotta painikkeiden kontrasti ei ole liian kova.

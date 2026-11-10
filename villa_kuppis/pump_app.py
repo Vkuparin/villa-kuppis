@@ -565,8 +565,13 @@ button.switch[aria-checked="true"] .track::after { transform: translateX(18px); 
                font-variant-numeric: tabular-nums; line-height: 1; }
 .gauge-num b small { font-size: .9rem; font-weight: 600; color: var(--text3); margin-left: 1px; }
 .gauge-num span { font-size: .72rem; color: var(--text3); margin-top: .3rem; }
-.gauge-num span.g-src { max-width: 76%; text-align: center; line-height: 1.15; overflow: hidden; text-overflow: ellipsis;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.gauge-num .g-src { max-width: 76%; text-align: center; line-height: 1.15; overflow: hidden; text-overflow: ellipsis;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: .72rem; color: var(--text3);
+  margin-top: .3rem; }
+.gauge-num button.g-src { background: none; border: 0; padding: .1rem .3rem; font: inherit; font-size: .72rem;
+  color: var(--text3); cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+.gauge-num button.g-src:hover { color: var(--text); }
+.gauge-num .g-src.lost { color: var(--warn, #b26a00); }
 .pump-side { display: flex; flex-direction: column; gap: .55rem; min-width: 0; }
 .fld { display: flex; flex-direction: column; gap: .2rem; min-width: 0; }
 .fld-l { font-size: .75rem; color: var(--text3); cursor: help; }
@@ -1063,15 +1068,35 @@ function cardHtml(unit) {
     esc(sub) + "</span></div>" + badge + "</header>" +
     '<div class="pump-main"><div class="gauge" title="Mitattu lämpötila; piste on tavoite.">' +
     vkGauge(unit.room_temp, target, gaugeColor) +
-    '<div class="gauge-num"><b>' + tempText + "</b>" + (unit.room_sensor
-      ? '<span class="g-src" title="Pumppu ohjataan anturin ' + esc(unit.room_sensor) +
-        ' mukaan. Anturin valinta: Laitteet, anturin tiedot.">' +
-        esc(unit.room_sensor.replace(/ lämpötila$/i, "")) + "</span>"
-      : "<span>mitattu</span>") + "</div></div>" +
+    '<div class="gauge-num"><b>' + tempText + "</b>" + roomSource(unit) + "</div></div>" +
     '<div class="pump-side">' + power + setpoint + "</div></div>" +
     '<div class="pump-ctl">' + mode + fan + "</div>" +
     holdHtml + pendingHtml + "</article>"
   );
+}
+
+// The room reading's source under the gauge. With Home Assistant devices
+// at home it is a button that links the pump to a room sensor.
+function roomSource(unit) {
+  const own = unit.own_temp === null || unit.own_temp === undefined ? ""
+    : " Pumpun oma anturi: " + fmtTemp(unit.own_temp) + ".";
+  const text = unit.room_sensor ? unit.room_sensor.replace(/ lämpötila$/i, "")
+    : unit.room_sensor_lost ? "oma anturi" : "mitattu";
+  const title = unit.room_sensor
+    ? "Automaatio ohjaa pumppua anturin " + unit.room_sensor + " mukaan." + own
+    : unit.room_sensor_lost
+    ? "Valittu anturi " + unit.room_sensor_lost + " ei ole ilmoittanut lukemaa vähään aikaan, joten " +
+      "käytetään pumpun omaa lukemaa, kunnes anturi taas vastaa."
+    : "Pumpun oma mittaus.";
+  const w = typeof window === "undefined" ? {} : window;
+  if (typeof w.vkRoomSensorPicker !== "function" || !w.vkHomeSensors || !w.vkHomeSensors()) {
+    return '<span class="g-src' + (unit.room_sensor_lost ? " lost" : "") + '" title="' + esc(title) + '">' +
+      esc(text) + "</span>";
+  }
+  return '<button type="button" class="g-src' + (unit.room_sensor_lost ? " lost" : "") +
+    '" data-action="room-sensor" data-unit="' + esc(unit.id) + '" title="' +
+    esc(title + " Napauta valitaksesi, minkä anturin mukaan pumppua ohjataan.") + '">' +
+    esc(text) + "</button>";
 }
 
 let selectHoldUntil = 0;
@@ -1649,6 +1674,8 @@ function onControl(e) {
     sendCommand(unitId, "power", el.dataset.value === "true");
   } else if (action === "resume") {
     resumeAutomation(unitId);
+  } else if (action === "room-sensor" && typeof window.vkRoomSensorPicker === "function") {
+    window.vkRoomSensorPicker(unitId);
   }
 }
 

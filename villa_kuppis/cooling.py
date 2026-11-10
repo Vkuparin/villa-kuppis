@@ -32,6 +32,13 @@ One controller per unit then applies the current period (audit 2.1):
    switched on when the room is above the target. Every power change waits
    ``min_off_minutes`` from the unit's previous power change.
 4. A unit that is on gets the target as its setpoint when they differ.
+   With a room sensor chosen for the unit (devices.py, the pump's
+   "Huoneen lämpötila") the room reading is the sensor's, and the setpoint
+   is the target plus the learned difference between the unit's own
+   reading and the sensor (``sensor_gap``, smoothed over ``GAP_TAU``, at
+   most ``MAX_GAP_C``), so the unit's own thermostat aims at the target as
+   the sensor sees it. Without a reporting sensor the unit's own reading
+   and the plain target are used.
 5. A unit the automation switched on within ``WRONG_MODE_WINDOW`` that
    runs in another mode than Cool is switched off again, even in a manual
    pause: its mode was changed while it was off, where Home Assistant
@@ -62,6 +69,7 @@ validated, confirmed and logged like any other.
 from __future__ import annotations
 
 import logging
+import math
 import sqlite3
 import threading
 from dataclasses import dataclass
@@ -76,6 +84,8 @@ from .prices import HELSINKI, INTERVAL_SECONDS, helsinki_day_bounds
 from .storage import PriceStore
 
 STOP_BAND_C = 0.5    # a unit stops this far below its target
+GAP_TAU = timedelta(hours=1)    # smoothing of the unit vs room sensor difference
+MAX_GAP_C = 3.0      # at most this much setpoint offset for a room sensor
 SETPOINT_TOLERANCE_C = 0.05
 WATCHED_ACTIONS = ("power", "setpoint", "mode")
 # How long after its power-on a unit found in a mode other than Cool is
@@ -232,7 +242,8 @@ class CoolingAutomation:
                 "power_changed_utc TEXT, "     # its last observed power change
                 "hold_until_utc TEXT, "        # manual pause
                 "rejected_target REAL, "       # a setpoint the unit refused
-                "night INTEGER NOT NULL DEFAULT 0, saved_fan TEXT)")
+                "night INTEGER NOT NULL DEFAULT 0, saved_fan TEXT, "
+                "sensor_gap REAL, sensor_gap_utc TEXT)")  # own reading - room sensor
             self._migrate(conn)
         finally:
             conn.close()
@@ -248,6 +259,10 @@ class CoolingAutomation:
                 "SELECT unit_id, 1, saved_fan FROM night_state")
         for table in ("plan_state", "power_state", "night_state"):
             conn.execute(f"DROP TABLE IF EXISTS {table}")
+        columns = {r[1] for r in conn.execute("PRAGMA table_info(control_state)")}
+        for column, kind in (("sensor_gap", "REAL"), ("sensor_gap_utc", "TEXT")):
+            if column not in columns:
+                conn.execute(f"ALTER TABLE control_state ADD COLUMN {column} {kind}")
 
     # -- lifecycle --
 
@@ -340,7 +355,8 @@ class CoolingAutomation:
             return {"unit_id": unit_id, "seen_utc": None, "seen_power": None,
                     "seen_setpoint": None, "seen_mode": None, "seen_event": None,
                     "power_changed_utc": None, "hold_until_utc": None,
-                    "rejected_target": None, "night": 0, "saved_fan": None}
+                    "rejected_target": None, "night": 0, "saved_fan": None,
+                    "sensor_gap": None, "sensor_gap_utc": None}
         return dict(row)
 
     def _save(self, row: dict) -> None:
@@ -656,6 +672,7 @@ class CoolingAutomation:
             values = _setting_values(overrides, unit_id)
             row = self._load(unit_id)
             paused = self._observe(state, row, values, events, now)
+            _learn_gap(state, row, now)
             try:
                 if self._started_in_wrong_mode(state, events, now):
                     logging.warning("%s came on in %s mode after the automation switched it "
@@ -766,15 +783,53 @@ class CoolingAutomation:
                 return [result]
         if not state["power"]:
             return []
+        want, keep = _setpoint(state, row, target)
         if (state["setpoint"] is not None
-                and abs(state["setpoint"] - target) <= SETPOINT_TOLERANCE_C):
+                and abs(state["setpoint"] - want) <= keep):
             return []
-        if row["rejected_target"] == target:
+        if row["rejected_target"] == want:
             return []                       # refused before; wait for a change
-        result = self._command(state, "setpoint", target)
+        result = self._command(state, "setpoint", want)
         if result["status"] == 400:
-            row["rejected_target"] = target
+            row["rejected_target"] = want
         return [result]
+
+
+def _learn_gap(state, row: dict, now: datetime) -> None:
+    """Smooth the difference between the unit's own reading and its room
+    sensor; forget it while no room sensor stands in."""
+    own, room = state.get("own_temp"), state.get("room_temp")
+    if own is None or room is None:
+        row.update(sensor_gap=None, sensor_gap_utc=None)
+        return
+    gap = max(-MAX_GAP_C, min(MAX_GAP_C, float(own) - float(room)))
+    last = _parse(row.get("sensor_gap_utc"))
+    if row.get("sensor_gap") is not None and last is not None and now > last:
+        weight = 1 - math.exp(-(now - last) / GAP_TAU)
+        gap = row["sensor_gap"] + weight * (gap - row["sensor_gap"])
+    elif row.get("sensor_gap") is not None:
+        gap = row["sensor_gap"]
+    row.update(sensor_gap=round(gap, 3), sensor_gap_utc=now.isoformat())
+
+
+def _setpoint(state, row: dict, target: float) -> tuple[float, float]:
+    """The setpoint for ``target`` and how far the unit's setpoint may be
+    from it before a new one is sent. With a room sensor the target is
+    offset by the learned gap, in the unit's steps and range; the wider
+    tolerance keeps a drifting gap from sending a setpoint every pass."""
+    gap = row.get("sensor_gap")
+    if gap is None or state.get("own_temp") is None:
+        return target, SETPOINT_TOLERANCE_C
+    caps = state.get("caps") or {}
+    step = 0.5 if caps.get("half_step", True) else 1.0
+    raw = target + gap
+    low = caps.get("min_cool") if isinstance(caps.get("min_cool"), (int, float)) else 16.0
+    high = caps.get("max_cool") if isinstance(caps.get("max_cool"), (int, float)) else 31.0
+    raw = max(float(low), min(float(high), raw))
+    current = state.get("setpoint")
+    if current is not None and abs(current - raw) < 0.75 * step:
+        return float(current), 0.75 * step
+    return max(float(low), min(float(high), round(raw / step) * step)), SETPOINT_TOLERANCE_C
 
 
 def _parse(value: str | None) -> datetime | None:
