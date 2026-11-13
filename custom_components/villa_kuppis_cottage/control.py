@@ -32,8 +32,9 @@ Modes, in precedence order:
   stay off, where it would only wind up, and not while a warm room has the
   setpoint at ``low_setpoint``. A room more than ``trim_band``
   over its target never gets a setpoint above the heaters' own reading
-  minus ``hold_window``; a room more than ``trim_band`` under it always
-  gets one above the heaters' own readings. (The gap is not fixed: a Mill
+  minus ``hold_window``. A room more than ``trim_band`` under its target
+  while every heater's own thermostat is satisfied raises the trim so the
+  setpoint is ``hold_window`` over their readings. (The gap is not fixed: a Mill
   read 0.5 °C under the ALPSTUGA in a cold room and 5 °C under it at
   25 °C.) A setpoint changes by whole steps, at most once per
   ``min_dwell`` unless it moves by ``big_change``. A heater that misses a
@@ -111,6 +112,7 @@ class Settings:
     trim_gain: float = 0.5           # trim change per °C of room error ...
     trim_interval: timedelta = timedelta(minutes=15)   # ... per interval
     trim_limit: float = 10.0         # the heaters' sensors are at most this far off
+    trim_spread: float = 5.0         # ... and the trim this far from the gap they show now
     trim_band: float = 1.0           # the trim learns this close to the target, and
     hold_window: float = 1.0         # ... while a heater's own reading is this close to its setpoint
     trim_step: float = 0.5           # the trim moves at most this much per interval
@@ -164,6 +166,7 @@ class Heater:
     enabled: bool = True             # False: switched off in Villa Kuppis
     name: str = ""                   # friendly name for reasons; entity_id if empty
     current: float | None = None     # the heater's own temperature reading
+    action: str | None = None        # "heating" / "idle" where the heater reports it (Mill local)
 
     @property
     def label(self) -> str:
@@ -394,7 +397,9 @@ def _effect(heater: Heater, hm: HeaterMemory, want: float, settings: Settings,
     that way in ``effect_window`` does not obey. Returns 0, or how many
     windows in a row: 1 sends the setpoint again, 2 or more also switch the
     heater off and on. Warmth from elsewhere (a fireplace, the sun) costs
-    only those commands.
+    only those commands, and none for a heater that reports idling then; one
+    that reports heating while it reads cold is not judged either (Tienpuoli
+    alone, flat out, cannot hold 5 °C in hard frost).
     """
     own = heater.current
     kind = None
@@ -403,6 +408,13 @@ def _effect(heater: Heater, hm: HeaterMemory, want: float, settings: Settings,
             kind = "warm"
         elif own <= want - settings.effect_margin:
             kind = "cold"
+    # A heater that reports heating while it reads cold, or idling while it
+    # reads warm, does what it is told: an undersized heater flat out in
+    # frost, or warmth from elsewhere. Only a report the other way, or none
+    # (Matter), is judged by its own sensor.
+    if (kind == "cold" and heater.action == "heating") or (
+            kind == "warm" and heater.action in ("idle", "off")):
+        kind = None
     if kind is None:
         hm.watch, hm.tries = None, 0
         return 0
@@ -567,23 +579,33 @@ def _follow_setpoint(value: float, room: float, heaters, memory: RoomMemory,
         memory.trim_at = now
         memory.trim_room = room
     if memory.trim is not None:
+        if owns:
+            # Never far from the gap the heaters' own readings show now: the
+            # gap moves with heating (a Mill read 0.5-5 °C under the room),
+            # not by ten degrees (Kammari's trim wound down to -10, 13.11.2026).
+            gap = sum(owns) / len(owns) - room
+            memory.trim = min(max(memory.trim, gap - settings.trim_spread),
+                              gap + settings.trim_spread)
         memory.trim = min(max(memory.trim, -settings.trim_limit), settings.trim_limit)
-    trim = memory.trim if memory.trim is not None else 0.0   # no own reading yet
     # Within hold_band the heaters' own thermostats cycle the room a little;
     # the setpoint does not chase that.
     push = 0.0 if abs(error) <= settings.hold_band else settings.prop_gain * error
     push = min(max(push, -settings.boost), settings.boost)
+    if (owns and memory.trim is not None and memory.setpoint is not None
+            and error > settings.hysteresis and min(owns) >= memory.setpoint):
+        # The room is well under its target and every heater's own thermostat
+        # is satisfied: the trim is too low. It rises so the setpoint is over
+        # their readings; being the trim, it stays there and the learning
+        # moves it on smoothly (13.11.2026: a trim wound down to -1 left
+        # Tienpuoli idle at 5 °C, reading 5.1, in a 4.2 °C room).
+        memory.trim = max(memory.trim, max(owns) + settings.hold_window - value - push)
+    trim = memory.trim if memory.trim is not None else 0.0   # no own reading yet
     raw = value + trim + push
     if owns and error < -settings.trim_band:
         # The room is warmer than the target: no heater is told to heat,
         # whatever the trim says (6.11.2026: a wound-up trim of 7.5 kept
         # Tienpuoli at 14.5 °C, flat out, in a 9 °C room with an 8 °C target).
         raw = min(raw, min(owns) - settings.hold_window)
-    elif owns and error > settings.trim_band:
-        # The room is colder than the target: every heater is told to heat,
-        # whatever the trim says (13.11.2026: a trim wound down to -1 left
-        # Tienpuoli idle at 5 °C, reading 5.1, in a 4.2 °C room).
-        raw = max(raw, max(owns) + settings.hold_window)
     raw = max(raw, settings.low_setpoint)
     step = max((h.step or settings.default_step for h in heaters if h.enabled),
                default=settings.default_step)
@@ -620,7 +642,7 @@ def _floored(error: float, memory: RoomMemory, settings: Settings) -> bool:
     room stays warm on its own. The trim would only wind down (12.-13.11.2026:
     Kammari reached -10 and Mökki -1, and Mökki then got no heat at 4.2 °C)."""
     return (error < 0 and memory.setpoint is not None
-            and memory.setpoint <= settings.low_setpoint + 0.01)
+            and memory.setpoint < settings.low_setpoint + settings.setpoint_deadband)
 
 
 def _holding(heaters, error: float, room: float, memory: RoomMemory, settings: Settings) -> bool:

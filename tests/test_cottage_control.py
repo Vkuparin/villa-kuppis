@@ -41,11 +41,16 @@ class SimHeater:
     holds: float | None = None       # heats to this, whatever setpoint it reports
     sticky: int = 0                  # setpoint writes it takes without holding them
     duty: float = 0.0                # recent share of time heating
+    reports_action: bool = False     # hvac_action heating/idle, as Mill local gives
 
     def view(self) -> control.Heater:
+        action = None
+        if self.reports_action and self.available:
+            action = "heating" if self.on else "idle"
         return control.Heater(self.entity_id, self.available, self.mode if self.available else None,
                               self.setpoint if self.available else None, 5.0, 35.0, self.step,
-                              self.enabled, current=self.own if self.available else None)
+                              self.enabled, current=self.own if self.available else None,
+                              action=action)
 
 
 class Room:
@@ -293,6 +298,20 @@ class RealisticSetpointTests(unittest.TestCase):
         cold = sim.now
         sim.run(24 * 60)
         self.assertGreater(min(sim.temps_since(cold + timedelta(hours=6))), 4.5)
+
+    def test_an_undersized_heater_in_frost_is_not_kicked(self):
+        # Tienpuoli alone (1050 W) cannot hold Mökki at 5 °C at -10 °C. It
+        # reports heating, so it is not resent, switched off and on or
+        # reported as not heating, however cold its own sensor reads.
+        room = Room([SimHeater("climate.tienpuoli", 1050, step=0.1, reports_action=True)],
+                    temp=5.0, outdoor=-10.0, ua=108.0, capacity=5.9e6, bias=0.9)
+        sim = Sim(room, target=5.0)
+        sim.run(12 * 60)
+        self.assertLess(room.temp, 4.0)                  # it really cannot
+        modes = [c for _, c in sim.commands if c.service == "set_hvac_mode"]
+        self.assertEqual(modes, [])
+        self.assertLessEqual(len(sim.commands), 6)
+        self.assertFalse(control.disobeying(room.heaters[0].view(), sim.memory))
 
     def test_the_trim_recovers_from_a_misleading_start(self):
         # 5.11.2026: Kammari had heated to 25 °C, the Mill read 5.5 °C under

@@ -630,6 +630,7 @@ class OptimizedTargetTests(unittest.TestCase):
         self.addCleanup(visits.close)
         self.sender._visits = visits
         self.overrides = {"site:cottage": {"heat_price_control": "fixed"}}
+        self.sender._thermal = lambda: ({}, Outdoor([]))     # no heat balance: the fixed lead
         arrival = self.now + timedelta(hours=20)
         visits.start(arrival, 20.0, ["large"], "Ville", self.now)
         self.sender._models = lambda: ({}, Outdoor(
@@ -639,6 +640,35 @@ class OptimizedTargetTests(unittest.TestCase):
         self.assertEqual(plan.lead_hours, 8.0)
         self.assertLessEqual(plan.start, arrival - timedelta(hours=8))
         self.assertGreaterEqual(plan.start, arrival - timedelta(hours=12))
+
+    def test_visit_lead_comes_from_the_heat_balance(self):
+        # Mökki's fitted balance (13.11.2026: 1.63 kWh/°C, 108 W/°C, 107 W)
+        # with all three heaters, 2.6 kW, at +5 °C: about 15 h from 5 to
+        # 21 °C, where the fixed lead is 8 h.
+        from villa_kuppis import thermal
+        from villa_kuppis.cottage_targets import THERMAL_LEAD_FACTOR, thermal_lead
+        from villa_kuppis.learning import Outdoor
+        from villa_kuppis.visit import VisitStore
+        mokki = thermal.Thermal(1.633, 0.1084, 0.107, 185).room_model(2.6)
+        hours = thermal_lead(mokki, 5.0, 21.0, 5.0)
+        self.assertGreater(hours, 14 * THERMAL_LEAD_FACTOR)
+        self.assertLess(hours, 17 * THERMAL_LEAD_FACTOR)
+        # Tienpuoli alone never gets there in frost: heat from the longest lead.
+        self.assertEqual(thermal_lead(thermal.Thermal(1.633, 0.1084, 0.107, 185).room_model(1.05),
+                                      5.0, 21.0, -10.0), 36.0)
+        visits = VisitStore(Path(self.tmp.name) / "visits.db")
+        self.addCleanup(visits.close)
+        self.sender._visits = visits
+        self.overrides = {"site:cottage": {"heat_price_control": "fixed"}}
+        arrival = self.now + timedelta(hours=20)
+        visits.start(arrival, 21.0, ["large"], "Ville", self.now)
+        mild = Outdoor([(int(self.now.timestamp()) + h * 3600, 5.0) for h in range(-1, 30)])
+        self.sender._models = lambda: ({}, mild)
+        self.sender._thermal = lambda: ({"large": (mokki, 2.6)}, mild)
+        self.sender.targets()
+        plan = self.sender.visit_plan
+        self.assertAlmostEqual(plan.lead_hours, hours)
+        self.assertLessEqual(plan.start, arrival - timedelta(hours=hours))
 
     def test_visit_rooms_keep_the_night_target_after_the_arrival(self):
         from villa_kuppis.visit import VisitStore, in_night

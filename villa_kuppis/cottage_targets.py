@@ -62,7 +62,7 @@ from typing import Callable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 from . import settings as app_settings
-from .heat_optimizer import STORE_MARGIN, HeatLimits, optimize_heating
+from .heat_optimizer import PERIOD_SECONDS, STORE_MARGIN, HeatLimits, optimize_heating, period_step
 from .planning import Period, plan_day
 from .prices import INTERVAL_SECONDS
 from .storage import PriceStore
@@ -84,8 +84,30 @@ RELEASE_MINUTES = 1
 # A visit heat-up is planned as if the heaters warmed the room this much
 # slower than learned: an early warm room costs a little, a cold arrival more.
 VISIT_HEAT_MARGIN = 0.7
-# The fixed visit lead is chosen by the forecast this long before the arrival.
+# A heat-up by the room's heat balance is planned this much longer than it
+# says, at most MAX_THERMAL_LEAD_H (a room that does not get there heats
+# from that early) and at least MIN_THERMAL_LEAD_H.
+THERMAL_LEAD_FACTOR = 1.15
+MAX_THERMAL_LEAD_H = 36.0
+MIN_THERMAL_LEAD_H = 1.0
+# The visit lead is chosen by the forecast this long before the arrival.
 VISIT_OUTDOOR_BEFORE = timedelta(hours=6)
+
+
+def thermal_lead(model, start_c: float, goal_c: float, outdoor_c: float) -> float:
+    """Hours a room needs at full power from ``start_c`` to ``goal_c`` by
+    its heat balance, times ``THERMAL_LEAD_FACTOR``; ``MAX_THERMAL_LEAD_H``
+    when it does not get there. The balance matched a real heat-up (Mökki,
+    1050 W, 5.-6.11.2026: 6.3 -> 12.0 °C in 15 h, 12.2 predicted), where the
+    fixed 8-hour lead in mild weather would have arrived at about 15 °C
+    with all three heaters."""
+    room, hours, limit = start_c, 0.0, MAX_THERMAL_LEAD_H / THERMAL_LEAD_FACTOR
+    while room < goal_c - 1e-6:
+        if hours >= limit:
+            return MAX_THERMAL_LEAD_H
+        room = period_step(model, room, outdoor_c, goal_c)[0]
+        hours += PERIOD_SECONDS / 3600
+    return max(MIN_THERMAL_LEAD_H, hours * THERMAL_LEAD_FACTOR)
 
 
 def visit_night(overrides: Mapping) -> tuple[str, str]:
@@ -281,7 +303,8 @@ class CottageTargetSender:
             plan = VisitPlan(visit.heat_start, "started", None)
         else:
             outdoor = self._outdoor_at(visit.arrival - VISIT_OUTDOOR_BEFORE)
-            plan = plan_start(visit.arrival, periods, now, lead_hours=lead_hours(outdoor),
+            plan = plan_start(visit.arrival, periods, now,
+                              lead_hours=self._visit_lead(visit, overrides, night, outdoor),
                               hold=hold_factor(visit.arrival_target(night), outdoor))
             if now >= plan.start:
                 self._visits.mark_started(visit.visit_id, now)
@@ -312,6 +335,36 @@ class CottageTargetSender:
         if i == 0:
             return now
         return datetime.fromtimestamp(target.period_ts + INTERVAL_SECONDS - 1, now.tzinfo)
+
+    def _visit_lead(self, visit, overrides: Mapping, night, outdoor: float | None) -> float:
+        """Hours the visit's heat-up takes: the longest of its rooms by their
+        heat balance (``thermal_lead``), from the base level or the room's
+        reading if it is colder; the fixed ``lead_hours`` without a balance
+        or a forecast."""
+        fixed = lead_hours(outdoor)
+        if self._thermal is None or outdoor is None:
+            return fixed
+        try:
+            models, _outdoor = self._thermal()
+            temps = self._room_temps() if self._room_temps is not None else {}
+        except Exception as error:      # no balance: the fixed lead
+            logging.warning("Cottage visit lead: %s", type(error).__name__)
+            return fixed
+        hand = self._hand()
+        goal = visit.arrival_target(night)
+        leads = []
+        for room in visit.rooms:
+            if room in hand:
+                continue
+            model, heat_kw = models.get(room) or (None, 0.0)
+            if model is None or heat_kw <= 0 or not model.heat_c_per_h:
+                leads.append(fixed)
+                continue
+            base = float(app_settings.resolve(overrides, SITE, room)["heat_base_c"]["value"])
+            now_c = temps.get(room)
+            start = min(base, now_c) if now_c is not None else base
+            leads.append(thermal_lead(model, start, goal, outdoor))
+        return max(leads) if leads else fixed
 
     def _outdoor_at(self, at: datetime) -> float | None:
         """The outdoor forecast at ``at``, or None when there is none."""

@@ -8,9 +8,12 @@ heat to the target in force at the arrival.
 
 A room whose rates are learned is planned by ``heat_optimizer`` to reach
 that target at the arrival (F5.3, in ``cottage_targets``). For the other
-rooms the heat-up is assumed to take ``lead_hours(outdoor)`` at full heating:
-8 h at +5 °C or warmer, 12 h at 0 °C and 24 h at -5 °C or colder, in
-between linearly (``LEAD_HOURS`` without a forecast). Kammari's 1000 W Mill
+rooms the heat-up takes what the room's measured heat balance says at full
+heating (``cottage_targets.thermal_lead``, since 13.11.2026), or without a
+balance ``lead_hours(outdoor)``: 8 h at +5 °C or warmer, 12 h at 0 °C and
+24 h at -5 °C or colder, in between linearly (``LEAD_HOURS`` without a
+forecast). The fixed leads were too short for Mökki: its balance needs
+about 15 h from 5 to 21 °C at +5 °C even with all three heaters. Kammari's 1000 W Mill
 took 4 h from 5 to 20.5 °C at +5 °C and 5-7 h at 0 °C in the model fitted
 on 4.11.2026; in frost it may not get there at all. The start is chosen
 from a few hours' window before ``arrival - lead`` so that the heat-up and

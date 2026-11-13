@@ -1,5 +1,10 @@
 # Muutokset
 
+## 0.4.70
+
+- Vierailun esilämmitys alkaa huoneen mitatun lämpömallin mukaan eikä kiinteällä 8–12 tunnin etumatkalla, joka oli Mökille liian lyhyt. Esimerkiksi kolmella patterilla Mökki tarvitsee +5 °C:n säällä noin 15 tuntia lämmetäkseen 5 °C:sta 21 °C:een. Jos huone ei ehdi lämmetä, lämmitys alkaa enintään 36 tuntia ennen saapumista.
+- Mökin integraatio 0.10.6: patteri lämmittää, kun huone on perustason alla, eikä asetus heilu edestakaisin. Pakkasella täysillä lämmittävää patteria ei enää sammuteta ja käynnistetä uudelleen eikä siitä tule väärää "patteri ei lämmitä" -ilmoitusta. Aja mökin install.sh uudelleen.
+
 ## 0.4.69
 
 - Pumpun voi kytkeä seuraamaan toista lämpöanturia (esimerkiksi Ruokahuoneen ALPSTUGA): napauta pumpun kortilla lämpötilan alla olevaa tekstiä ("mitattu") ja valitse anturi. Sama anturi voi ohjata useaa pumppua.
