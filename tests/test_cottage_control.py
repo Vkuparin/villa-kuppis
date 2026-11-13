@@ -265,6 +265,35 @@ class RealisticSetpointTests(unittest.TestCase):
         value = next(c.value for c in decision.commands if c.service == "set_temperature")
         self.assertLess(value, 9.5)
 
+    def test_a_room_below_the_target_heats_whatever_the_trim(self):
+        # 13.11.2026: Mökki at 4.2 °C (here 3.9), target 5, trim wound down to -1.0;
+        # Tienpuoli (own reading 5.1) got 5.0 °C and stayed idle.
+        now = START
+        memory = control.RoomMemory(trim=-1.0, trim_at=now, setpoint=5.0,
+                                    drive_since=now - timedelta(hours=1))
+        target = control.Target(5.0, 1, now + timedelta(days=1))
+        heater = control.Heater("climate.tienpuoli", True, "heat", 5.0, 5.0, 35.0, 0.1,
+                                current=5.1)
+        decision = control.decide(now + timedelta(minutes=1), target,
+                                  control.Sensor(3.9, now + timedelta(minutes=1)), [heater], memory)
+        value = next(c.value for c in decision.commands if c.service == "set_temperature")
+        self.assertGreaterEqual(value, 5.1 + SETTINGS.hold_window)
+
+    def test_a_warm_room_at_the_lowest_setpoint_does_not_wind_down_the_trim(self):
+        # 12.-13.11.2026: mild weather kept the cottage over its 5 °C target with
+        # the heaters at their 5 °C floor; the trim learned down to -10 (Kammari).
+        # Kammari read 5.2 °C on its own sensor in a 5.4-6.3 °C room.
+        room = Room([SimHeater("climate.kammari", 1000, step=0.1)], temp=5.8, outdoor=5.8,
+                    ua=30.0, capacity=0.49e6, bias=-0.6)
+        sim = Sim(room, target=5.0)
+        sim.run(24 * 60)
+        self.assertGreater(sim.memory.trim, -1.5)
+        # Then it turns cold: the room is held at the target again.
+        room.outdoor = -5.0
+        cold = sim.now
+        sim.run(24 * 60)
+        self.assertGreater(min(sim.temps_since(cold + timedelta(hours=6))), 4.5)
+
     def test_the_trim_recovers_from_a_misleading_start(self):
         # 5.11.2026: Kammari had heated to 25 °C, the Mill read 5.5 °C under
         # the ALPSTUGA while the room cooled, and the trim started there.

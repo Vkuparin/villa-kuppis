@@ -29,9 +29,11 @@ Modes, in precedence order:
   heaters' own thermostats hold the room sensor at the target. It learns
   near the target and while a heater's own reading sits at its setpoint
   with the room still off target; not while the heaters run flat out or
-  stay off, where it would only wind up. A room more than ``trim_band``
+  stay off, where it would only wind up, and not while a warm room has the
+  setpoint at ``low_setpoint``. A room more than ``trim_band``
   over its target never gets a setpoint above the heaters' own reading
-  minus ``hold_window``. (The gap is not fixed: a Mill
+  minus ``hold_window``; a room more than ``trim_band`` under it always
+  gets one above the heaters' own readings. (The gap is not fixed: a Mill
   read 0.5 °C under the ALPSTUGA in a cold room and 5 °C under it at
   25 °C.) A setpoint changes by whole steps, at most once per
   ``min_dwell`` unless it moves by ``big_change``. A heater that misses a
@@ -557,7 +559,8 @@ def _follow_setpoint(value: float, room: float, heaters, memory: RoomMemory,
         # Near the target, or while the heaters' own thermostats hold their
         # setpoint and the room stays off target. Not while they run flat
         # out or stay off: whatever the trim, it would only wind up.
-        if not _saturated(owns, error, memory, settings) and (abs(error) <= settings.trim_band or (
+        if not _saturated(owns, error, memory, settings) and not _floored(error, memory, settings) and (
+                abs(error) <= settings.trim_band or (
                 abs(error) <= settings.boost and _holding(heaters, error, room, memory, settings))):
             change = settings.trim_gain * error
             memory.trim += min(max(change, -settings.trim_step), settings.trim_step)
@@ -576,6 +579,11 @@ def _follow_setpoint(value: float, room: float, heaters, memory: RoomMemory,
         # whatever the trim says (6.11.2026: a wound-up trim of 7.5 kept
         # Tienpuoli at 14.5 °C, flat out, in a 9 °C room with an 8 °C target).
         raw = min(raw, min(owns) - settings.hold_window)
+    elif owns and error > settings.trim_band:
+        # The room is colder than the target: every heater is told to heat,
+        # whatever the trim says (13.11.2026: a trim wound down to -1 left
+        # Tienpuoli idle at 5 °C, reading 5.1, in a 4.2 °C room).
+        raw = max(raw, max(owns) + settings.hold_window)
     raw = max(raw, settings.low_setpoint)
     step = max((h.step or settings.default_step for h in heaters if h.enabled),
                default=settings.default_step)
@@ -604,6 +612,15 @@ def _saturated(owns, error: float, memory: RoomMemory, settings: Settings) -> bo
     if error < 0:
         return min(owns) > memory.setpoint + settings.hold_window
     return False
+
+
+def _floored(error: float, memory: RoomMemory, settings: Settings) -> bool:
+    """The room is warmer than the target while the setpoint already sits at
+    ``low_setpoint``: it cannot go lower, so the heaters are idle and the
+    room stays warm on its own. The trim would only wind down (12.-13.11.2026:
+    Kammari reached -10 and Mökki -1, and Mökki then got no heat at 4.2 °C)."""
+    return (error < 0 and memory.setpoint is not None
+            and memory.setpoint <= settings.low_setpoint + 0.01)
 
 
 def _holding(heaters, error: float, room: float, memory: RoomMemory, settings: Settings) -> bool:
