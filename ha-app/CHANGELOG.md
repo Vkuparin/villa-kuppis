@@ -1,5 +1,10 @@
 # Muutokset
 
+## 0.4.71
+
+- Vierailun esilämmitys osaa nyt huoneen todellisen lämpenemisnopeuden. Huoneen lämpömalli oppii lämpenemisen erikseen tunneista, joina patterit lämmittävät täysillä ja huone lämpenee. Aiemmin hidas jäähtyminen sai huoneen näyttämään raskaalta: Kammarin malli arvioi 6,5 °C:sta 22 °C:een 14–19 tuntia, todellisuudessa 5 h 20 min. Ennen ensimmäistä täysillä lämmitystä nopeus arvioidaan huoneen koosta.
+- Mökin huonekortilla pattereiden tehon selitys kertoo, kuinka monta astetta tunnissa huone lämpenee kylmästä täydellä teholla.
+
 ## 0.4.70
 
 - Vierailun esilämmitys alkaa huoneen mitatun lämpömallin mukaan eikä kiinteällä 8–12 tunnin etumatkalla, joka oli Mökille liian lyhyt. Esimerkiksi kolmella patterilla Mökki tarvitsee +5 °C:n säällä noin 15 tuntia lämmetäkseen 5 °C:sta 21 °C:een. Jos huone ei ehdi lämmetä, lämmitys alkaa enintään 36 tuntia ennen saapumista.

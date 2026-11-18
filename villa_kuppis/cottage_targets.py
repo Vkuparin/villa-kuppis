@@ -100,7 +100,10 @@ def thermal_lead(model, start_c: float, goal_c: float, outdoor_c: float) -> floa
     when it does not get there. The balance matched a real heat-up (Mökki,
     1050 W, 5.-6.11.2026: 6.3 -> 12.0 °C in 15 h, 12.2 predicted), where the
     fixed 8-hour lead in mild weather would have arrived at about 15 °C
-    with all three heaters."""
+    with all three heaters. It heats at the room's heat-up rate
+    (``thermal``, ``heatup_c_per_h``) where it has one."""
+    if getattr(model, "heatup_c_per_h", None):
+        model = replace(model, heat_c_per_h=model.heatup_c_per_h)
     room, hours, limit = start_c, 0.0, MAX_THERMAL_LEAD_H / THERMAL_LEAD_FACTOR
     while room < goal_c - 1e-6:
         if hours >= limit:

@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 import random
 import unittest
+from dataclasses import replace
 
 from villa_kuppis import thermal
 from villa_kuppis.learning import Outdoor
@@ -129,6 +130,76 @@ class EstimateTests(unittest.TestCase):
         rows = thermal.rows(temps, power, weather(6, lambda h: 0.0))
         self.assertEqual(len(rows), 3)       # 0-1, 1-2 and 4-5
         self.assertEqual(thermal.rows(temps, power, Outdoor([])), [])
+
+
+class HeatUpTests(unittest.TestCase):
+    """A room of two stores: light air and surfaces, heavy walls (Kammari
+    17.-18.11.2026: a cool-down said 14-19 h to 22 °C, it took 5 h 20 min)."""
+
+    @staticmethod
+    def two_stores(schedule, outdoor_c=5.0, air=0.2, wall=0.9, link=0.04, ua=0.024):
+        """Hourly means of a room whose 1 kW heater follows ``schedule[h]``:
+        kW, or a str holding that °C by thermostat; ``air`` and ``wall`` in
+        kWh/°C, ``link`` and ``ua`` in kW/°C."""
+        t_air = t_wall = 12.0
+        temps, power = {}, {}
+        steps = 60
+        for h, step in enumerate(schedule):
+            t_sum = p_sum = 0.0
+            for _ in range(steps):
+                kw = (1.0 if t_air < float(step) else 0.0) if isinstance(step, str) else step
+                flow = link * (t_air - t_wall)
+                t_air += (kw - flow - ua * 0.5 * (t_air - outdoor_c)) / air / steps
+                t_wall += (flow - ua * 0.5 * (t_wall - outdoor_c)) / wall / steps
+                t_sum += t_air
+                p_sum += kw
+            temps[T0 + h * HOUR] = t_sum / steps
+            power[T0 + h * HOUR] = p_sum / steps
+        return temps, power
+
+    def test_a_heat_up_from_cold_is_learned_apart_from_the_cool_down(self):
+        from villa_kuppis.cottage_targets import thermal_lead
+        # Two days held at 12 °C, four days of free cooling, then flat out.
+        schedule = ["12"] * 48 + [0.0] * 96 + [1.0] * 6
+        temps, power = self.two_stores(schedule)
+        out = weather(len(schedule), lambda h: 5.0)
+        prior = thermal.Prior.for_area(8.0)
+        before = thermal.estimate({t: v for t, v in temps.items() if t < T0 + 144 * HOUR},
+                                  power, out, prior, heat_kw=1.0)
+        fit = thermal.estimate(temps, power, out, prior, heat_kw=1.0)
+        self.assertEqual(before.heat_hours, 0)
+        # The cool-down after holding 12 °C makes the room look heavy ...
+        self.assertGreater(before.c_kwh_k, 1.4 * prior.c_kwh_k)
+        # ... but without heat-up hours the room's size sets the heat-up pace.
+        self.assertAlmostEqual(before.heatup_c_kwh_k, prior.c_kwh_k)
+        model = before.room_model(1.0)
+        self.assertLess(thermal_lead(model, 5.7, 20.0, 5.0),
+                        0.7 * thermal_lead(replace(model, heatup_c_per_h=None), 5.7, 20.0, 5.0))
+        # The heat-up hours are kept and give the light store.
+        self.assertGreaterEqual(fit.heat_hours, 4)
+        self.assertLess(fit.heat_c_kwh_k, 0.8 * before.c_kwh_k)
+
+    def test_the_visit_lead_follows_the_heat_up(self):
+        from villa_kuppis.cottage_targets import THERMAL_LEAD_FACTOR, thermal_lead
+        schedule = ["12"] * 48 + [0.0] * 96 + [1.0] * 6 + [0.0] * 40 + [1.0] * 30
+        temps, power = self.two_stores(schedule)
+        start = T0 + 190 * HOUR
+        h = next(h for h in range(30) if temps[start + (h + 1) * HOUR] >= 18.0)
+        t0, t1 = temps[start + h * HOUR], temps[start + (h + 1) * HOUR]
+        real = h + (18.0 - t0) / (t1 - t0)                    # hours, from the hourly means
+        out = weather(len(schedule), lambda h: 5.0)
+        fit = thermal.estimate({t: v for t, v in temps.items() if t < start}, power, out,
+                               thermal.Prior.for_area(8.0), heat_kw=1.0)
+        lead = thermal_lead(fit.room_model(1.0), temps[start], 18.0, 5.0)
+        self.assertGreater(lead, real)                        # warm by the arrival
+        self.assertLess(lead, 1.5 * THERMAL_LEAD_FACTOR * real)
+
+    def test_a_heater_flat_out_that_only_holds_the_room_is_no_heat_up(self):
+        temps = {T0 + h * HOUR: 5.0 for h in range(48)}
+        power = {T0 + h * HOUR: 1.0 for h in range(48)}
+        fit = thermal.estimate(temps, power, weather(48, lambda h: -30.0),
+                               thermal.Prior.for_area(8.0), heat_kw=1.0)
+        self.assertEqual(fit.heat_hours, 0)
 
 
 if __name__ == "__main__":

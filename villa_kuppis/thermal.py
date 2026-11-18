@@ -37,6 +37,21 @@ at one temperature the loss and a constant gain cannot be told apart.
 Hours that fit badly (a fireplace, an open door, people) are left out:
 after a first fit, rows whose error is over ``OUTLIER_SIGMAS`` times the
 typical error are dropped and the fit is repeated.
+
+A heat-up from cold has its own capacity (``heat_c_kwh_k``). A room is two
+stores, not one: the air and the surfaces near the sensor, and the walls
+behind them. Holding and cooling hours see both, so their ``C`` is the
+heavy one, but a heater flat out in a cold room warms the light one first.
+Kammari, 17.-18.11.2026, 1000 W from 6.5 °C: 4.8, 3.6, 2.8, 2.2, 1.7 and
+1.4 °C per hour, 22 °C in 5 h 20 min, while the fit on the days before
+(two days of slow cooling from 12 °C) said 0.66-0.95 kWh/°C and 14-19 h.
+Those full-power hours are also the ones the outlier filter drops. So the
+heat-up gain is fitted apart, on the hours with the heaters at
+``HARD_SHARE`` of their power or more and the room rising (a heater flat
+out that only holds a cold room is the heavy store again), against the loss and gain of the
+main fit; without such hours it is the faster of the main fit and the
+room's size. Only the visit lead (``cottage_targets.thermal_lead``) uses
+it: storing heat for hours, as the optimizer does, fills the walls too.
 """
 
 from __future__ import annotations
@@ -57,6 +72,8 @@ OUTLIER_SIGMAS = 3.0
 MIN_ROWS_FOR_NOISE = 12
 LIMIT_FACTOR = 5.0          # the result stays within this factor of the prior
 LEARN_DAYS = 28
+HARD_SHARE = 0.7            # a heat-up hour: heaters at this share of their power
+HEATUP_MIN_RISE_C = 0.3     # ... and the room rising at least this much in the hour
 
 
 @dataclass(frozen=True)
@@ -80,6 +97,12 @@ class Thermal:
     gain_kw: float            # other steady gains (negative: losses)
     hours: int = 0            # measured hours behind the fit (0: the prior alone)
     error_c_h: float | None = None   # typical error of one predicted hour
+    heat_c_kwh_k: float | None = None   # heat per °C in a heat-up (None: c_kwh_k)
+    heat_hours: int = 0       # full-power hours behind heat_c_kwh_k
+
+    @property
+    def heatup_c_kwh_k(self) -> float:
+        return self.heat_c_kwh_k or self.c_kwh_k
 
     @property
     def tau_h(self) -> float:
@@ -92,6 +115,7 @@ class Thermal:
             True, "", loss_per_h=self.ua_kw_k / self.c_kwh_k,
             drift_c_per_h=self.gain_kw / self.c_kwh_k,
             heat_c_per_h=heat_kw / self.c_kwh_k if heat_kw > 0 else None,
+            heatup_c_per_h=heat_kw / self.heatup_c_kwh_k if heat_kw > 0 else None,
             uses_outdoor=True, passive_steps=self.hours, heat_steps=self.hours)
 
     def hold_kw(self, room_c: float, outdoor_c: float) -> float:
@@ -102,6 +126,7 @@ class Thermal:
         return {"c_kwh_k": round(self.c_kwh_k, 3), "ua_w_k": round(self.ua_kw_k * 1000, 1),
                 "gain_w": round(self.gain_kw * 1000), "tau_h": round(self.tau_h, 1),
                 "hours": self.hours,
+                "heat_c_kwh_k": round(self.heatup_c_kwh_k, 3), "heat_hours": self.heat_hours,
                 "error_c_h": None if self.error_c_h is None else round(self.error_c_h, 2)}
 
 
@@ -160,9 +185,26 @@ def _posterior(data: Sequence[tuple[float, float, float]], mean: Sequence[float]
     return _solve3(m, v) or list(mean)
 
 
+def _heatup_gain(data, a: float, b: float, mean: float, noise: float,
+                 heat_kw: float | None) -> tuple[float, int]:
+    """(°C/h per kW in a heat-up, hours behind it) from the rows with the
+    heaters at ``HARD_SHARE`` of ``heat_kw`` (of the most measured without
+    it) and the room rising, weighed against ``mean``."""
+    top = heat_kw if heat_kw and heat_kw > 0 else max((kw for kw, _d, _c in data), default=0.0)
+    hard = [(kw, change + a * diff - b) for kw, diff, change in data
+            if top > 0 and kw >= HARD_SHARE * top and change >= HEATUP_MIN_RISE_C]
+    precision = 1.0 / (PRIOR_REL_SD * mean) ** 2
+    w = 1.0 / (noise * noise)
+    num = precision * mean + w * sum(kw * rise for kw, rise in hard)
+    den = precision + w * sum(kw * kw for kw, _rise in hard)
+    return num / den, len(hard)
+
+
 def estimate(temps: Mapping[int, float], power: Mapping[int, float],
-             outdoor: learning.Outdoor, prior: Prior) -> Thermal:
-    """The room's heat balance from its hours; the prior alone without any."""
+             outdoor: learning.Outdoor, prior: Prior,
+             heat_kw: float | None = None) -> Thermal:
+    """The room's heat balance from its hours; the prior alone without any.
+    ``heat_kw`` is the power of the room's heaters, for the heat-up hours."""
     g0, a0 = 1.0 / prior.c_kwh_k, prior.ua_kw_k / prior.c_kwh_k
     mean = (g0, a0, 0.0)
     sd = (PRIOR_REL_SD * g0, PRIOR_REL_SD * a0, DRIFT_SD_C_H)
@@ -190,4 +232,7 @@ def estimate(temps: Mapping[int, float], power: Mapping[int, float],
     g = min(max(theta[0], g0 / LIMIT_FACTOR), g0 * LIMIT_FACTOR)
     a = min(max(theta[1], a0 / LIMIT_FACTOR), a0 * LIMIT_FACTOR)
     c = 1.0 / g
-    return Thermal(c, a * c, theta[2] * c, len(used), spread(errors((g, a, theta[2]), used)))
+    gh, hard = _heatup_gain(data, a, theta[2], max(g, g0), noise, heat_kw)
+    gh = min(max(gh, g0 / LIMIT_FACTOR), g0 * LIMIT_FACTOR)
+    return Thermal(c, a * c, theta[2] * c, len(used), spread(errors((g, a, theta[2]), used)),
+                   1.0 / gh, hard)

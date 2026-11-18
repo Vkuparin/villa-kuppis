@@ -88,6 +88,8 @@ class RoomModel:
     drift_c_per_h: float = 0.0        # b
     cool_c_per_h: float | None = None  # c, None until learned
     heat_c_per_h: float | None = None  # h, None until learned
+    # A heat-up from cold at full power, when it differs from h (thermal.py)
+    heatup_c_per_h: float | None = None
     uses_outdoor: bool = False
     passive_steps: int = 0
     cool_steps: int = 0

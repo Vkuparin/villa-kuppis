@@ -95,7 +95,11 @@ SCRIPT = r"""
       "Lämpö, jonka huone varaa yhtä astetta kohden. Ilman lämmitystä ero ulkolämpötilaan " +
       "pienenee noin kolmannekseen " + num(h.tau_h, 0) + " tunnissa.");
     stat(stats, num(h.heater_kw, 2).replace(/0$/, "") + " kW", "patterit", "heat",
-      "Käytettävissä olevien pattereiden yhteisteho.");
+      "Käytettävissä olevien pattereiden yhteisteho." + (h.heater_kw > 0 && h.heat_c_kwh_k
+        ? " Kylmästä täydellä teholla huone lämpenee alussa noin " +
+          num(h.heater_kw / h.heat_c_kwh_k, 1) + " °C tunnissa" +
+          (h.heat_hours ? " (opittu " + h.heat_hours + " lämmitystunnista)." : " (huoneen koon mukainen arvio).")
+        : ""));
     item(ul, h.hours ? "Lämpömalli on sovitettu " + h.hours + " tunnin mitattuun lämmitystehoon" +
         (h.error_c_h === null ? "." : " (tunnin ennusteen virhe noin " + num(h.error_c_h, 2) + " °C).")
       : "Lämpömalli on huoneen koon mukainen arvio; se tarkentuu pattereiden mitatusta tehosta.");

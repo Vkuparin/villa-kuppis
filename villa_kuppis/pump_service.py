@@ -1744,7 +1744,8 @@ class PumpService:
             prior = thermal.Prior.for_area(area)
             try:
                 temps, power = self.cottage.thermal_inputs(room, start, now)
-                fits[room] = thermal.estimate(temps, power, outdoor, prior)
+                fits[room] = thermal.estimate(temps, power, outdoor, prior,
+                                              self.cottage.heat_kw(room))
             except Exception as error:
                 logging.warning("Cottage heat model for %s: %s", room, type(error).__name__)
                 complete = False
